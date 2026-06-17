@@ -3,18 +3,34 @@
 .SYNOPSIS
     打包 WindInput 安装程序
 .DESCRIPTION
-    使用 wind-packer 将 WindInput 构建产物打包成自解压安装程序
+    使用 wind-packer 将 WindInput 构建产物打包成自解压安装程序。
+    支持分阶段打包：
+      pack  - 压缩源文件为 .bin（慢，仅需一次）
+      bundle - 拼接 stub + .bin 为 .exe（快，可反复测试）
 .PARAMETER Version
     版本号，默认从 Cargo.toml 读取
 .PARAMETER Compression
     压缩算法: zstd 或 lzma，默认 zstd
 .PARAMETER SkipBuild
-    跳过 wind-packer 编译，使用已有的二进制
-.PARAMETER NoStub
-    只生成归档文件，不拼接 Stub (用于测试)
+    跳过编译，使用已有的二进制
+.PARAMETER PackOnly
+    只生成 .bin 归档，不拼接 Stub（用于分阶段打包）
+.PARAMETER BundleOnly
+    只执行拼接，跳过压缩（需要已有 .bin 文件）
+.PARAMETER ArchivePath
+    指定已有的 .bin 归档文件路径（与 -BundleOnly 配合使用）
 .EXAMPLE
+    # 完整打包
     .\pack-windinput.ps1
-    .\pack-windinput.ps1 -Version "0.2.0" -Compression lzma
+
+    # 第一阶段：压缩（慢）
+    .\pack-windinput.ps1 -PackOnly
+
+    # 第二阶段：拼接（快）
+    .\pack-windinput.ps1 -BundleOnly -ArchivePath dist\WindInput-0.1.0.bin
+
+    # 使用 LZMA 压缩
+    .\pack-windinput.ps1 -Compression lzma
 #>
 
 param(
@@ -22,7 +38,9 @@ param(
     [ValidateSet("zstd", "lzma")]
     [string]$Compression = "zstd",
     [switch]$SkipBuild,
-    [switch]$NoStub
+    [switch]$PackOnly,
+    [switch]$BundleOnly,
+    [string]$ArchivePath = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -33,7 +51,6 @@ $ProjectRoot = Split-Path -Parent $ScriptDir
 # 配置
 # ============================================================
 
-$PackerConfig = Join-Path $ProjectRoot "pack-windinput.toml"
 $WindInputRoot = Join-Path $ProjectRoot "..\WindInput"
 $BuildDir = Join-Path $WindInputRoot "build"
 $OutputDir = Join-Path $ProjectRoot "dist"
@@ -70,13 +87,60 @@ Write-Host "============================================" -ForegroundColor Cyan
 Write-Host "  WindInput 安装程序打包工具" -ForegroundColor Cyan
 Write-Host "============================================" -ForegroundColor Cyan
 
+# --- 获取版本号 ---
+if ($Version -eq "") {
+    $CargoToml = Join-Path $ProjectRoot "Cargo.toml"
+    if (Test-Path $CargoToml) {
+        $content = Get-Content $CargoToml -Raw
+        if ($content -match 'version\s*=\s*"([^"]+)"') {
+            $Version = $Matches[1]
+        }
+    }
+    if ($Version -eq "") {
+        $Version = "0.1.0"
+    }
+}
+
+$PackerExe = Join-Path $ProjectRoot "target\release\wind-packer.exe"
+$StubExe = Join-Path $ProjectRoot "target\release\wind-installer.exe"
+$ArchiveFile = if ($ArchivePath -ne "") { $ArchivePath } else { Join-Path $OutputDir "WindInput-${Version}.bin" }
+$OutputFile = Join-Path $OutputDir "WindInput-${Version}-Setup.exe"
+
+# ============================================================
+# BundleOnly: 只拼接（快）
+# ============================================================
+if ($BundleOnly) {
+    Write-Step "快速拼接模式 (bundle)"
+
+    if (-not (Test-Path $StubExe)) {
+        Write-Err "Stub 不存在: $StubExe"
+        Write-Host "请先编译: cargo build --release --bin wind-installer" -ForegroundColor Yellow
+        exit 1
+    }
+    if (-not (Test-Path $ArchiveFile)) {
+        Write-Err "归档文件不存在: $ArchiveFile"
+        Write-Host "请先运行: .\pack-windinput.ps1 -PackOnly" -ForegroundColor Yellow
+        exit 1
+    }
+
+    & $PackerExe bundle --stub $StubExe --archive $ArchiveFile --output $OutputFile
+    if ($LASTEXITCODE -ne 0) {
+        Write-Err "拼接失败"
+        exit 1
+    }
+
+    Write-OK "安装程序已生成: $OutputFile"
+    $outputSize = (Get-Item $OutputFile).Length
+    Write-Host "  文件大小: $([math]::Round($outputSize / 1MB, 2)) MB" -ForegroundColor Cyan
+    exit 0
+}
+
+# ============================================================
+# 完整流程 / PackOnly
+# ============================================================
+
 # --- Step 1: 检查环境 ---
 Write-Step "检查环境..."
-
-if (-not (Test-Path $PackerConfig)) {
-    Write-Err "配置文件不存在: $PackerConfig"
-    exit 1
-}
 
 if (-not (Test-Path $WindInputRoot)) {
     Write-Err "WindInput 项目目录不存在: $WindInputRoot"
@@ -94,40 +158,21 @@ Write-OK "环境检查通过"
 # --- Step 2: 检查构建产物 ---
 Write-Step "检查构建产物..."
 
-$RequiredFiles = @(
-    "wind_tsf.dll",
-    "wind_tsf_x86.dll",
-    "wind_input.exe",
-    "wind_setting.exe"
-)
-
+$RequiredFiles = @("wind_tsf.dll", "wind_tsf_x86.dll", "wind_input.exe", "wind_setting.exe")
 $MissingFiles = @()
 foreach ($f in $RequiredFiles) {
-    $path = Join-Path $BuildDir $f
-    if (-not (Test-Path $path)) {
+    if (-not (Test-Path (Join-Path $BuildDir $f))) {
         $MissingFiles += $f
     }
 }
 
 if ($MissingFiles.Count -gt 0) {
     Write-Err "缺少以下文件:"
-    foreach ($f in $MissingFiles) {
-        Write-Host "    - $f" -ForegroundColor Red
-    }
+    foreach ($f in $MissingFiles) { Write-Host "    - $f" -ForegroundColor Red }
     Write-Host "`n请先运行 build_all.ps1 构建 WindInput" -ForegroundColor Yellow
     exit 1
 }
 
-# 检查可选文件
-$OptionalFiles = @("wind_portable.exe")
-foreach ($f in $OptionalFiles) {
-    $path = Join-Path $BuildDir $f
-    if (-not (Test-Path $path)) {
-        Write-Warn "可选文件缺失: $f"
-    }
-}
-
-# 检查数据目录
 $DataDir = Join-Path $BuildDir "data"
 if (-not (Test-Path $DataDir)) {
     Write-Err "数据目录不存在: $DataDir"
@@ -135,171 +180,86 @@ if (-not (Test-Path $DataDir)) {
 }
 
 Write-OK "构建产物检查通过"
-
-# --- Step 3: 获取版本号 ---
-Write-Step "获取版本号..."
-
-if ($Version -eq "") {
-    # 从 Cargo.toml 读取
-    $CargoToml = Join-Path $ProjectRoot "Cargo.toml"
-    if (Test-Path $CargoToml) {
-        $content = Get-Content $CargoToml -Raw
-        if ($content -match 'version\s*=\s*"([^"]+)"') {
-            $Version = $Matches[1]
-        }
-    }
-    if ($Version -eq "") {
-        $Version = "0.1.0"
-    }
-}
-
 Write-OK "版本号: $Version"
 
-# --- Step 4: 编译 wind-packer ---
+# --- Step 3: 编译工具 ---
 if (-not $SkipBuild) {
-    Write-Step "编译 wind-packer..."
+    Write-Step "编译 wind-packer 和 wind-installer..."
 
     Push-Location $ProjectRoot
     try {
         $env:CARGO_TERM_COLOR = "always"
-        cargo build --release --bin wind-packer 2>&1 | ForEach-Object {
-            if ($_ -match "^error") {
-                Write-Host $_ -ForegroundColor Red
-            }
+        cargo build --release --bin wind-packer --bin wind-installer 2>&1 | ForEach-Object {
+            if ($_ -match "^error") { Write-Host $_ -ForegroundColor Red }
         }
-
         if ($LASTEXITCODE -ne 0) {
-            Write-Err "编译 wind-packer 失败"
+            Write-Err "编译失败"
             exit 1
         }
-
-        Write-OK "wind-packer 编译完成"
+        Write-OK "编译完成"
     }
     finally {
         Pop-Location
     }
 }
 
-$PackerExe = Join-Path $ProjectRoot "target\release\wind-packer.exe"
 if (-not (Test-Path $PackerExe)) {
     Write-Err "wind-packer 不存在: $PackerExe"
     exit 1
 }
 
-# --- Step 5: 创建输出目录 ---
-Write-Step "创建输出目录..."
-
+# --- Step 4: 创建输出目录 ---
 if (-not (Test-Path $OutputDir)) {
     New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
 }
 
-Write-OK "输出目录: $OutputDir"
+# --- Step 5: 压缩打包 ---
+Write-Step "阶段一：压缩打包 (算法: $Compression)..."
 
-# --- Step 6: 编译安装器 Stub ---
-if (-not $NoStub) {
-    Write-Step "编译安装器 Stub..."
-
-    if (-not $SkipBuild) {
-        Push-Location $ProjectRoot
-        try {
-            cargo build --release --bin wind-installer 2>&1 | ForEach-Object {
-                if ($_ -match "^error") {
-                    Write-Host $_ -ForegroundColor Red
-                }
-            }
-
-            if ($LASTEXITCODE -ne 0) {
-                Write-Err "编译 wind-installer 失败"
-                exit 1
-            }
-
-            Write-OK "Stub 编译完成"
-        }
-        finally {
-            Pop-Location
-        }
-    }
-
-    $StubExe = Join-Path $ProjectRoot "target\release\wind-installer.exe"
-    if (-not (Test-Path $StubExe)) {
-        Write-Err "Stub 不存在: $StubExe"
-        exit 1
-    }
-}
-
-# --- Step 7: 打包 ---
-Write-Step "开始打包 (压缩算法: $Compression)..."
-
-$OutputFile = Join-Path $OutputDir "WindInput-${Version}-Setup.exe"
-$ArchiveFile = Join-Path $OutputDir "WindInput-${Version}.bin"
-
-# 先生成归档文件
-$packerArgs = @(
-    "--source", $BuildDir,
-    "--output", $ArchiveFile,
-    "--compression", $Compression
-)
-
-Write-Host "    执行: wind-packer $($packerArgs -join ' ')" -ForegroundColor Gray
-
-& $PackerExe @packerArgs
-
+& $PackerExe pack --source $BuildDir --output $ArchiveFile --compression $Compression
 if ($LASTEXITCODE -ne 0) {
-    Write-Err "打包失败"
+    Write-Err "压缩打包失败"
     exit 1
 }
 
-Write-OK "归档文件生成完成"
+Write-OK "归档文件: $ArchiveFile"
 
-# --- Step 8: 拼接 Stub + Archive ---
-if (-not $NoStub) {
-    Write-Step "拼接安装程序..."
+# --- Step 6: 拼接安装程序 ---
+if (-not $PackOnly) {
+    Write-Step "阶段二：拼接安装程序..."
 
-    # 读取 Stub
-    $stubData = [System.IO.File]::ReadAllBytes($StubExe)
-
-    # 读取归档
-    $archiveData = [System.IO.File]::ReadAllBytes($ArchiveFile)
-
-    # 写入最终安装程序
-    $outputStream = [System.IO.File]::Create($OutputFile)
-    try {
-        $outputStream.Write($stubData, 0, $stubData.Length)
-        $outputStream.Write($archiveData, 0, $archiveData.Length)
-    }
-    finally {
-        $outputStream.Close()
+    & $PackerExe bundle --stub $StubExe --archive $ArchiveFile --output $OutputFile
+    if ($LASTEXITCODE -ne 0) {
+        Write-Err "拼接失败"
+        exit 1
     }
 
-    Write-OK "安装程序生成完成"
+    Write-OK "安装程序: $OutputFile"
 
-    # 清理临时归档文件
+    # 清理中间归档
     Remove-Item -Path $ArchiveFile -Force -ErrorAction SilentlyContinue
 }
 else {
-    # 只输出归档文件
-    $OutputFile = $ArchiveFile
+    Write-Host ""
+    Write-Host "  归档文件已生成: $ArchiveFile" -ForegroundColor Yellow
+    Write-Host "  使用以下命令快速拼接:" -ForegroundColor Yellow
+    Write-Host "    .\pack-windinput.ps1 -BundleOnly" -ForegroundColor Cyan
+    Write-Host ""
 }
 
-# --- Step 9: 统计信息 ---
-Write-Step "打包完成!"
-
-$outputSize = (Get-Item $OutputFile).Length
-$outputSizeMB = [math]::Round($outputSize / 1MB, 2)
-
+# --- 完成 ---
 Write-Host ""
 Write-Host "============================================" -ForegroundColor Green
-Write-Host "  打包成功!" -ForegroundColor Green
+Write-Host "  打包完成!" -ForegroundColor Green
 Write-Host "============================================" -ForegroundColor Green
 Write-Host ""
-Write-Host "  输出文件: $OutputFile"
-Write-Host "  文件大小: $outputSizeMB MB"
-Write-Host "  版本号:   $Version"
-Write-Host "  压缩算法: $Compression"
-Write-Host ""
 
-# 打开输出目录
-if (Test-Path $OutputFile) {
-    $outputDir = Split-Path -Parent $OutputFile
-    Write-Host "输出目录: $outputDir" -ForegroundColor Cyan
+$finalFile = if ($PackOnly) { $ArchiveFile } else { $OutputFile }
+if (Test-Path $finalFile) {
+    $size = (Get-Item $finalFile).Length
+    Write-Host "  文件: $finalFile"
+    Write-Host "  大小: $([math]::Round($size / 1MB, 2)) MB"
+    Write-Host "  版本: $Version"
+    Write-Host "  压缩: $Compression"
+    Write-Host ""
 }
