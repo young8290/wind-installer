@@ -44,8 +44,8 @@ impl Default for InstallConfig {
         Self {
             app_name: meta::APP_DISPLAY_NAME.to_string(),
             app_version: meta::APP_VERSION.to_string(),
-            install_dir: PathBuf::from(program_files).join("WindInput"),
-            data_dir: PathBuf::from(app_data).join("WindInput"),
+            install_dir: PathBuf::from(program_files).join(meta::APP_ID),
+            data_dir: PathBuf::from(app_data).join(meta::APP_ID),
             use_custom_data_dir: false,
             custom_data_dir: None,
             start_menu_folder: meta::APP_START_MENU_FOLDER.to_string(),

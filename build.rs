@@ -25,6 +25,14 @@ fn main() {
     println!("cargo:rustc-env=WIND_PUBLISHER={}", get("publisher", "清风输入法 项目"));
     println!("cargo:rustc-env=WIND_START_MENU_FOLDER={}", get("start_menu_folder", "清风输入法"));
     println!("cargo:rustc-env=WIND_WINDOW_TITLE={}", get("window_title", "清风输入法 安装向导"));
+    println!("cargo:rustc-env=WIND_APP_ID={}", get("app_id", "App"));
+    println!("cargo:rustc-env=WIND_MAIN_EXE={}", get("main_exe", "app.exe"));
+    println!("cargo:rustc-env=WIND_SETTING_EXE={}", get("setting_exe", ""));
+    println!("cargo:rustc-env=WIND_URL_PROTOCOL={}", get("url_protocol", ""));
+    println!("cargo:rustc-env=WIND_PROCESS_NAMES={}", get("process_names", ""));
+    println!("cargo:rustc-env=WIND_ACL_DLLS={}", get("acl_dlls", ""));
+    println!("cargo:rustc-env=WIND_BACKUP_DIR={}", get("backup_dir", ""));
+    println!("cargo:rustc-env=WIND_PORTABLE_MARKER={}", get("portable_marker", "portable_mode"));
 
     // UAC Manifest + 图标
     embed_resource::compile_for("assets/app.rc", ["wind-installer", "wind-uninstaller"], embed_resource::NONE);

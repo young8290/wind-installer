@@ -2,6 +2,8 @@ use std::os::windows::process::CommandExt;
 use std::path::Path;
 use std::process::Command;
 
+use crate::meta;
+
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// ALL APPLICATION PACKAGES SID
@@ -9,10 +11,7 @@ const APP_PACKAGES_SID: &str = "*S-1-15-2-1";
 
 /// 设置 DLL 权限（ALL APPLICATION PACKAGES 读取执行）
 pub fn set_dll_permissions(install_dir: &Path) -> Result<(), String> {
-    let dlls = vec![
-        install_dir.join("wind_tsf.dll"),
-        install_dir.join("wind_tsf_x86.dll"),
-    ];
+    let dlls: Vec<_> = meta::acl_dlls().iter().map(|n| install_dir.join(n)).collect();
 
     for dll_path in &dlls {
         if dll_path.exists() {

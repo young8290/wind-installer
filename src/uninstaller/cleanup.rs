@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use crate::meta;
+
 /// 清理选项
 #[derive(Debug, Clone)]
 pub struct CleanupOptions {
@@ -21,7 +23,7 @@ impl Default for CleanupOptions {
             .unwrap_or_else(|_| r"C:\Program Files".to_string());
 
         Self {
-            install_dir: PathBuf::from(program_files).join("WindInput"),
+            install_dir: PathBuf::from(program_files).join(meta::APP_ID),
             clean_roaming: false,
             clean_local_cache: true,
             backup_to_desktop: true,
@@ -41,7 +43,7 @@ impl CleanupOptions {
                 p.to_string_lossy().to_string()
             });
         let datadir_conf = PathBuf::from(&local_app_data)
-            .join("WindInput")
+            .join(meta::APP_ID)
             .join("datadir.conf");
 
         if datadir_conf.exists() {
@@ -60,7 +62,7 @@ impl CleanupOptions {
                 p.push("AppData\\Roaming");
                 p.to_string_lossy().to_string()
             });
-        PathBuf::from(app_data).join("WindInput")
+        PathBuf::from(app_data).join(meta::APP_ID)
     }
 
     /// 获取本地缓存目录
@@ -71,23 +73,25 @@ impl CleanupOptions {
                 p.push("AppData\\Local");
                 p.to_string_lossy().to_string()
             });
-        PathBuf::from(local_app_data).join("WindInput").join("cache")
+        PathBuf::from(local_app_data).join(meta::APP_ID).join("cache")
     }
 }
 
 /// 删除安装文件
 pub fn delete_install_files(install_dir: &PathBuf) -> Result<(), String> {
-    // 删除二进制文件
-    let binaries = vec![
-        "wind_tsf.dll",
-        "wind_tsf_x86.dll",
-        "wind_input.exe",
-        "wind_setting.exe",
-        "wind_portable.exe",
-        "wind_dwrite.dll",  // 旧版本遗留
-    ];
+    // 从 meta 动态构建二进制文件列表：进程名→.exe + ACL DLL 列表
+    let mut binaries: Vec<String> = meta::process_names()
+        .iter()
+        .map(|n| format!("{}.exe", n))
+        .collect();
+    for dll in meta::acl_dlls() {
+        if !binaries.iter().any(|b| b == dll) {
+            binaries.push(dll.to_string());
+        }
+    }
 
     for binary in &binaries {
+        let binary = binary.as_str();
         let path = install_dir.join(binary);
         if path.exists() {
             if let Err(_) = std::fs::remove_file(&path) {
@@ -157,7 +161,7 @@ pub fn cleanup_user_data(options: &CleanupOptions) -> Result<(), String> {
     if options.clean_roaming && options.backup_to_desktop {
         if user_data_dir.exists() {
             let desktop = get_desktop_path();
-            let backup_dir = desktop.join("WindInput_Backup");
+            let backup_dir = desktop.join(meta::BACKUP_DIR);
             if let Err(e) = copy_dir_all(&user_data_dir, &backup_dir) {
                 eprintln!("Warning: Failed to backup user data: {}", e);
             }
@@ -180,7 +184,7 @@ pub fn cleanup_user_data(options: &CleanupOptions) -> Result<(), String> {
 
     // 始终清理 WebView2 缓存
     let temp_dir = std::env::temp_dir();
-    let setting_cache = temp_dir.join("wind_setting");
+    let setting_cache = temp_dir.join(meta::setting_exe_stem());
     if setting_cache.exists() {
         let _ = std::fs::remove_dir_all(&setting_cache);
     }

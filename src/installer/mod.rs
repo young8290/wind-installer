@@ -3,13 +3,16 @@ pub mod config;
 pub mod extract;
 pub mod registry;
 pub mod shortcut;
+#[cfg(feature = "font")]
 pub mod font;
 pub mod acl;
 pub mod process;
+#[cfg(feature = "ime")]
 pub mod ime;
 
 use config::InstallConfig;
 use crate::archive::ArchiveReader;
+use crate::meta;
 
 /// 安装模式
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,6 +49,7 @@ pub fn perform_install(config: &InstallConfig, mode: InstallMode) -> InstallResu
     }
 
     // 2. 反注册旧 COM（标准模式）
+    #[cfg(feature = "ime")]
     if mode == InstallMode::Standard {
         if let Err(e) = ime::unregister_old_com(&config.install_dir) {
             eprintln!("Warning: Failed to unregister old COM: {}", e);
@@ -82,17 +86,20 @@ pub fn perform_install(config: &InstallConfig, mode: InstallMode) -> InstallResu
         }
 
         // 安装字体
+        #[cfg(feature = "font")]
         if let Err(e) = font::install_font(&config.install_dir) {
             eprintln!("Warning: Failed to install font: {}", e);
         }
 
         // 注册 COM
+        #[cfg(feature = "ime")]
         if let Err(e) = ime::register_com(&config.install_dir) {
             eprintln!("Warning: Failed to register COM: {}", e);
             need_reboot = true;
         }
 
         // 注册输入法
+        #[cfg(feature = "ime")]
         if let Err(e) = ime::register_input_method() {
             eprintln!("Warning: Failed to register input method: {}", e);
         }
@@ -102,9 +109,11 @@ pub fn perform_install(config: &InstallConfig, mode: InstallMode) -> InstallResu
             eprintln!("Warning: Failed to set auto-start: {}", e);
         }
 
-        // 注册 URL 协议
-        if let Err(e) = registry::register_url_protocol(&config.install_dir) {
-            eprintln!("Warning: Failed to register URL protocol: {}", e);
+        // 注册 URL 协议（留空则跳过）
+        if !meta::URL_PROTOCOL.is_empty() {
+            if let Err(e) = registry::register_url_protocol(&config.install_dir) {
+                eprintln!("Warning: Failed to register URL protocol: {}", e);
+            }
         }
 
         // 创建快捷方式
@@ -125,7 +134,7 @@ pub fn perform_install(config: &InstallConfig, mode: InstallMode) -> InstallResu
 
     // 5. 便携模式标记
     if mode == InstallMode::Portable {
-        if let Err(e) = std::fs::write(config.install_dir.join("wind_portable_mode"), "wind_portable=1\n") {
+        if let Err(e) = std::fs::write(config.install_dir.join(meta::PORTABLE_MARKER), "portable=1\n") {
             eprintln!("Warning: Failed to create portable mode marker: {}", e);
         }
     }

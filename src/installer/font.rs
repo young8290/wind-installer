@@ -7,8 +7,10 @@ use winreg::RegKey;
 const FONT_FILE: &str = "HeiTiZiGen.ttf";
 /// 字体显示名称
 const FONT_DISPLAY_NAME: &str = "黑体字根 (TrueType)";
-/// 字体跟踪注册表路径
-const FONT_TRACKING_KEY: &str = r"SOFTWARE\WindInput";
+/// 字体跟踪注册表路径（运行时构造）
+fn font_tracking_key() -> String {
+    format!(r"SOFTWARE\{}", crate::meta::APP_ID)
+}
 
 /// 安装系统字体
 pub fn install_font(install_dir: &Path) -> Result<(), String> {
@@ -75,7 +77,7 @@ fn register_font_in_registry() -> Result<(), String> {
 fn set_font_tracking() -> Result<(), String> {
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
     let (tracking_key, _) = hklm
-        .create_subkey(FONT_TRACKING_KEY)
+        .create_subkey(&font_tracking_key())
         .map_err(|e| format!("Failed to create tracking key: {}", e))?;
 
     tracking_key
@@ -111,7 +113,7 @@ pub fn uninstall_font() -> Result<(), String> {
     }
 
     // 清除跟踪标记
-    if let Ok(tracking_key) = hklm.open_subkey_with_flags(FONT_TRACKING_KEY, KEY_WRITE) {
+    if let Ok(tracking_key) = hklm.open_subkey_with_flags(&font_tracking_key(), KEY_WRITE) {
         let _ = tracking_key.delete_value("InstalledFont_HeiTiZiGen");
     }
 
@@ -121,7 +123,7 @@ pub fn uninstall_font() -> Result<(), String> {
 /// 检查字体是否是我们安装的
 pub fn is_font_installed_by_us() -> bool {
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
-    if let Ok(key) = hklm.open_subkey_with_flags(FONT_TRACKING_KEY, KEY_READ) {
+    if let Ok(key) = hklm.open_subkey_with_flags(&font_tracking_key(), KEY_READ) {
         if let Ok(value) = key.get_value::<String, _>("InstalledFont_HeiTiZiGen") {
             return value == "1";
         }

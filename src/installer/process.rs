@@ -3,6 +3,8 @@ use std::os::windows::process::CommandExt;
 use std::path::Path;
 use std::process::Command;
 
+use crate::meta;
+
 use windows::Win32::Foundation::CloseHandle;
 use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
@@ -12,10 +14,9 @@ use windows::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_T
 
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
-/// 终止 WindInput 相关进程
+/// 终止应用相关进程
 pub fn terminate_windinput_processes() -> Result<(), String> {
-    let names = ["wind_setting", "wind_portable", "wind_input"];
-    let exe_names: Vec<&str> = names.iter().map(|n| &n[..]).collect();
+    let exe_names = meta::process_names();
 
     // 轮询最多 3 次；每轮用单次 PowerShell 调用杀掉所有存活进程
     for round in 0..3 {
@@ -127,9 +128,9 @@ fn find_pids(exe_lower: &str) -> Vec<u32> {
 pub fn prestart_service(install_dir: &Path) -> Result<(), String> {
     const DETACHED_PROCESS: u32 = 0x0000_0008;
 
-    let exe_path = install_dir.join("wind_input.exe");
+    let exe_path = install_dir.join(meta::MAIN_EXE);
     if !exe_path.exists() {
-        return Err("wind_input.exe not found".into());
+        return Err(format!("{} not found", meta::MAIN_EXE));
     }
 
     Command::new(&exe_path)

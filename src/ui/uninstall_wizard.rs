@@ -114,7 +114,7 @@ pub fn run_uninstall_wizard() {
                 .width_match(),
         )
         .child(Element::checkbox(
-            "删除用户词库和配置数据（%APPDATA%\\WindInput）",
+            &format!("删除用户词库和配置数据（%APPDATA%\\{}）", meta::APP_ID),
             clean_roaming.clone(),
         ))
         .child(Element::checkbox(
@@ -122,7 +122,7 @@ pub fn run_uninstall_wizard() {
             backup_desktop.clone(),
         ))
         .child(Element::checkbox(
-            "清除本地词库缓存（%LOCALAPPDATA%\\WindInput\\cache）",
+            &format!("清除本地词库缓存（%LOCALAPPDATA%\\{}\\cache）", meta::APP_ID),
             clean_cache.clone(),
         ))
         .child(Element::leaf().weight(1.0))
@@ -169,14 +169,20 @@ pub fn run_uninstall_wizard() {
                                 step!("正在停止相关进程...");
                                 let _ = crate::installer::process::terminate_windinput_processes();
 
-                                step!("正在反注册输入法...");
-                                let _ = crate::installer::ime::unregister_input_method();
+                                #[cfg(feature = "ime")]
+                                {
+                                    step!("正在反注册输入法...");
+                                    let _ = crate::installer::ime::unregister_input_method();
 
-                                step!("正在反注册 COM 组件...");
-                                let _ = crate::installer::ime::unregister_old_com(&options.install_dir);
+                                    step!("正在反注册 COM 组件...");
+                                    let _ = crate::installer::ime::unregister_old_com(&options.install_dir);
+                                }
 
-                                step!("正在卸载字体...");
-                                let _ = crate::installer::font::uninstall_font();
+                                #[cfg(feature = "font")]
+                                {
+                                    step!("正在卸载字体...");
+                                    let _ = crate::installer::font::uninstall_font();
+                                }
 
                                 step!("正在删除快捷方式...");
                                 let _ = crate::installer::shortcut::delete_shortcuts();
@@ -389,5 +395,5 @@ fn detect_install_dir() -> PathBuf {
         }
     }
     let pf = std::env::var("ProgramFiles").unwrap_or_else(|_| r"C:\Program Files".to_string());
-    PathBuf::from(pf).join("WindInput")
+    PathBuf::from(pf).join(meta::APP_ID)
 }

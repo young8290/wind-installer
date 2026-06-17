@@ -2,6 +2,8 @@ use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use crate::meta;
+
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// 检查是否在自删除模式下运行
@@ -24,7 +26,7 @@ pub fn trigger_self_delete(install_dir: &Path) -> Result<(), String> {
 
     let temp_dir = std::env::temp_dir();
     let suffix = std::process::id().wrapping_mul(2654435761);
-    let temp_exe = temp_dir.join(format!("wind_uninst_{:08x}.exe", suffix));
+    let temp_exe = temp_dir.join(format!("{}_uninst_{:08x}.exe", meta::APP_ID.to_lowercase(), suffix));
 
     std::fs::copy(&current_exe, &temp_exe)
         .map_err(|e| format!("复制到临时目录失败: {}", e))?;

@@ -336,8 +336,8 @@ pub fn run_install_wizard() {
                             }
                         } else {
                             let _ = std::fs::write(
-                                config.install_dir.join("wind_portable_mode"),
-                                "wind_portable=1\n",
+                                config.install_dir.join(crate::meta::PORTABLE_MARKER),
+                                "portable=1\n",
                             );
                         }
 
@@ -527,7 +527,7 @@ pub fn run_install_wizard() {
 fn default_install_dir() -> String {
     let program_files = std::env::var("ProgramFiles")
         .unwrap_or_else(|_| r"C:\Program Files".to_string());
-    format!(r"{}\WindInput", program_files)
+    format!(r"{}\{}", program_files, crate::meta::APP_ID)
 }
 
 fn default_data_dir() -> String {
@@ -535,7 +535,7 @@ fn default_data_dir() -> String {
         let up = std::env::var("USERPROFILE").unwrap_or_default();
         format!(r"{}\AppData\Roaming", up)
     });
-    format!(r"{}\WindInput", app_data)
+    format!(r"{}\{}", app_data, crate::meta::APP_ID)
 }
 
 fn browse_folder(_title: &str) -> Option<PathBuf> {
@@ -563,9 +563,9 @@ fn browse_folder(_title: &str) -> Option<PathBuf> {
                 match item.GetDisplayName(windows::Win32::UI::Shell::SIGDN_FILESYSPATH) {
                     Ok(name) => {
                         let path = PathBuf::from(name.to_string().unwrap_or_default());
-                        // 如果用户选择的不是名为 WindInput 的目录，自动追加子目录
-                        if path.file_name().map(|n| n != "WindInput").unwrap_or(true) {
-                            Some(path.join("WindInput"))
+                        // 如果用户选择的目录名不是 APP_ID，自动追加子目录
+                        if path.file_name().map(|n| n != crate::meta::APP_ID).unwrap_or(true) {
+                            Some(path.join(crate::meta::APP_ID))
                         } else {
                             Some(path)
                         }
