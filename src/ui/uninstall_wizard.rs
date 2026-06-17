@@ -30,7 +30,7 @@ pub fn run_uninstall_wizard() {
     let current_page = Rc::new(Cell::new(PAGE_CONFIRM));
     let clean_roaming = Rc::new(Cell::new(false));
     let clean_cache = Rc::new(Cell::new(true));
-    let backup_desktop = Rc::new(Cell::new(true));
+    let backup_desktop = Rc::new(Cell::new(false));
     let confirmed = Rc::new(Cell::new(false));
     let finish_success = Rc::new(Cell::new(false));
     let finish_error = Rc::new(RefCell::new(String::new()));
@@ -58,6 +58,7 @@ pub fn run_uninstall_wizard() {
     let finish_success_err = finish_success.clone();
 
     // ---- 卸载按钮克隆 ----
+    let conf_enabled = confirmed.clone();
     let rx_btn = rx.clone();
     let conf_btn = confirmed.clone();
     let page_btn = current_page.clone();
@@ -78,17 +79,9 @@ pub fn run_uninstall_wizard() {
         .spacing(8)
         .cross(Align::Center)
         .child(
-            Element::stack()
+            Element::image_bytes(include_bytes!("../../assets/logo.png"))
                 .size(52, 52)
-                .bg(Color::hex(theme::ACCENT))
                 .corner(13.0)
-                .child(
-                    Element::label("风")
-                        .fill()
-                        .font_size(26.0)
-                        .fg(Color::hex(0xFFFFFF))
-                        .text_align(Align::Center),
-                ),
         )
         .child(
             Element::label(meta::APP_DISPLAY_NAME)
@@ -146,10 +139,9 @@ pub fn run_uninstall_wizard() {
                         .corner(21.0)
                         .bg(Color::hex(theme::ERROR))
                         .fg(Color::hex(0xFFFFFF))
+                        .enabled(conf_enabled)
                         .on_click(move |_ctx: &mut EventCtx| {
-                            if !conf_btn.get() {
-                                return;
-                            }
+                            let _ = conf_btn.get(); // enabled() 已做拦截
                             page_btn.set(PAGE_PROGRESS);
 
                             let options = crate::uninstaller::cleanup::CleanupOptions {

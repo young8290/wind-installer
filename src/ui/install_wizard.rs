@@ -87,18 +87,9 @@ pub fn run_install_wizard() {
         .spacing(8)
         .cross(Align::Center)
         .child(
-            // 图标：蓝色圆角方块 + "风"字
-            Element::stack()
+            Element::image_bytes(include_bytes!("../../assets/logo.png"))
                 .size(52, 52)
-                .bg(Color::hex(theme::ACCENT))
                 .corner(13.0)
-                .child(
-                    Element::label("风")
-                        .fill()
-                        .font_size(26.0)
-                        .fg(Color::hex(0xFFFFFF))
-                        .text_align(Align::Center)
-                )
         )
         .child(
             Element::label(meta::APP_DISPLAY_NAME)
@@ -197,11 +188,9 @@ pub fn run_install_wizard() {
                 .bg(Color::hex(theme::ACCENT))
                 .fg(Color::hex(0xFFFFFF))
                 .align(Align::Center)
+                .enabled(agreed.clone())
                 .on_click(move |_ctx: &mut EventCtx| {
-                    if !agreed_btn.get() {
-                        *cerr_btn.borrow_mut() = "请先勾选用户服务协议".to_string();
-                        return;
-                    }
+                    let _ = agreed_btn.get(); // 保留克隆引用，enabled() 已做拦截
                     *cerr_btn.borrow_mut() = String::new();
                     pval_btn.set(0.0);
 
