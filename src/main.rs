@@ -1,3 +1,5 @@
+#![windows_subsystem = "windows"]
+
 use std::path::PathBuf;
 
 use clap::Parser;
@@ -67,12 +69,9 @@ fn main() {
 
     match args.mode {
         Some(Mode::Install) | None => {
-            // 安装模式
             if exe_name.contains("uninstall") {
-                // 卸载模式
                 run_uninstall(args);
             } else {
-                // 安装模式
                 run_install(args);
             }
         }
@@ -89,25 +88,22 @@ fn main() {
 fn run_install(args: Args) {
     // 检查单实例
     if util::single::is_another_instance_running() {
-        eprintln!("Another instance is already running");
-        std::process::exit(1);
+        std::process::exit(0);
     }
 
     // 检查管理员权限
     if !util::admin::is_admin() {
-        eprintln!("This program requires administrator privileges");
         util::admin::request_elevation().ok();
-        std::process::exit(1);
+        std::process::exit(0);
     }
 
     // 检查 64 位系统
     if !util::path::is_64bit_system() {
-        eprintln!("清风输入法仅支持 64 位 Windows 系统");
+        // TODO: 显示错误对话框
         std::process::exit(1);
     }
 
     if args.silent {
-        // 静默安装
         let mut config = installer::config::InstallConfig::default();
         if let Some(dir) = args.dir {
             config.install_dir = dir;
@@ -119,61 +115,47 @@ fn run_install(args: Args) {
 
         let result = installer::perform_install(&config, installer::InstallMode::Standard);
         if !result.success {
-            eprintln!("Installation failed: {}", result.message);
             std::process::exit(1);
         }
     } else {
-        // GUI 安装
         ui::install_wizard::run_install_wizard();
     }
 
-    // 清理
     util::single::release_lock();
 }
 
 /// 运行卸载
 fn run_uninstall(args: Args) {
-    // 检查单实例
     if util::single::is_another_instance_running() {
-        eprintln!("Another instance is already running");
-        std::process::exit(1);
+        std::process::exit(0);
     }
 
-    // 检查管理员权限
     if !util::admin::is_admin() {
-        eprintln!("This program requires administrator privileges");
         util::admin::request_elevation().ok();
-        std::process::exit(1);
+        std::process::exit(0);
     }
 
-    // 检查是否在自删除模式
     if uninstaller::selfdelete::is_self_delete_mode() {
         let args: Vec<String> = std::env::args().collect();
         if let Some(original_exe) = args.get(1) {
             let original_path = PathBuf::from(original_exe);
-            if let Err(e) = uninstaller::selfdelete::execute_self_delete(&original_path) {
-                eprintln!("Self-delete failed: {}", e);
-            }
+            let _ = uninstaller::selfdelete::execute_self_delete(&original_path);
         }
         return;
     }
 
     if args.silent {
-        // 静默卸载
         let mut options = uninstaller::cleanup::CleanupOptions::default();
         options.keep_user_data = args.keep_user_data;
 
         let result = uninstaller::perform_uninstall(&options);
         if !result.success {
-            eprintln!("Uninstallation failed: {}", result.message);
             std::process::exit(1);
         }
     } else {
-        // GUI 卸载
         ui::uninstall_wizard::run_uninstall_wizard();
     }
 
-    // 清理
     util::single::release_lock();
 }
 
@@ -185,9 +167,6 @@ fn run_pack(source: PathBuf, output: PathBuf, compression: String) {
         "lzma" => CompressionType::Lzma,
         _ => CompressionType::Zstd,
     };
-
-    println!("Packing files from {:?} to {:?}", source, output);
-    println!("Compression: {:?}", compression_type);
 
     let mut writer = match ArchiveWriter::new(&output, compression_type) {
         Ok(w) => w,
@@ -206,9 +185,7 @@ fn run_pack(source: PathBuf, output: PathBuf, compression: String) {
 
     match writer.finish() {
         Ok(header_offset) => {
-            println!("Archive created successfully");
-            println!("Header offset: {}", header_offset);
-            println!("Entries: {}", entry_count);
+            println!("Archive created: {} entries, header at {}", entry_count, header_offset);
         }
         Err(e) => {
             eprintln!("Failed to finish archive: {}", e);

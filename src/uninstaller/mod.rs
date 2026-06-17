@@ -5,6 +5,7 @@ use cleanup::CleanupOptions;
 
 /// 卸载结果
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct UninstallResult {
     pub success: bool,
     pub message: String,

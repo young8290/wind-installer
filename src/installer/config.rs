@@ -16,8 +16,6 @@ pub struct InstallConfig {
     pub use_custom_data_dir: bool,
     /// 自定义数据目录路径
     pub custom_data_dir: Option<PathBuf>,
-    /// 是否开机自启
-    pub auto_start: bool,
     /// 开始菜单文件夹名
     pub start_menu_folder: String,
     /// 发布者
@@ -48,7 +46,6 @@ impl Default for InstallConfig {
             data_dir: PathBuf::from(app_data).join("WindInput"),
             use_custom_data_dir: false,
             custom_data_dir: None,
-            auto_start: true,
             start_menu_folder: "清风输入法".to_string(),
             publisher: "清风输入法 项目".to_string(),
         }

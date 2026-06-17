@@ -90,11 +90,9 @@ pub fn perform_install(config: &InstallConfig, mode: InstallMode) -> InstallResu
             eprintln!("Warning: Failed to register input method: {}", e);
         }
 
-        // 配置自启动
-        if config.auto_start {
-            if let Err(e) = registry::set_auto_start(&config.install_dir) {
-                eprintln!("Warning: Failed to set auto-start: {}", e);
-            }
+        // 配置自启动（输入法必须自启）
+        if let Err(e) = registry::set_auto_start(&config.install_dir) {
+            eprintln!("Warning: Failed to set auto-start: {}", e);
         }
 
         // 注册 URL 协议
