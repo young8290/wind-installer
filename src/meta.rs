@@ -13,6 +13,16 @@ pub const PROCESS_NAMES_CSV: &str = env!("WIND_PROCESS_NAMES");
 pub const ACL_DLLS_CSV: &str = env!("WIND_ACL_DLLS");
 pub const BACKUP_DIR: &str = env!("WIND_BACKUP_DIR");
 pub const PORTABLE_MARKER: &str = env!("WIND_PORTABLE_MARKER");
+pub const LEGACY_FILES_CSV: &str = env!("WIND_LEGACY_FILES");
+pub const LEGACY_DIRS_CSV: &str = env!("WIND_LEGACY_DIRS");
+
+pub fn legacy_files() -> Vec<&'static str> {
+    split_csv(LEGACY_FILES_CSV)
+}
+
+pub fn legacy_dirs() -> Vec<&'static str> {
+    split_csv(LEGACY_DIRS_CSV)
+}
 
 pub fn process_names() -> Vec<&'static str> {
     split_csv(PROCESS_NAMES_CSV)

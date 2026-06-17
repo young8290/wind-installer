@@ -22,6 +22,9 @@ process_names   = "wind_setting,wind_portable,wind_input"  # 安装/卸载前终
 acl_dlls        = "wind_tsf.dll,wind_tsf_x86.dll"          # 需要 ALL APP PACKAGES 权限的文件，留空则跳过
 backup_dir      = "WindInput_Backup"    # 卸载备份到桌面时的目录名
 portable_marker = "portable_mode"       # 便携模式标记文件名
+# ── 升级兼容清理（旧版遗留、新版已移除的文件/目录）─────────────
+legacy_files    = "wind_dwrite.dll"     # 逗号分隔，相对于 install_dir，留空则跳过
+legacy_dirs     = ""                    # 逗号分隔，相对于 install_dir，留空则跳过
 
 [features]
 # 默认启用 WindInput 专有功能；其他应用在自己的 Cargo.toml 中设 default = [] 即可禁用

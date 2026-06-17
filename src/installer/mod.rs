@@ -1,7 +1,9 @@
 pub mod config;
 #[allow(dead_code)]
 pub mod extract;
+pub mod legacy;
 pub mod registry;
+pub mod userdata;
 pub mod shortcut;
 #[cfg(feature = "font")]
 pub mod font;
@@ -56,7 +58,10 @@ pub fn perform_install(config: &InstallConfig, mode: InstallMode) -> InstallResu
         }
     }
 
-    // 3. 释放文件
+    // 3. 清理旧版遗留文件（升级场景，新版已移除的条目）
+    legacy::cleanup_legacy(&config.install_dir);
+
+    // 4. 释放文件
     match ArchiveReader::open_current_exe() {
         Ok(mut archive) => {
             if let Err(e) = extract::extract_files(&mut archive, &config.install_dir) {
@@ -78,7 +83,7 @@ pub fn perform_install(config: &InstallConfig, mode: InstallMode) -> InstallResu
         }
     }
 
-    // 4. 标准模式特有步骤
+    // 5. 标准模式特有步骤
     if mode == InstallMode::Standard {
         // 设置 DLL 权限
         if let Err(e) = acl::set_dll_permissions(&config.install_dir) {
@@ -132,7 +137,7 @@ pub fn perform_install(config: &InstallConfig, mode: InstallMode) -> InstallResu
         }
     }
 
-    // 5. 便携模式标记
+    // 6. 便携模式标记
     if mode == InstallMode::Portable {
         if let Err(e) = std::fs::write(config.install_dir.join(meta::PORTABLE_MARKER), "portable=1\n") {
             eprintln!("Warning: Failed to create portable mode marker: {}", e);

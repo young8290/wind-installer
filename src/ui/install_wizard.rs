@@ -30,6 +30,7 @@ enum ProgressMsg {
 
 pub fn run_install_wizard() {
     // ---- 状态 ----
+    let is_fresh_install = crate::installer::registry::detect_installed_version().is_none();
     let current_page = Rc::new(Cell::new(PAGE_CONFIG));
     let install_mode = Rc::new(Cell::new(0usize));
     let install_dir = Rc::new(RefCell::new(default_install_dir()));
@@ -72,6 +73,8 @@ pub fn run_install_wizard() {
     // ---- UI 绑定克隆 ----
     let install_dir_input = install_dir.clone();
     let install_dir_browse = install_dir.clone();
+    let data_dir_input = data_dir.clone();
+    let data_dir_browse_btn = data_dir.clone();
     let progress_text_label = progress_text.clone();
     let config_error_label = config_error.clone();
     let finish_error_label = finish_error.clone();
@@ -141,6 +144,39 @@ pub fn run_install_wizard() {
                                 .on_click(move |_ctx: &mut EventCtx| {
                                     if let Some(path) = browse_folder("选择安装目录") {
                                         *install_dir_browse.borrow_mut() =
+                                            path.to_string_lossy().to_string();
+                                    }
+                                })
+                        )
+                )
+        )
+        // 数据目录（仅首次安装显示；升级时沿用旧配置）
+        .child(
+            Element::col()
+                .width_match()
+                .spacing(5)
+                .visible_when(move || is_fresh_install)
+                .child(
+                    Element::label("数据目录（词库、配置）")
+                        .font_size(12.0)
+                        .fg(Color::hex(theme::TEXT_SECONDARY))
+                )
+                .child(
+                    Element::row()
+                        .width_match()
+                        .spacing(8)
+                        .cross(Align::Center)
+                        .child(
+                            Element::text_input(data_dir_input, "数据目录路径")
+                                .weight(1.0)
+                                .height(34)
+                        )
+                        .child(
+                            Element::button("更改")
+                                .height(34)
+                                .on_click(move |_ctx: &mut EventCtx| {
+                                    if let Some(path) = browse_folder("选择数据目录") {
+                                        *data_dir_browse_btn.borrow_mut() =
                                             path.to_string_lossy().to_string();
                                     }
                                 })
@@ -225,7 +261,7 @@ pub fn run_install_wizard() {
                         let mut config = crate::installer::config::InstallConfig::default();
                         config.install_dir = install_dir_val;
                         if use_custom {
-                            config.custom_data_dir = Some(data_dir_val);
+                            config.custom_data_dir = Some(data_dir_val.clone());
                             config.use_custom_data_dir = true;
                         }
 
@@ -236,11 +272,17 @@ pub fn run_install_wizard() {
                             }
                         }
 
+                        #[cfg(feature = "ime")]
                         if install_mode == InstallMode::Standard {
                             step!("正在反注册旧 COM...");
                             if let Err(e) = crate::installer::ime::unregister_old_com(&config.install_dir) {
                                 log.log(&format!("  警告: {}", e));
                             }
+                        }
+
+                        if install_mode == InstallMode::Standard {
+                            step!("正在清理旧版遗留文件...");
+                            crate::installer::legacy::cleanup_legacy(&config.install_dir);
                         }
 
                         step!("正在读取安装数据...");
@@ -302,25 +344,33 @@ pub fn run_install_wizard() {
                             if let Err(e) = crate::installer::acl::set_dll_permissions(&config.install_dir) {
                                 log.log(&format!("  警告: {}", e));
                             }
-                            step!("正在安装字体...");
-                            if let Err(e) = crate::installer::font::install_font(&config.install_dir) {
-                                log.log(&format!("  警告: {}", e));
+                            #[cfg(feature = "font")]
+                            {
+                                step!("正在安装字体...");
+                                if let Err(e) = crate::installer::font::install_font(&config.install_dir) {
+                                    log.log(&format!("  警告: {}", e));
+                                }
                             }
-                            step!("正在注册 COM 组件...");
-                            if let Err(e) = crate::installer::ime::register_com(&config.install_dir) {
-                                log.log(&format!("  警告: {}", e));
-                            }
-                            step!("正在注册系统输入法...");
-                            if let Err(e) = crate::installer::ime::register_input_method() {
-                                log.log(&format!("  警告: {}", e));
+                            #[cfg(feature = "ime")]
+                            {
+                                step!("正在注册 COM 组件...");
+                                if let Err(e) = crate::installer::ime::register_com(&config.install_dir) {
+                                    log.log(&format!("  警告: {}", e));
+                                }
+                                step!("正在注册系统输入法...");
+                                if let Err(e) = crate::installer::ime::register_input_method() {
+                                    log.log(&format!("  警告: {}", e));
+                                }
                             }
                             step!("正在配置开机自启动...");
                             if let Err(e) = crate::installer::registry::set_auto_start(&config.install_dir) {
                                 log.log(&format!("  警告: {}", e));
                             }
-                            step!("正在注册协议...");
-                            if let Err(e) = crate::installer::registry::register_url_protocol(&config.install_dir) {
-                                log.log(&format!("  警告: {}", e));
+                            if !crate::meta::URL_PROTOCOL.is_empty() {
+                                step!("正在注册协议...");
+                                if let Err(e) = crate::installer::registry::register_url_protocol(&config.install_dir) {
+                                    log.log(&format!("  警告: {}", e));
+                                }
                             }
                             step!("正在创建快捷方式...");
                             if let Err(e) = crate::installer::shortcut::create_shortcuts(&config.install_dir) {
@@ -329,6 +379,12 @@ pub fn run_install_wizard() {
                             step!("正在写入卸载信息...");
                             if let Err(e) = crate::installer::registry::write_uninstall_info(&config) {
                                 log.log(&format!("  警告: {}", e));
+                            }
+                            // 首次安装：写入用户数据目录配置
+                            if is_fresh_install {
+                                if let Err(e) = crate::installer::userdata::write_datadir_conf(&data_dir_val) {
+                                    log.log(&format!("  警告: {}", e));
+                                }
                             }
                             step!("正在启动服务...");
                             if let Err(e) = crate::installer::process::prestart_service(&config.install_dir) {

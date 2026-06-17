@@ -33,6 +33,8 @@ fn main() {
     println!("cargo:rustc-env=WIND_ACL_DLLS={}", get("acl_dlls", ""));
     println!("cargo:rustc-env=WIND_BACKUP_DIR={}", get("backup_dir", ""));
     println!("cargo:rustc-env=WIND_PORTABLE_MARKER={}", get("portable_marker", "portable_mode"));
+    println!("cargo:rustc-env=WIND_LEGACY_FILES={}", get("legacy_files", ""));
+    println!("cargo:rustc-env=WIND_LEGACY_DIRS={}", get("legacy_dirs", ""));
 
     // UAC Manifest + 图标
     embed_resource::compile_for("assets/app.rc", ["wind-installer", "wind-uninstaller"], embed_resource::NONE);
