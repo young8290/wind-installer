@@ -1,155 +1,401 @@
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::{Arc, Mutex};
+use std::sync::mpsc;
 
-use windui::prelude::*;
+use windui::app::App;
+use windui::core::EventCtx;
+use windui::geometry::Color;
+use windui::spec::Align;
+use windui::ui::Element;
 
-/// 卸载向导页面
+use crate::meta;
+use super::theme;
+
 const PAGE_CONFIRM: usize = 0;
-const PAGE_FINISH: usize = 1;
+const PAGE_PROGRESS: usize = 1;
+const PAGE_FINISH: usize = 2;
 
-/// 运行卸载向导
+const WIN_W: i32 = 480;
+const WIN_H: i32 = 400;
+
+enum UninstallMsg {
+    Status(String),
+    Finished(bool, String),
+}
+
 pub fn run_uninstall_wizard() {
+    // ---- 状态 ----
     let current_page = Rc::new(Cell::new(PAGE_CONFIRM));
-    let current_page2 = current_page.clone();
     let clean_roaming = Rc::new(Cell::new(false));
     let clean_cache = Rc::new(Cell::new(true));
     let backup_desktop = Rc::new(Cell::new(true));
     let confirmed = Rc::new(Cell::new(false));
-    let success = Rc::new(Cell::new(false));
-    let need_reboot = Rc::new(Cell::new(false));
+    let finish_success = Rc::new(Cell::new(false));
+    let finish_error = Rc::new(RefCell::new(String::new()));
+    let status_text = Rc::new(RefCell::new(String::from("正在准备卸载...")));
+    let install_dir = Rc::new(RefCell::new(detect_install_dir()));
 
-    // ---- Page 0: 确认页 ----
-    let page_confirm = {
-        let cp = current_page.clone();
-        let cr = clean_roaming.clone();
-        let cc = clean_cache.clone();
-        let bd = backup_desktop.clone();
-        let conf = confirmed.clone();
-        let suc = success.clone();
-        let _reboot = need_reboot.clone();
+    let rx: Arc<Mutex<Option<mpsc::Receiver<UninstallMsg>>>> = Arc::new(Mutex::new(None));
 
-        Element::col()
-            .fill()
-            .padding(32)
-            .spacing(16)
-            .child(
-                Element::label("卸载 清风输入法")
-                    .font_size(22.0)
-                    .fg(Color::hex(0x1A1A2E))
-                    .height(32)
-                    .width_match(),
-            )
-            .child(
-                Element::label("此向导将帮助您卸载 清风输入法。")
-                    .font_size(13.0)
-                    .fg(Color::hex(0x636E72))
-                    .height(20)
-                    .width_match(),
-            )
-            .child(Element::divider())
-            .child(
-                Element::label("用户数据处理：")
-                    .font_size(14.0)
-                    .fg(Color::hex(0x2D3436))
-                    .height(22)
-                    .width_match(),
-            )
-            .child(
-                Element::checkbox("清除用户配置数据（输入状态、自定义短语）", cr.clone()),
-            )
-            .child(
-                Element::label("    %APPDATA%\\WindInput")
-                    .font_size(12.0)
-                    .fg(Color::hex(0x999999))
-                    .height(18)
-                    .width_match(),
-            )
-            .child(Element::checkbox("备份配置数据到桌面（推荐）", bd.clone()))
-            .child(Element::checkbox("清除本地缓存数据（词库缓存）", cc.clone()))
-            .child(
-                Element::label("    %LOCALAPPDATA%\\WindInput\\cache")
-                    .font_size(12.0)
-                    .fg(Color::hex(0x999999))
-                    .height(18)
-                    .width_match(),
-            )
-            .child(Element::divider())
-            .child(Element::checkbox("我已确认卸载", conf.clone()))
-            .child(Element::label("").weight(1.0))
-            .child(
-                Element::row()
-                    .width_match()
-                    .height(40)
-                    .child(Element::label("").weight(1.0))
-                    .child(
-                        Element::button("卸载")
-                            .width(100)
-                            .height(36)
-                            .on_click(move |ctx| {
-                                if !conf.get() {
-                                    return;
-                                }
-                                // TODO: 执行实际卸载
-                                suc.set(true);
-                                cp.set(PAGE_FINISH);
-                                ctx.mark_dirty();
-                            }),
-                    )
-                    .child(
-                        Element::button("取消")
-                            .width(100)
-                            .height(36)
-                            .on_click(|ctx| ctx.request_close()),
-                    ),
-            )
-            .visible_when(move || current_page.get() == PAGE_CONFIRM)
-    };
+    // ---- 轮询闭包克隆 ----
+    let rx_poll = rx.clone();
+    let page_poll = current_page.clone();
+    let status_poll = status_text.clone();
+    let success_poll = finish_success.clone();
+    let error_poll = finish_error.clone();
 
-    // ---- Page 1: 完成页 ----
-    let page_finish = {
-        Element::col()
-            .fill()
-            .padding(32)
-            .spacing(20)
-            .child(
-                Element::label("卸载完成")
-                    .font_size(22.0)
-                    .fg(Color::hex(0x1A1A2E))
-                    .height(32)
-                    .width_match(),
-            )
-            .child(
-                Element::label("清风输入法 已从您的电脑中移除")
-                    .font_size(14.0)
-                    .fg(Color::hex(0x27AE60))
-                    .height(22)
-                    .width_match(),
-            )
-            .child(Element::label("").weight(1.0))
-            .child(
-                Element::row()
-                    .width_match()
-                    .height(40)
-                    .child(Element::label("").weight(1.0))
-                    .child(
-                        Element::button("完成")
-                            .width(120)
-                            .height(36)
-                            .on_click(|ctx| ctx.request_close()),
-                    ),
-            )
-            .visible_when(move || current_page2.get() == PAGE_FINISH)
-    };
+    // ---- 页面可见性克隆 ----
+    let page_vis0 = current_page.clone();
+    let page_vis1 = current_page.clone();
+    let page_vis2 = current_page.clone();
 
-    // ---- 组装 ----
-    let ui = Element::col()
+    // ---- 标签引用克隆 ----
+    let status_label = status_text.clone();
+    let finish_error_label = finish_error.clone();
+    let finish_success_ok = finish_success.clone();
+    let finish_success_err = finish_success.clone();
+
+    // ---- 卸载按钮克隆 ----
+    let rx_btn = rx.clone();
+    let conf_btn = confirmed.clone();
+    let page_btn = current_page.clone();
+    let cr_btn = clean_roaming.clone();
+    let cc_btn = clean_cache.clone();
+    let bd_btn = backup_desktop.clone();
+    let idir_btn = install_dir.clone();
+
+    // ---- 完成按钮克隆 ----
+    let idir_finish = install_dir.clone();
+
+    // ============================================================
+    //  品牌区（与安装器一致）
+    // ============================================================
+    let brand = Element::col()
+        .width_match()
+        .padding_xy(0, 18)
+        .spacing(8)
+        .cross(Align::Center)
+        .child(
+            Element::stack()
+                .size(52, 52)
+                .bg(Color::hex(theme::ACCENT))
+                .corner(13.0)
+                .child(
+                    Element::label("风")
+                        .fill()
+                        .font_size(26.0)
+                        .fg(Color::hex(0xFFFFFF))
+                        .text_align(Align::Center),
+                ),
+        )
+        .child(
+            Element::label(meta::APP_DISPLAY_NAME)
+                .width_match()
+                .font_size(17.0)
+                .fg(Color::hex(theme::TEXT_PRIMARY))
+                .text_align(Align::Center),
+        )
+        .child(
+            Element::label(meta::APP_VERSION)
+                .width_match()
+                .font_size(11.0)
+                .fg(Color::hex(theme::TEXT_MUTED))
+                .text_align(Align::Center),
+        );
+
+    // ============================================================
+    //  PAGE 0：确认页
+    // ============================================================
+    let page_confirm = Element::col()
         .fill()
-        .bg(Color::hex(0xF5F7FA))
-        .child(page_confirm)
-        .child(page_finish);
+        .weight(1.0)
+        .padding_xy(40, 0)
+        .spacing(12)
+        .visible_when(move || page_vis0.get() == PAGE_CONFIRM)
+        .child(
+            Element::label(format!("即将从您的电脑中卸载 {}，请确认：", meta::APP_DISPLAY_NAME))
+                .font_size(13.0)
+                .fg(Color::hex(theme::TEXT_SECONDARY))
+                .width_match(),
+        )
+        .child(Element::checkbox(
+            "删除用户词库和配置数据（%APPDATA%\\WindInput）",
+            clean_roaming.clone(),
+        ))
+        .child(Element::checkbox(
+            "卸载前备份配置到桌面（推荐）",
+            backup_desktop.clone(),
+        ))
+        .child(Element::checkbox(
+            "清除本地词库缓存（%LOCALAPPDATA%\\WindInput\\cache）",
+            clean_cache.clone(),
+        ))
+        .child(Element::leaf().weight(1.0))
+        .child(Element::checkbox("我已确认，继续卸载", confirmed.clone()))
+        .child(
+            Element::row()
+                .width_match()
+                .spacing(10)
+                .child(Element::leaf().weight(1.0))
+                .child(
+                    Element::button("开始卸载")
+                        .width(120)
+                        .height(42)
+                        .corner(21.0)
+                        .bg(Color::hex(theme::ERROR))
+                        .fg(Color::hex(0xFFFFFF))
+                        .on_click(move |_ctx: &mut EventCtx| {
+                            if !conf_btn.get() {
+                                return;
+                            }
+                            page_btn.set(PAGE_PROGRESS);
 
-    App::new("清风输入法 卸载程序", 500, 460)
-        .bg(Color::hex(0xF5F7FA))
-        .content(ui)
-        .run();
+                            let options = crate::uninstaller::cleanup::CleanupOptions {
+                                install_dir: idir_btn.borrow().clone(),
+                                clean_roaming: cr_btn.get(),
+                                clean_local_cache: cc_btn.get(),
+                                backup_to_desktop: bd_btn.get(),
+                                keep_user_data: false,
+                            };
+
+                            let (tx, new_rx) = mpsc::channel::<UninstallMsg>();
+                            if let Ok(mut g) = rx_btn.lock() {
+                                *g = Some(new_rx);
+                            }
+
+                            std::thread::spawn(move || {
+                                macro_rules! step {
+                                    ($msg:expr) => {
+                                        tx.send(UninstallMsg::Status($msg.into())).ok();
+                                    };
+                                }
+
+                                let _ = crate::installer::registry::set_installer_running();
+
+                                step!("正在停止相关进程...");
+                                let _ = crate::installer::process::terminate_windinput_processes();
+
+                                step!("正在反注册输入法...");
+                                let _ = crate::installer::ime::unregister_input_method();
+
+                                step!("正在反注册 COM 组件...");
+                                let _ = crate::installer::ime::unregister_old_com(&options.install_dir);
+
+                                step!("正在卸载字体...");
+                                let _ = crate::installer::font::uninstall_font();
+
+                                step!("正在删除快捷方式...");
+                                let _ = crate::installer::shortcut::delete_shortcuts();
+
+                                step!("正在删除安装文件...");
+                                let _ = crate::uninstaller::cleanup::delete_install_files(&options.install_dir);
+
+                                step!("正在清理注册表...");
+                                crate::uninstaller::cleanup::cleanup_registry();
+
+                                step!("正在清理用户数据...");
+                                let _ = crate::uninstaller::cleanup::cleanup_user_data(&options);
+
+                                let _ = crate::installer::registry::clear_installer_running();
+
+                                tx.send(UninstallMsg::Finished(true, String::new())).ok();
+                            });
+                        }),
+                )
+                .child(
+                    Element::button("取消")
+                        .width(80)
+                        .height(42)
+                        .corner(21.0)
+                        .on_click(|_ctx: &mut EventCtx| {
+                            std::process::exit(0);
+                        }),
+                ),
+        )
+        .child(Element::leaf().height(20));
+
+    // ============================================================
+    //  PAGE 1：进度页
+    // ============================================================
+    let page_progress = Element::col()
+        .fill()
+        .weight(1.0)
+        .padding_xy(56, 0)
+        .visible_when(move || page_vis1.get() == PAGE_PROGRESS)
+        .child(Element::leaf().weight(1.0))
+        .child(
+            Element::col()
+                .width_match()
+                .spacing(10)
+                .cross(Align::Center)
+                .child(
+                    Element::label("正在卸载，请稍候...")
+                        .font_size(14.0)
+                        .fg(Color::hex(theme::TEXT_PRIMARY)),
+                )
+                .child(
+                    Element::label_rc(status_label)
+                        .font_size(12.0)
+                        .fg(Color::hex(theme::TEXT_SECONDARY))
+                        .width_match()
+                        .text_align(Align::Center),
+                ),
+        )
+        .child(Element::leaf().weight(1.0));
+
+    // ============================================================
+    //  PAGE 2：完成页
+    // ============================================================
+    let page_finish = Element::col()
+        .fill()
+        .weight(1.0)
+        .padding_xy(48, 0)
+        .visible_when(move || page_vis2.get() == PAGE_FINISH)
+        .child(Element::leaf().weight(1.0))
+        // 成功
+        .child(
+            Element::col()
+                .width_match()
+                .spacing(8)
+                .cross(Align::Center)
+                .visible_when(move || finish_success_ok.get())
+                .child(
+                    Element::label("✓")
+                        .font_size(44.0)
+                        .fg(Color::hex(theme::SUCCESS)),
+                )
+                .child(
+                    Element::label("卸载完成")
+                        .font_size(18.0)
+                        .fg(Color::hex(theme::TEXT_PRIMARY)),
+                )
+                .child(
+                    Element::label(format!("{} 已从您的电脑中移除", meta::APP_DISPLAY_NAME))
+                        .font_size(13.0)
+                        .fg(Color::hex(theme::TEXT_SECONDARY)),
+                ),
+        )
+        // 失败
+        .child(
+            Element::col()
+                .width_match()
+                .spacing(8)
+                .cross(Align::Center)
+                .visible_when(move || !finish_success_err.get())
+                .child(
+                    Element::label("✗")
+                        .font_size(44.0)
+                        .fg(Color::hex(theme::ERROR)),
+                )
+                .child(
+                    Element::label("卸载失败")
+                        .font_size(18.0)
+                        .fg(Color::hex(theme::TEXT_PRIMARY)),
+                )
+                .child(
+                    Element::label_rc(finish_error_label)
+                        .font_size(12.0)
+                        .fg(Color::hex(theme::ERROR))
+                        .width_match()
+                        .text_align(Align::Center),
+                ),
+        )
+        .child(Element::leaf().weight(1.0))
+        .child(
+            Element::button("完 成")
+                .width(180)
+                .height(42)
+                .corner(21.0)
+                .bg(Color::hex(theme::ACCENT))
+                .fg(Color::hex(0xFFFFFF))
+                .align(Align::Center)
+                .on_click(move |_ctx: &mut EventCtx| {
+                    let dir = idir_finish.borrow().clone();
+                    // trigger_self_delete 内部调用 process::exit(0)，不返回
+                    let _ = crate::uninstaller::selfdelete::trigger_self_delete(&dir);
+                    // 自删除失败时直接退出
+                    std::process::exit(0);
+                }),
+        )
+        .child(Element::leaf().height(20));
+
+    // ============================================================
+    //  轮询叶节点（0×0，每帧执行进度消息收取）
+    // ============================================================
+    let poll_leaf = Element::leaf()
+        .size(0, 0)
+        .visible_when(move || {
+            if let Ok(mut guard) = rx_poll.lock() {
+                if let Some(ref rx) = *guard {
+                    let mut done = false;
+                    while let Ok(msg) = rx.try_recv() {
+                        match msg {
+                            UninstallMsg::Status(s) => {
+                                *status_poll.borrow_mut() = s;
+                            }
+                            UninstallMsg::Finished(ok, detail) => {
+                                success_poll.set(ok);
+                                if !ok {
+                                    *error_poll.borrow_mut() = detail;
+                                }
+                                page_poll.set(PAGE_FINISH);
+                                done = true;
+                            }
+                        }
+                    }
+                    if done {
+                        *guard = None;
+                    }
+                    windui::anim::request_repaint();
+                }
+            }
+            false
+        });
+
+    // ============================================================
+    //  根节点
+    // ============================================================
+    let root = Element::col()
+        .size(WIN_W, WIN_H)
+        .bg(Color::hex(theme::BG_PRIMARY))
+        .child(brand)
+        .child(Element::divider())
+        .child(page_confirm)
+        .child(page_progress)
+        .child(page_finish)
+        .child(poll_leaf);
+
+    App::new(
+        format!("{} 卸载程序", meta::APP_DISPLAY_NAME),
+        WIN_W,
+        WIN_H,
+    )
+    .centered()
+    .resizable(false)
+    .bg(Color::hex(theme::BG_PRIMARY))
+    .content(root)
+    .run();
+}
+
+/// 从注册表读取安装目录；找不到时回退到默认路径
+fn detect_install_dir() -> PathBuf {
+    use winreg::enums::*;
+    use winreg::RegKey;
+
+    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+    let key_path = format!(
+        r"Software\Microsoft\Windows\CurrentVersion\Uninstall\{}",
+        meta::APP_DISPLAY_NAME
+    );
+    if let Ok(key) = hklm.open_subkey_with_flags(&key_path, KEY_READ) {
+        if let Ok(dir) = key.get_value::<String, _>("InstallLocation") {
+            if !dir.is_empty() {
+                return PathBuf::from(dir);
+            }
+        }
+    }
+    let pf = std::env::var("ProgramFiles").unwrap_or_else(|_| r"C:\Program Files".to_string());
+    PathBuf::from(pf).join("WindInput")
 }

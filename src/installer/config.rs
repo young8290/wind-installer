@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use crate::meta;
+
 /// 安装配置
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -40,14 +42,14 @@ impl Default for InstallConfig {
             });
 
         Self {
-            app_name: "清风输入法".to_string(),
-            app_version: "0.1.0".to_string(),
+            app_name: meta::APP_DISPLAY_NAME.to_string(),
+            app_version: meta::APP_VERSION.to_string(),
             install_dir: PathBuf::from(program_files).join("WindInput"),
             data_dir: PathBuf::from(app_data).join("WindInput"),
             use_custom_data_dir: false,
             custom_data_dir: None,
-            start_menu_folder: "清风输入法".to_string(),
-            publisher: "清风输入法 项目".to_string(),
+            start_menu_folder: meta::APP_START_MENU_FOLDER.to_string(),
+            publisher: meta::APP_PUBLISHER.to_string(),
         }
     }
 }

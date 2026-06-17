@@ -119,11 +119,26 @@ pub fn write_uninstall_info(config: &InstallConfig) -> Result<(), String> {
         .set_value("InstallLocation", &install_dir_str)
         .map_err(|e| format!("Failed to set InstallLocation: {}", e))?;
     uninst_key
-        .set_value("UninstallString", &format!("\"{}\"", uninstall_exe_str))
+        .set_value("UninstallString", &format!("\"{}\" --uninstall", uninstall_exe_str))
         .map_err(|e| format!("Failed to set UninstallString: {}", e))?;
     uninst_key
-        .set_value("QuietUninstallString", &format!("\"{}\" /S", uninstall_exe_str))
+        .set_value("QuietUninstallString", &format!("\"{}\" --uninstall --silent", uninstall_exe_str))
         .map_err(|e| format!("Failed to set QuietUninstallString: {}", e))?;
+
+    // 图标（使用安装器主程序图标，第一个图标资源）
+    let icon_str = format!("\"{}\",0", uninstall_exe_str);
+    uninst_key
+        .set_value("DisplayIcon", &icon_str)
+        .map_err(|e| format!("Failed to set DisplayIcon: {}", e))?;
+
+    // 系统设置"应用"列表所需标记
+    let one: u32 = 1;
+    uninst_key
+        .set_value("NoModify", &one)
+        .map_err(|e| format!("Failed to set NoModify: {}", e))?;
+    uninst_key
+        .set_value("NoRepair", &one)
+        .map_err(|e| format!("Failed to set NoRepair: {}", e))?;
 
     // 计算安装大小
     if let Ok(size) = get_dir_size(&config.install_dir) {

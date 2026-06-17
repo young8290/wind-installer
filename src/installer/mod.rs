@@ -33,6 +33,11 @@ pub struct InstallResult {
 pub fn perform_install(config: &InstallConfig, mode: InstallMode) -> InstallResult {
     let mut need_reboot = false;
 
+    // 标准模式：先写入 InstallerRunning 标志，防止 wind_tsf.dll 在安装期间重拉 wind_input.exe
+    if mode == InstallMode::Standard {
+        let _ = registry::set_installer_running();
+    }
+
     // 1. 停止旧进程
     if mode == InstallMode::Standard {
         if let Err(e) = process::terminate_windinput_processes() {
@@ -51,6 +56,7 @@ pub fn perform_install(config: &InstallConfig, mode: InstallMode) -> InstallResu
     match ArchiveReader::open_current_exe() {
         Ok(mut archive) => {
             if let Err(e) = extract::extract_files(&mut archive, &config.install_dir) {
+                let _ = registry::clear_installer_running();
                 return InstallResult {
                     success: false,
                     message: format!("Failed to extract files: {}", e),
@@ -59,6 +65,7 @@ pub fn perform_install(config: &InstallConfig, mode: InstallMode) -> InstallResu
             }
         }
         Err(e) => {
+            let _ = registry::clear_installer_running();
             return InstallResult {
                 success: false,
                 message: format!("Failed to open archive: {}", e),
@@ -121,6 +128,11 @@ pub fn perform_install(config: &InstallConfig, mode: InstallMode) -> InstallResu
         if let Err(e) = std::fs::write(config.install_dir.join("wind_portable_mode"), "wind_portable=1\n") {
             eprintln!("Warning: Failed to create portable mode marker: {}", e);
         }
+    }
+
+    // 安装完成，清除 InstallerRunning 标志，允许 wind_tsf.dll 正常管理服务
+    if mode == InstallMode::Standard {
+        let _ = registry::clear_installer_running();
     }
 
     InstallResult {

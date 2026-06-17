@@ -6,6 +6,7 @@ use clap::Parser;
 
 mod archive;
 mod installer;
+mod meta;
 mod uninstaller;
 mod ui;
 mod util;
@@ -136,10 +137,8 @@ fn run_uninstall(args: Args) {
     }
 
     if uninstaller::selfdelete::is_self_delete_mode() {
-        let args: Vec<String> = std::env::args().collect();
-        if let Some(original_exe) = args.get(1) {
-            let original_path = PathBuf::from(original_exe);
-            let _ = uninstaller::selfdelete::execute_self_delete(&original_path);
+        if let Some(dir) = uninstaller::selfdelete::self_delete_target() {
+            uninstaller::selfdelete::execute_self_delete(&dir);
         }
         return;
     }

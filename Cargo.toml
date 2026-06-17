@@ -2,8 +2,14 @@
 name = "wind-installer"
 version = "0.1.0"
 edition = "2021"
-description = "Lightweight Windows installer for WindInput"
+description = "清风输入法 Windows 安装程序"
 license = "MIT"
+
+[package.metadata.installer]
+display_name = "清风输入法"
+publisher = "清风输入法 项目"
+start_menu_folder = "清风输入法"
+window_title = "清风输入法 安装向导"
 
 [lib]
 name = "wind_installer"
@@ -23,6 +29,7 @@ windows = { version = "0.58", features = [
     "Win32_System_Registry",
     "Win32_System_Threading",
     "Win32_System_ProcessStatus",
+    "Win32_System_Diagnostics_ToolHelp",
     "Win32_Security",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
@@ -49,6 +56,7 @@ ctrlc = "3"
 
 [build-dependencies]
 embed-resource = "2.4"
+toml = "0.8"
 
 [profile.release]
 opt-level = "z"
@@ -60,6 +68,10 @@ strip = true
 [[bin]]
 name = "wind-installer"
 path = "src/main.rs"
+
+[[bin]]
+name = "wind-uninstaller"
+path = "src/uninstaller_main.rs"
 
 [[bin]]
 name = "wind-packer"
