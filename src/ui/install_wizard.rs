@@ -436,13 +436,16 @@ fn default_data_dir() -> String {
 }
 
 /// 使用 Windows Shell API 选择文件夹。
-fn browse_folder(title: &str) -> Option<PathBuf> {
+fn browse_folder(_title: &str) -> Option<PathBuf> {
+    use windows::Win32::Foundation::HWND;
     use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED};
     use windows::Win32::UI::Shell::{IFileDialog, FOS_PICKFOLDERS, FileOpenDialog};
-
-    let _title = title; // 保留参数供未来使用
+    use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
 
     unsafe {
+        // 获取当前活动窗口作为对话框所有者，确保模态对话框正确接收输入
+        let owner = GetForegroundWindow();
+
         let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
 
         let dialog: IFileDialog = match CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER) {
@@ -452,7 +455,7 @@ fn browse_folder(title: &str) -> Option<PathBuf> {
 
         let _ = dialog.SetOptions(FOS_PICKFOLDERS);
 
-        if dialog.Show(None).is_err() {
+        if dialog.Show(HWND(owner.0)).is_err() {
             return None;
         }
 
