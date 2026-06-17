@@ -36,7 +36,7 @@
 param(
     [string]$Version = "",
     [ValidateSet("zstd", "lzma")]
-    [string]$Compression = "zstd",
+    [string]$Compression = "lzma",
     [switch]$SkipBuild,
     [switch]$PackOnly,
     [switch]$BundleOnly,
@@ -189,7 +189,7 @@ if (-not $SkipBuild) {
     Push-Location $ProjectRoot
     try {
         $env:CARGO_TERM_COLOR = "always"
-        cargo build --release --bin wind-packer --bin wind-installer 2>&1 | ForEach-Object {
+        cargo build --release --bin wind-packer --bin wind-installer --bin wind-uninstaller 2>&1 | ForEach-Object {
             if ($_ -match "^error") { Write-Host $_ -ForegroundColor Red }
         }
         if ($LASTEXITCODE -ne 0) {
@@ -213,18 +213,39 @@ if (-not (Test-Path $OutputDir)) {
     New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
 }
 
-# --- Step 5: 压缩打包 ---
+# --- Step 5: 将 wind-uninstaller.exe 注入构建目录 ---
+$UninstallerExe = Join-Path $ProjectRoot "target\release\wind-uninstaller.exe"
+$UninstallerDest = Join-Path $BuildDir "uninstall.exe"
+$UninstallerInjected = $false
+
+if (-not (Test-Path $UninstallerExe)) {
+    Write-Warn "wind-uninstaller.exe 不存在，归档中将不含卸载程序"
+    Write-Warn "路径: $UninstallerExe"
+} else {
+    Copy-Item -Path $UninstallerExe -Destination $UninstallerDest -Force
+    $UninstallerInjected = $true
+    Write-OK "已将卸载程序注入构建目录 ($([math]::Round((Get-Item $UninstallerDest).Length / 1KB)) KB)"
+}
+
+# --- Step 6: 压缩打包 ---
 Write-Step "阶段一：压缩打包 (算法: $Compression)..."
 
 & $PackerExe pack --source $BuildDir --output $ArchiveFile --compression $Compression
 if ($LASTEXITCODE -ne 0) {
+    # 打包失败时清理注入的文件
+    if ($UninstallerInjected) { Remove-Item -Path $UninstallerDest -Force -ErrorAction SilentlyContinue }
     Write-Err "压缩打包失败"
     exit 1
 }
 
+# 打包完成后从构建目录移除，保持构建目录干净
+if ($UninstallerInjected) {
+    Remove-Item -Path $UninstallerDest -Force -ErrorAction SilentlyContinue
+}
+
 Write-OK "归档文件: $ArchiveFile"
 
-# --- Step 6: 拼接安装程序 ---
+# --- Step 7: 拼接安装程序 ---
 if (-not $PackOnly) {
     Write-Step "阶段二：拼接安装程序..."
 
