@@ -1,135 +1,136 @@
 use std::fs::File;
-use std::io::{BufReader, Read, Seek, SeekFrom};
+use std::io::{BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::Path;
+use std::sync::atomic::{AtomicU32, Ordering};
+
+static BACKUP_SEQ: AtomicU32 = AtomicU32::new(0);
 
 use super::format::{ArchiveEntry, ArchiveFooter, ArchiveHeader};
 use crate::archive::CompressionType;
 
-/// 归档读取器 - 从 EXE 文件中读取并流式解压
+/// 归档读取器（Solid 压缩 v2）
+///
+/// 打开时仅解析 Header/Footer，不立即解压。首次调用 `prepare()` 或 `extract_entry()`
+/// 时将整个压缩块一次性解压到内存（`decompressed` 缓冲），后续每个文件的提取只是
+/// 从缓冲中切片写盘，速度极快。
 pub struct ArchiveReader {
     file: File,
     header: ArchiveHeader,
+    /// 压缩块在文件中的绝对起始偏移 = footer.header_offset - solid_compressed_size
+    block_start: u64,
+    /// 懒解压缓冲：首次 prepare() 后填充
+    decompressed: Option<Vec<u8>>,
 }
 
 #[allow(dead_code)]
 impl ArchiveReader {
-    /// 打开当前 EXE 文件并解析归档
+    /// 打开当前运行的 EXE 文件
     pub fn open_current_exe() -> Result<Self, String> {
         let exe_path = std::env::current_exe()
             .map_err(|e| format!("Failed to get current exe path: {}", e))?;
         Self::open(&exe_path)
     }
 
-    /// 打开指定文件并解析归档
+    /// 打开指定文件并解析归档元数据（不解压数据块）
     pub fn open(path: &Path) -> Result<Self, String> {
         let mut file = File::open(path)
             .map_err(|e| format!("Failed to open file: {}", e))?;
 
-        // 读取尾部 Footer（最后 16 字节）
         let file_len = file.metadata()
-            .map_err(|e| format!("Failed to get file size: {}", e))?
-            .len();
+            .map_err(|e| format!("Failed to get file size: {}", e))?.len();
 
         if file_len < 16 {
             return Err("File too small to contain footer".into());
         }
 
+        // 读取尾部 Footer（最后 16 字节）
         file.seek(SeekFrom::End(-16))
             .map_err(|e| format!("Failed to seek to footer: {}", e))?;
-
         let mut footer_bytes = [0u8; 16];
         file.read_exact(&mut footer_bytes)
             .map_err(|e| format!("Failed to read footer: {}", e))?;
-
         let footer = ArchiveFooter::from_bytes(&footer_bytes)?;
 
-        // 读取 Header
+        // 读取 Header（footer.header_offset 到 footer 之间）
         let header_size = file_len - 16 - footer.header_offset;
         file.seek(SeekFrom::Start(footer.header_offset))
             .map_err(|e| format!("Failed to seek to header: {}", e))?;
-
         let mut header_bytes = vec![0u8; header_size as usize];
         file.read_exact(&mut header_bytes)
             .map_err(|e| format!("Failed to read header: {}", e))?;
-
         let header = ArchiveHeader::from_bytes(&header_bytes)?;
 
-        Ok(Self { file, header })
+        // 压缩块起始 = footer.header_offset - solid_compressed_size
+        let block_start = footer.header_offset
+            .checked_sub(header.solid_compressed_size)
+            .ok_or("Invalid archive: block_start underflow")?;
+
+        Ok(Self { file, header, block_start, decompressed: None })
     }
 
-    /// 获取归档头部信息
-    pub fn header(&self) -> &ArchiveHeader {
-        &self.header
+    pub fn header(&self) -> &ArchiveHeader { &self.header }
+    pub fn entries(&self) -> &[ArchiveEntry] { &self.header.entries }
+    pub fn compression_type(&self) -> CompressionType { self.header.compression }
+
+    /// 提前将压缩块整体解压到内存缓冲。
+    /// 安装向导在进入逐文件循环前调用此方法，可在独立步骤中显示解压进度消息。
+    pub fn prepare(&mut self) -> Result<(), String> {
+        if self.decompressed.is_none() {
+            self.decompress_block()?;
+        }
+        Ok(())
     }
 
-    /// 获取所有文件条目
-    pub fn entries(&self) -> &[ArchiveEntry] {
-        &self.header.entries
-    }
-
-    /// 获取压缩类型
-    pub fn compression_type(&self) -> CompressionType {
-        self.header.compression
-    }
-
-    /// 流式解压单个文件到目标路径
+    /// 从已解压缓冲中提取单个文件到目标路径
     pub fn extract_entry(&mut self, entry: &ArchiveEntry, dest: &Path) -> Result<(), String> {
-        // 定位到压缩数据
-        self.file.seek(SeekFrom::Start(entry.offset))
-            .map_err(|e| format!("Failed to seek to entry data: {}", e))?;
+        if self.decompressed.is_none() {
+            self.decompress_block()?;
+        }
 
-        // 创建目标文件的父目录
+        let start = entry.offset as usize;
+        let size = entry.original_size as usize;
+        let expected_crc = entry.crc32;
+        let path_str = entry.path.clone();
+
+        // 创建目标目录
         if let Some(parent) = dest.parent() {
             std::fs::create_dir_all(parent)
-                .map_err(|e| format!("Failed to create parent directory: {}", e))?;
+                .map_err(|e| format!("Failed to create dir for {}: {}", path_str, e))?;
         }
 
-        // 创建目标文件
-        let mut output = File::create(dest)
-            .map_err(|e| format!("Failed to create output file: {}", e))?;
-
-        // 根据压缩类型选择解压器
-        match self.header.compression {
-            CompressionType::Zstd => {
-                let decoder = zstd::Decoder::new(&mut self.file)
-                    .map_err(|e| format!("Failed to create Zstd decoder: {}", e))?;
-                let mut limited = Read::take(decoder, entry.compressed_size);
-                std::io::copy(&mut limited, &mut output)
-                    .map_err(|e| format!("Failed to decompress: {}", e))?;
+        // 切片写盘（borrow 限定在此块内）
+        {
+            let dec = self.decompressed.as_ref().unwrap();
+            let end = start + size;
+            if end > dec.len() {
+                return Err(format!(
+                    "Entry '{}' out of bounds in decompressed stream (offset={} size={} total={})",
+                    path_str, start, size, dec.len()
+                ));
             }
-            CompressionType::Lzma => {
-                let decoder = xz2::read::XzDecoder::new(&mut self.file);
-                let mut limited = Read::take(decoder, entry.compressed_size);
-                std::io::copy(&mut limited, &mut output)
-                    .map_err(|e| format!("Failed to decompress: {}", e))?;
-            }
-        }
+            let slice = &dec[start..end];
 
-        // 验证 CRC32
-        let output_file = File::open(dest)
-            .map_err(|e| format!("Failed to reopen output for verification: {}", e))?;
-        let mut hasher = crc32fast::Hasher::new();
-        let mut buf_reader = BufReader::new(output_file);
-        let mut buf = vec![0u8; 64 * 1024];
-        loop {
-            let n = buf_reader.read(&mut buf)
-                .map_err(|e| format!("Failed to read for CRC: {}", e))?;
-            if n == 0 { break; }
-            hasher.update(&buf[..n]);
-        }
-        let computed_crc = hasher.finalize();
-        if computed_crc != entry.crc32 {
-            return Err(format!(
-                "CRC32 mismatch for {}: expected {:08x}, got {:08x}",
-                entry.path, entry.crc32, computed_crc
-            ));
+            // 验证 CRC32
+            let computed = crc32fast::hash(slice);
+            if computed != expected_crc {
+                return Err(format!(
+                    "CRC32 mismatch for '{}': expected {:08x}, got {:08x}",
+                    path_str, expected_crc, computed
+                ));
+            }
+
+            // 写文件（被占用时先改名备份）
+            let mut output = BufWriter::new(create_or_backup(dest)?);
+            output.write_all(slice)
+                .map_err(|e| format!("Failed to write '{}': {}", path_str, e))?;
         }
 
         Ok(())
     }
 
-    /// 流式解压所有文件到目标目录
+    /// 将所有文件解压到目标目录（一次性解压块，逐文件写盘）
     pub fn extract_all(&mut self, dest_dir: &Path) -> Result<(), String> {
+        self.prepare()?;
         let entries = self.header.entries.clone();
         for entry in &entries {
             let dest = dest_dir.join(&entry.path);
@@ -137,4 +138,53 @@ impl ArchiveReader {
         }
         Ok(())
     }
+
+    /// 将整个压缩块读入内存并解压
+    fn decompress_block(&mut self) -> Result<(), String> {
+        self.file.seek(SeekFrom::Start(self.block_start))
+            .map_err(|e| format!("Failed to seek to compressed block: {}", e))?;
+
+        let compressed_size = self.header.solid_compressed_size as usize;
+        let mut compressed = vec![0u8; compressed_size];
+        self.file.read_exact(&mut compressed)
+            .map_err(|e| format!("Failed to read compressed block: {}", e))?;
+
+        let decompressed = match self.header.compression {
+            CompressionType::Zstd => {
+                zstd::decode_all(&compressed[..])
+                    .map_err(|e| format!("Zstd decompression failed: {}", e))?
+            }
+            CompressionType::Lzma => {
+                let mut decoder = xz2::read::XzDecoder::new(&compressed[..]);
+                let mut out = Vec::new();
+                decoder.read_to_end(&mut out)
+                    .map_err(|e| format!("LZMA decompression failed: {}", e))?;
+                out
+            }
+        };
+
+        self.decompressed = Some(decompressed);
+        Ok(())
+    }
+}
+
+/// 创建输出文件；若目标被其他进程占用（os error 5 / 32），将其改名为 .old_<seq> 后重试
+fn create_or_backup(path: &Path) -> Result<File, String> {
+    match File::create(path) {
+        Ok(f) => return Ok(f),
+        Err(ref e) if matches!(e.raw_os_error(), Some(5) | Some(32)) => {
+            let seq = BACKUP_SEQ.fetch_add(1, Ordering::Relaxed);
+            let suffix = std::process::id().wrapping_add(seq as u32);
+            let old_name = format!(
+                "{}.old_{:08x}",
+                path.file_name().unwrap_or_default().to_string_lossy(),
+                suffix
+            );
+            let old_path = path.parent().unwrap_or(Path::new(".")).join(old_name);
+            std::fs::rename(path, &old_path)
+                .map_err(|e| format!("Failed to rename locked file: {}", e))?;
+        }
+        Err(e) => return Err(format!("Failed to create output file: {}", e)),
+    }
+    File::create(path).map_err(|e| format!("Failed to create file after backup: {}", e))
 }

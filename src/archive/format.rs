@@ -2,8 +2,8 @@
 pub const MAGIC_HEADER: &[u8; 8] = b"WINDPKG\0";
 pub const MAGIC_FOOTER: &[u8; 8] = b"WINDEND\0";
 
-/// 当前格式版本
-pub const FORMAT_VERSION: u32 = 1;
+/// 当前格式版本（v2: solid 压缩，entry.offset 为解压后流偏移）
+pub const FORMAT_VERSION: u32 = 2;
 
 /// 压缩算法类型
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -26,54 +26,62 @@ impl CompressionType {
 }
 
 /// 单个文件条目
+///
+/// v2 格式中：
+/// - `offset`          = 该文件在**解压后数据流**中的起始字节位置（与文件在 EXE/BIN 中的位置无关）
+/// - `compressed_size` = 0（固实压缩下无意义，整包只有一个压缩块）
+/// - `original_size`   = 文件原始大小（解压后的字节数）
+/// - `crc32`           = 原始文件数据的 CRC32
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ArchiveEntry {
-    /// 相对路径（如 "wind_tsf.dll", "data/schemas/wubi86/wubi86.dict.yaml"）
     pub path: String,
-    /// 压缩数据在文件中的绝对偏移
     pub offset: u64,
-    /// 压缩后大小
     pub compressed_size: u64,
-    /// 原始大小
     pub original_size: u64,
-    /// 原始数据的 CRC32
     pub crc32: u32,
 }
 
 /// 归档头部
+///
+/// 二进制布局（v2）：
+/// ```
+/// [0..8]   magic "WINDPKG\0"
+/// [8..12]  version u32 le
+/// [12]     compression u8
+/// [13..17] entry_count u32 le
+/// [17..25] solid_compressed_size u64 le   ← v2 新增
+/// [25..]   entry 列表
+/// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ArchiveHeader {
-    /// 魔数 "WINDPKG\0"
     pub magic: [u8; 8],
-    /// 格式版本
     pub version: u32,
-    /// 压缩类型
     pub compression: CompressionType,
-    /// 文件条目数量
     pub entry_count: u32,
-    /// 文件条目列表
+    /// 固实压缩块的字节数（紧接在 stub 之后、Header 之前）
+    pub solid_compressed_size: u64,
     pub entries: Vec<ArchiveEntry>,
 }
 
 impl ArchiveHeader {
-    /// 创建新的头部
     pub fn new(compression: CompressionType) -> Self {
         Self {
             magic: *MAGIC_HEADER,
             version: FORMAT_VERSION,
             compression,
             entry_count: 0,
+            solid_compressed_size: 0,
             entries: Vec::new(),
         }
     }
 
-    /// 序列化头部为字节
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut buf = Vec::new();
         buf.extend_from_slice(&self.magic);
         buf.extend_from_slice(&self.version.to_le_bytes());
         buf.push(self.compression as u8);
         buf.extend_from_slice(&self.entry_count.to_le_bytes());
+        buf.extend_from_slice(&self.solid_compressed_size.to_le_bytes());
 
         for entry in &self.entries {
             let path_bytes = entry.path.as_bytes();
@@ -88,9 +96,8 @@ impl ArchiveHeader {
         buf
     }
 
-    /// 从字节反序列化头部
     pub fn from_bytes(data: &[u8]) -> Result<Self, String> {
-        if data.len() < 17 {
+        if data.len() < 25 {
             return Err("Header too short".into());
         }
 
@@ -102,15 +109,17 @@ impl ArchiveHeader {
 
         let version = u32::from_le_bytes(data[8..12].try_into().unwrap());
         if version != FORMAT_VERSION {
-            return Err(format!("Unsupported format version: {}", version));
+            return Err(format!("Unsupported format version: {} (expected {})", version, FORMAT_VERSION));
         }
 
         let compression = CompressionType::from_u8(data[12])
             .ok_or_else(|| "Invalid compression type".to_string())?;
 
         let entry_count = u32::from_le_bytes(data[13..17].try_into().unwrap());
+        let solid_compressed_size = u64::from_le_bytes(data[17..25].try_into().unwrap());
+
         let mut entries = Vec::with_capacity(entry_count as usize);
-        let mut pos = 17;
+        let mut pos = 25;
 
         for _ in 0..entry_count {
             if pos + 2 > data.len() {
@@ -149,6 +158,7 @@ impl ArchiveHeader {
             version,
             compression,
             entry_count,
+            solid_compressed_size,
             entries,
         })
     }
@@ -157,9 +167,8 @@ impl ArchiveHeader {
 /// 归档尾部（固定 16 字节，位于文件末尾）
 #[derive(Debug, Clone)]
 pub struct ArchiveFooter {
-    /// Header 起始偏移
+    /// Header 起始偏移（= stub_size + solid_compressed_size）
     pub header_offset: u64,
-    /// 魔数 "WINDEND\0"
     pub magic: [u8; 8],
 }
 
@@ -171,7 +180,6 @@ impl ArchiveFooter {
         }
     }
 
-    /// 序列化为 16 字节
     pub fn to_bytes(&self) -> [u8; 16] {
         let mut buf = [0u8; 16];
         buf[0..8].copy_from_slice(&self.header_offset.to_le_bytes());
@@ -179,7 +187,6 @@ impl ArchiveFooter {
         buf
     }
 
-    /// 从 16 字节反序列化
     pub fn from_bytes(data: &[u8; 16]) -> Result<Self, String> {
         let header_offset = u64::from_le_bytes(data[0..8].try_into().unwrap());
         let mut magic = [0u8; 8];
@@ -189,9 +196,6 @@ impl ArchiveFooter {
             return Err("Invalid footer magic".into());
         }
 
-        Ok(Self {
-            header_offset,
-            magic,
-        })
+        Ok(Self { header_offset, magic })
     }
 }

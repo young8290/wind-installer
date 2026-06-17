@@ -103,7 +103,7 @@ fn cmd_pack(source: PathBuf, output: PathBuf, compression: String) {
     println!("Done! Use 'bundle' to combine with stub into installer exe.");
 }
 
-/// 阶段二：快速拼接
+/// 阶段二：捆绑 stub + 归档为最终安装程序
 fn cmd_bundle(stub: PathBuf, archive: PathBuf, output: PathBuf) {
     println!("Wind Packer - bundle");
     println!("====================");
@@ -120,45 +120,17 @@ fn cmd_bundle(stub: PathBuf, archive: PathBuf, output: PathBuf) {
         std::process::exit(1);
     }
 
-    // 快速拼接：stub + archive，利用 BufWriter 减少系统调用
-    use std::io::{BufReader, BufWriter, Write};
+    let stub_size = std::fs::metadata(&stub).map(|m| m.len()).unwrap_or(0);
 
-    let archive_file = std::fs::File::open(&archive).unwrap_or_else(|e| {
-        eprintln!("Failed to open archive: {}", e);
+    if let Err(e) = wind_installer::archive::bundle_exe(&stub, &archive, &output) {
+        eprintln!("Bundle failed: {}", e);
         std::process::exit(1);
-    });
-    let archive_len = archive_file.metadata().map(|m| m.len()).unwrap_or(0);
-
-    let mut out = BufWriter::new(std::fs::File::create(&output).unwrap_or_else(|e| {
-        eprintln!("Failed to create output: {}", e);
-        std::process::exit(1);
-    }));
-
-    // 写入 stub
-    let mut stub_reader = BufReader::new(std::fs::File::open(&stub).unwrap_or_else(|e| {
-        eprintln!("Failed to open stub: {}", e);
-        std::process::exit(1);
-    }));
-
-    std::io::copy(&mut stub_reader, &mut out).unwrap_or_else(|e| {
-        eprintln!("Failed to write stub: {}", e);
-        std::process::exit(1);
-    });
-
-    // 写入归档
-    let mut archive_reader = BufReader::new(archive_file);
-    std::io::copy(&mut archive_reader, &mut out).unwrap_or_else(|e| {
-        eprintln!("Failed to write archive: {}", e);
-        std::process::exit(1);
-    });
-
-    out.flush().ok();
+    }
 
     let total_size = std::fs::metadata(&output).map(|m| m.len()).unwrap_or(0);
     println!();
-    println!("Bundle complete!");
-    println!("Archive entries size: {:.2} MB", archive_len as f64 / 1048576.0);
-    println!("Installer size:       {:.2} MB", total_size as f64 / 1048576.0);
+    println!("Bundle complete! (stub={} bytes)", stub_size);
+    println!("Installer size: {:.2} MB", total_size as f64 / 1048576.0);
     println!();
     println!("Done!");
 }
