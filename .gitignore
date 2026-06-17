@@ -1,0 +1,30 @@
+# Rust / Cargo
+/target/
+**/*.rs.bk
+Cargo.lock
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Build artifacts
+*.exe
+*.dll
+*.pdb
+*.lnk
+
+# OMC (开发工具状态)
+.omc/
+.remember/
+
+# 临时文件
+*.tmp
+*.log

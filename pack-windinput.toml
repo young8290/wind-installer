@@ -1,0 +1,48 @@
+# WindInput 打包配置
+# 用于 wind-packer 工具
+
+[meta]
+app_name = "清风输入法"
+app_version = "0.1.0"
+publisher = "清风输入法 项目"
+description = "轻量开源输入法"
+
+[compression]
+# 算法: zstd (默认，解压快) 或 lzma (压缩率高)
+algorithm = "zstd"
+# 压缩级别: zstd 1-22 (默认19), lzma 0-9 (默认9)
+level = 19
+
+[source]
+# 源目录 (相对于此配置文件，或绝对路径)
+# 需要指向 WindInput 的构建输出目录
+build_dir = "../WindInput/build"
+data_dir = "../WindInput/build/data"
+
+[output]
+# 输出文件名 (会自动添加版本号)
+installer_name = "WindInput-Setup"
+# 输出目录
+output_dir = "./dist"
+
+[files]
+# 二进制文件列表
+binaries = [
+    "wind_tsf.dll",
+    "wind_tsf_x86.dll",
+    "wind_input.exe",
+    "wind_setting.exe",
+    "wind_portable.exe",
+]
+
+# 数据目录 (递归包含)
+data_dirs = [
+    "data",
+]
+
+# 单独的数据文件
+data_files = [
+    "data/config.toml",
+    "data/system.phrases.toml",
+    "data/common_chars.txt",
+]
