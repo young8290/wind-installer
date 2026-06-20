@@ -15,9 +15,9 @@ level = 19
 
 [source]
 # 源目录 (相对于此配置文件，或绝对路径)
-# 需要指向 WindInput 的构建输出目录
-build_dir = "../WindInput/build"
-data_dir = "../WindInput/build/data"
+# 指向 WindInputPlus 的构建输出目录
+build_dir = "../WindInputPlus/wind_input/build"
+data_dir = "../WindInputPlus/wind_input/build/data"
 
 [output]
 # 输出文件名 (会自动添加版本号)
@@ -26,13 +26,11 @@ installer_name = "WindInput-Setup"
 output_dir = "./dist"
 
 [files]
-# 二进制文件列表
+# 二进制文件列表（WindInputPlus：设置改 Web,无 wind_setting/wind_portable）
 binaries = [
     "wind_tsf.dll",
     "wind_tsf_x86.dll",
     "wind_input.exe",
-    "wind_setting.exe",
-    "wind_portable.exe",
 ]
 
 # 数据目录 (递归包含)

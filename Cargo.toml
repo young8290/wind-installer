@@ -15,10 +15,10 @@ window_title    = "清风输入法 安装向导"
 app_id          = "WindInput"
 # ── 可执行文件名 ──────────────────────────────────────────
 main_exe        = "wind_input.exe"
-setting_exe     = "wind_setting.exe"
+setting_exe     = ""                     # WindInputPlus 设置已改为 Web(wind-webapi),无独立 exe;经 url_protocol 唤起
 # ── 安装行为 ──────────────────────────────────────────────
 url_protocol    = "windinput"           # 留空则跳过 URL 协议注册
-process_names   = "wind_setting,wind_portable,wind_input"  # 安装/卸载前终止的进程
+process_names   = "wind_input"          # 安装/卸载前终止的进程(本项目仅主程序)
 acl_dlls        = "wind_tsf.dll,wind_tsf_x86.dll"          # 需要 ALL APP PACKAGES 权限的文件，留空则跳过
 backup_dir      = "WindInput_Backup"    # 卸载备份到桌面时的目录名
 portable_marker = "portable_mode"       # 便携模式标记文件名
@@ -45,13 +45,23 @@ name = "wind_installer"
 path = "src/lib.rs"
 
 [dependencies]
-# GUI 框架
-windui = { path = "../wind-ui-rust" }
-
 # 压缩
 zstd = "0.13"
 xz2 = "0.1"
 
+# 工具（跨平台：archive 模块与 wind-packer 仅依赖这些，可在 Linux 原生构建）
+crc32fast = "1.4"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+clap = { version = "4", features = ["derive"] }
+rand = "0.8"
+ctrlc = "3"
+
+# Windows-only 依赖（installer/uninstaller/ui/util 模块用）。隔离到 cfg(windows)
+# 后，wind-packer 可在 Linux 宿主原生构建（archive 纯 IO，无需 wine）。
+[target.'cfg(windows)'.dependencies]
+# GUI 框架（ui 模块用）
+windui = { path = "../wind-ui-rust" }
 # Windows API
 windows = { version = "0.58", features = [
     "Win32_Foundation",
@@ -68,20 +78,10 @@ windows = { version = "0.58", features = [
     "Win32_System_Memory",
     "Win32_UI_Input_KeyboardAndMouse",
 ] }
-
 # 注册表操作
 winreg = "0.52"
-
 # 快捷方式
 mslnk = "0.1"
-
-# 工具
-crc32fast = "1.4"
-serde = { version = "1", features = ["derive"] }
-toml = "0.8"
-clap = { version = "4", features = ["derive"] }
-rand = "0.8"
-ctrlc = "3"
 
 [build-dependencies]
 embed-resource = "2.4"
