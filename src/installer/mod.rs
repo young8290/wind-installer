@@ -69,18 +69,17 @@ pub fn perform_install(config: &InstallConfig, mode: InstallMode) -> InstallResu
                     need_reboot,
                 };
             }
-            // 持久化清单 + logo 到安装目录，供卸载器（无附加归档的裸 stub）启动时读取
+            // 给卸载器追加清单 overlay，使其自包含——安装目录不留任何散落文件
             if mode == InstallMode::Standard {
-                let manifest_bytes = archive.manifest_bytes();
-                if !manifest_bytes.is_empty() {
-                    let _ = std::fs::write(
-                        config.install_dir.join(meta::MANIFEST_FILE),
-                        manifest_bytes,
-                    );
-                }
-                let logo_bytes = archive.logo_bytes();
-                if !logo_bytes.is_empty() {
-                    let _ = std::fs::write(config.install_dir.join(meta::LOGO_FILE), logo_bytes);
+                let uninstaller = config.install_dir.join("uninstall.exe");
+                if uninstaller.exists() {
+                    if let Err(e) = crate::archive::append_manifest_overlay(
+                        &uninstaller,
+                        archive.manifest_bytes(),
+                        archive.logo_bytes(),
+                    ) {
+                        eprintln!("Warning: Failed to embed manifest into uninstaller: {}", e);
+                    }
                 }
             }
         }

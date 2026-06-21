@@ -5,9 +5,10 @@
 //! [`init`] 在启动时一次性载入全局，本模块提供只读访问器。**同一个预编译 stub
 //! 通过更换 app.toml 即可为不同应用生成安装包。**
 //!
-//! 载入时机：
-//! - 安装器：从自身追加的归档头部读取（`ArchiveReader::open_current_exe`）。
-//! - 卸载器：从安装目录 `.manifest`（位于卸载器自身旁边）读取。
+//! 载入时机（两者都从自身追加的归档头部读取）：
+//! - 安装器：归档 = 压缩块 + 文件清单 + 运行期清单；
+//! - 卸载器：安装时被追加了「仅清单 overlay」（见 `archive::append_manifest_overlay`），
+//!   故同样用 `ArchiveReader::open_current_exe` 自读，安装目录无散落文件。
 
 use std::sync::OnceLock;
 
@@ -18,11 +19,6 @@ static LOGO: OnceLock<Vec<u8>> = OnceLock::new();
 
 /// 编译期默认 logo——清单未提供 logo 时的兜底，确保 UI 始终有图。
 const DEFAULT_LOGO: &[u8] = include_bytes!("../assets/logo.png");
-
-/// 安装目录中持久化的清单文件名（供卸载器读取）。
-pub const MANIFEST_FILE: &str = ".manifest";
-/// 安装目录中持久化的 logo 文件名（供卸载器 UI 读取）。
-pub const LOGO_FILE: &str = ".logo";
 
 /// 设置运行期 logo 字节（bootstrap 时调用）。
 pub fn set_logo(bytes: Vec<u8>) {
@@ -42,36 +38,19 @@ pub fn init(manifest: AppManifest) {
     let _ = MANIFEST.set(manifest);
 }
 
-/// 自动载入清单：
-/// 1. 安装器——从自身追加的归档头部读取；
-/// 2. 卸载器——回退到安装目录（卸载器自身旁）的 `.manifest`。
+/// 从自身追加的归档头部载入清单与 logo。安装器与卸载器通用。
 ///
-/// 自删除临时副本既无归档也无 `.manifest`，但其流程不访问清单，故不应调用本函数。
+/// 自删除临时副本不含清单 overlay，但其流程不访问清单，故不应调用本函数。
 pub fn bootstrap() -> Result<(), String> {
-    // 1. 自身追加的归档（安装器场景）
-    if let Ok(reader) = crate::archive::ArchiveReader::open_current_exe() {
-        let bytes = reader.manifest_bytes();
-        if !bytes.is_empty() {
-            init(AppManifest::from_toml_bytes(bytes)?);
-            set_logo(reader.logo_bytes().to_vec());
-            return Ok(());
-        }
+    let reader = crate::archive::ArchiveReader::open_current_exe()
+        .map_err(|e| format!("无法打开自身归档: {}", e))?;
+    let bytes = reader.manifest_bytes();
+    if bytes.is_empty() {
+        return Err("自身归档头部不含运行期清单".into());
     }
-
-    // 2. 安装目录中的 .manifest / .logo（卸载器场景）
-    let exe = std::env::current_exe().map_err(|e| format!("获取自身路径失败: {}", e))?;
-    if let Some(dir) = exe.parent() {
-        let path = dir.join(MANIFEST_FILE);
-        if let Ok(bytes) = std::fs::read(&path) {
-            init(AppManifest::from_toml_bytes(&bytes)?);
-            if let Ok(logo) = std::fs::read(dir.join(LOGO_FILE)) {
-                set_logo(logo);
-            }
-            return Ok(());
-        }
-    }
-
-    Err("未找到安装清单：归档头部为空且 .manifest 不可读".into())
+    init(AppManifest::from_toml_bytes(bytes)?);
+    set_logo(reader.logo_bytes().to_vec());
+    Ok(())
 }
 
 /// 获取全局清单。未初始化即 panic——属于编程错误（启动时必须先 init）。

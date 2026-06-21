@@ -391,20 +391,16 @@ pub fn run_install_wizard() {
                         }
 
                         if install_mode == InstallMode::Standard {
-                            // 持久化清单 + logo 到安装目录，供卸载器读取
-                            let mb = thread_archive.manifest_bytes();
-                            if !mb.is_empty() {
-                                let _ = std::fs::write(
-                                    config.install_dir.join(crate::meta::MANIFEST_FILE),
-                                    mb,
-                                );
-                            }
-                            let lb = thread_archive.logo_bytes();
-                            if !lb.is_empty() {
-                                let _ = std::fs::write(
-                                    config.install_dir.join(crate::meta::LOGO_FILE),
-                                    lb,
-                                );
+                            // 给卸载器追加清单 overlay，使其自包含——安装目录不留散落文件
+                            let uninstaller = config.install_dir.join("uninstall.exe");
+                            if uninstaller.exists() {
+                                if let Err(e) = crate::archive::append_manifest_overlay(
+                                    &uninstaller,
+                                    thread_archive.manifest_bytes(),
+                                    thread_archive.logo_bytes(),
+                                ) {
+                                    log.log(&format!("  警告: 写入卸载器清单失败: {}", e));
+                                }
                             }
                             step!("正在设置文件权限...");
                             if let Err(e) = crate::installer::acl::set_dll_permissions(&config.install_dir) {

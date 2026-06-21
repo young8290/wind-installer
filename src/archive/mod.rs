@@ -11,6 +11,42 @@ pub use writer::ArchiveWriter;
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::Path;
 
+/// 将「仅含清单 + logo、无文件」的最小归档作为 overlay 追加到已存在的 exe 末尾。
+///
+/// 用于让卸载器（被解压到安装目录的裸 stub）自包含运行期清单：安装时调用本函数把
+/// 清单/logo 追加到 install_dir\uninstall.exe，卸载器启动即可用 `ArchiveReader::
+/// open_current_exe` 从自身读取——安装目录无需任何额外散落文件。
+///
+/// 追加结构：`[原 exe][Header(manifest, logo, 0 条目, 块大小 0)][Footer]`。
+/// 无压缩块（0 个文件），运行期只读头部、不解压。
+pub fn append_manifest_overlay(exe_path: &Path, manifest: &[u8], logo: &[u8]) -> Result<(), String> {
+    use format::{ArchiveFooter, ArchiveHeader, CompressionType};
+
+    let stub_size = std::fs::metadata(exe_path)
+        .map_err(|e| format!("Failed to stat exe: {}", e))?
+        .len();
+
+    let mut header = ArchiveHeader::new(CompressionType::Zstd);
+    header.manifest = manifest.to_vec();
+    header.logo = logo.to_vec();
+    header.entry_count = 0;
+    header.solid_compressed_size = 0; // 无压缩块
+    let header_bytes = header.to_bytes();
+
+    // Header 紧接在原 exe 之后，故 header_offset = 原 exe 大小
+    let footer = ArchiveFooter::new(stub_size);
+
+    let mut f = std::fs::OpenOptions::new()
+        .append(true)
+        .open(exe_path)
+        .map_err(|e| format!("Failed to open exe for append: {}", e))?;
+    f.write_all(&header_bytes)
+        .map_err(|e| format!("Failed to append header: {}", e))?;
+    f.write_all(&footer.to_bytes())
+        .map_err(|e| format!("Failed to append footer: {}", e))?;
+    Ok(())
+}
+
 /// 将 stub EXE 和归档 .bin 捆绑为最终安装程序。
 ///
 /// Solid 格式下 entry.offset 是解压后流中的偏移，与 stub 大小无关，

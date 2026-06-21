@@ -288,6 +288,31 @@ fn manifest_and_logo_survive_pack_and_bundle() {
     assert_eq!(std::fs::read(out_dir.join("payload.bin")).unwrap(), vec![0x5Au8; 3000]);
 }
 
+/// 卸载器自包含：给裸 exe 追加「仅清单 overlay」后，可从该 exe 自身读回清单/logo，
+/// 且无文件条目。验证安装目录无需散落 .manifest/.logo 文件。
+#[test]
+fn append_manifest_overlay_makes_exe_self_describing() {
+    let dir = TempDir::new("overlay");
+    // 模拟被解压到安装目录的卸载器 exe（任意 PE 字节）
+    let exe_bytes: Vec<u8> = (0u8..=255).cycle().take(7000).collect();
+    let exe = dir.write_file("uninstall.exe", &exe_bytes);
+
+    let manifest = b"[app]\nid = \"WindInput\"\nmain_exe = \"wind_input.exe\"\n".to_vec();
+    let logo = vec![0x89u8, 0x50, 0x4E, 0x47, 0xAB, 0xCD];
+
+    archive::append_manifest_overlay(&exe, &manifest, &logo).expect("追加 overlay 失败");
+
+    // 卸载器启动时即从自身读取
+    let reader = ArchiveReader::open(&exe).expect("打开追加 overlay 后的 exe 失败");
+    assert_eq!(reader.manifest_bytes(), &manifest[..], "清单应可从自身读回");
+    assert_eq!(reader.logo_bytes(), &logo[..], "logo 应可从自身读回");
+    assert!(reader.entries().is_empty(), "overlay 不含文件条目");
+
+    // 原 exe 字节未被破坏（仍是文件前缀）
+    let after = std::fs::read(&exe).unwrap();
+    assert_eq!(&after[..exe_bytes.len()], &exe_bytes[..], "原 exe 内容应保持不变");
+}
+
 /// bundle_exe 对 stub_size=0（无前缀）应与直接读取 .bin 等价。
 #[test]
 fn bundle_exe_with_empty_stub_reads_identically_to_plain_archive() {
