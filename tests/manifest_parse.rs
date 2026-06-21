@@ -115,5 +115,4 @@ source_dir = "./build"
     assert_eq!(cfg.package.output_dir, "./dist");
     // 回退访问器
     assert_eq!(cfg.manifest.start_menu_folder(), "My App"); // 回退到 display_name
-    assert_eq!(cfg.manifest.backup_dir(), "MyApp_Backup"); // 回退到 <id>_Backup
 }

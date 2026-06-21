@@ -69,7 +69,7 @@ pub fn perform_install(config: &InstallConfig, mode: InstallMode) -> InstallResu
                     need_reboot,
                 };
             }
-            // 持久化清单到安装目录，供卸载器（无附加归档的裸 stub）启动时读取
+            // 持久化清单 + logo 到安装目录，供卸载器（无附加归档的裸 stub）启动时读取
             if mode == InstallMode::Standard {
                 let manifest_bytes = archive.manifest_bytes();
                 if !manifest_bytes.is_empty() {
@@ -77,6 +77,10 @@ pub fn perform_install(config: &InstallConfig, mode: InstallMode) -> InstallResu
                         config.install_dir.join(meta::MANIFEST_FILE),
                         manifest_bytes,
                     );
+                }
+                let logo_bytes = archive.logo_bytes();
+                if !logo_bytes.is_empty() {
+                    let _ = std::fs::write(config.install_dir.join(meta::LOGO_FILE), logo_bytes);
                 }
             }
         }

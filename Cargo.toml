@@ -5,40 +5,13 @@ edition = "2021"
 description = "清风输入法 Windows 安装程序"
 license = "MIT"
 
-[package.metadata.installer]
-# ── 显示信息 ──────────────────────────────────────────────
-display_name    = "清风输入法"
-publisher       = "清风输入法 项目"
-start_menu_folder = "清风输入法"
-window_title    = "清风输入法 安装向导"
-# ── 应用标识（用于注册表键名、默认安装目录名等）────────────
-app_id          = "WindInput"
-# ── 可执行文件名 ──────────────────────────────────────────
-main_exe        = "wind_input.exe"
-setting_exe     = ""                     # WindInputPlus 设置已改为 Web(wind-webapi),无独立 exe;经 url_protocol 唤起
-# ── 安装行为 ──────────────────────────────────────────────
-url_protocol    = "windinput"           # 留空则跳过 URL 协议注册
-process_names   = "wind_input"          # 安装/卸载前终止的进程(本项目仅主程序)
-acl_dlls        = "wind_tsf.dll,wind_tsf_x86.dll"          # 需要 ALL APP PACKAGES 权限的文件，留空则跳过
-backup_dir      = "WindInput_Backup"    # 卸载备份到桌面时的目录名
-portable_marker = "portable_mode"       # 便携模式标记文件名
-# ── 升级兼容清理（旧版遗留、新版已移除的文件/目录）─────────────
-legacy_files    = "wind_dwrite.dll"     # 逗号分隔，相对于 install_dir，留空则跳过
-legacy_dirs     = ""                    # 逗号分隔，相对于 install_dir，留空则跳过
-# ── 用户协议 ──────────────────────────────────────────────────────
-agreement_url   = ""                    # 安装向导协议链接，留空则不显示可点击链接
-# ── 窗口尺寸 ──────────────────────────────────────────────────────
-install_win_w   = 520                   # 安装向导宽度（px）
-install_win_h   = 420                   # 安装向导高度（px）
-uninstall_win_w = 480                   # 卸载向导宽度（px）
-uninstall_win_h = 420                   # 卸载向导高度（px）
+# 应用身份配置已迁移到 app.toml（运行期清单），不再使用 Cargo.toml 元数据。
 
 [features]
-# 默认启用 WindInput 专有功能；其他应用在自己的 Cargo.toml 中设 default = [] 即可禁用
-default = ["ime", "font", "frameless"]
-ime       = []   # TSF 输入法注册（风输入法专用，依赖 wind_tsf.dll GUID/CLSID）
-font      = []   # 字体安装（风输入法附带字体，其他应用通常不需要）
-frameless = []   # 无边框自定义标题栏（启用后使用主题色标题栏代替系统标题栏）
+# 输入法/字体注册已改为运行期清单驱动（见 app.toml 的 [ime]/[[font]] 段），不再是编译期开关。
+default = ["frameless"]
+frameless = []          # 无边框自定义标题栏（主题色标题栏代替系统标题栏）
+packer    = ["dep:editpe"]  # wind-packer 所需（写 EXE 图标）
 
 [lib]
 name = "wind_installer"
@@ -49,13 +22,15 @@ path = "src/lib.rs"
 zstd = "0.13"
 xz2 = "0.1"
 
-# 工具（跨平台：archive 模块与 wind-packer 仅依赖这些，可在 Linux 原生构建）
+# 工具（跨平台：archive/manifest 模块与 wind-packer 仅依赖这些，可在 Linux 原生构建）
 crc32fast = "1.4"
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 clap = { version = "4", features = ["derive"] }
 rand = "0.8"
 ctrlc = "3"
+# 仅 wind-packer 需要（写 EXE 图标，纯 Rust 跨平台，无外部依赖）；installer/uninstaller 不引入
+editpe = { version = "0.2.3", features = ["images"], optional = true }
 
 # Windows-only 依赖（installer/uninstaller/ui/util 模块用）。隔离到 cfg(windows)
 # 后，wind-packer 可在 Linux 宿主原生构建（archive 纯 IO，无需 wine）。
@@ -85,7 +60,6 @@ mslnk = "0.1"
 
 [build-dependencies]
 embed-resource = "2.4"
-toml = "0.8"
 
 [profile.release]
 opt-level = "z"
@@ -105,3 +79,4 @@ path = "src/uninstaller_main.rs"
 [[bin]]
 name = "wind-packer"
 path = "tools/packer/main.rs"
+required-features = ["packer"]

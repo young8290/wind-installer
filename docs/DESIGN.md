@@ -2,9 +2,20 @@
 
 ## 1. 项目概述
 
-基于 `wind-ui-rust` GUI 框架，为 WindInput（清风输入法）打造的轻量级 Windows 安装管理器。
+基于 `wind-ui-rust` GUI 框架的轻量级 Windows 安装器**生成工具**。
 
-**设计理念**：类微信输入法风格，1-2 步完成安装，同时支持通用打包能力。
+**设计理念**：类微信输入法风格，1-2 步完成安装。应用身份、安装行为、输入法/字体等
+专属逻辑全部由打包时提供的 `app.toml` 描述，序列化进归档头部，由安装/卸载器运行期读取。
+**同一个预编译 stub（wind-installer.exe）配不同 app.toml 即可为不同应用生成安装包，
+无需重新编译。** 本仓库以「清风输入法（WindInput）」作为示例应用（见根目录 `app.toml`）。
+
+配置分两层：
+- **运行期清单**（`[app]`/`[ui]`/`[ime]`/`[[font]]`）→ 嵌入归档头部，安装/卸载器读取；
+- **打包参数**（`[package]`：源目录、压缩、logo/icon 路径）→ 仅 `wind-packer` 使用，不进归档。
+
+输入法 TSF 注册与字体安装为可选段：`[ime]`/`[[font]]` 存在即启用，缺省即跳过——
+普通应用删除这两段即可。EXE 图标由 `wind-packer` 用纯 Rust 的 `editpe` 按 `app.toml`
+写入（无外部依赖，CI 离线可用）。
 
 ### 对标 NSIS 的优势
 
@@ -22,21 +33,28 @@
 
 ```
 ┌─────────────────────────┐  ← 文件起始
-│   Stub (installer.exe)  │  ← 自解压程序（GUI + 解压逻辑）
+│   Stub (installer.exe)  │  ← 自解压程序（GUI + 解压逻辑）；图标已由 editpe 写入
 │   ~0.5 MB               │
 ├─────────────────────────┤  ← Stub 结束位置
-│   Payload Header        │  ← 文件索引表
-│   - Magic: "WINDPKG\0"  │
-│   - 压缩类型、条目数量    │
-│   - 文件路径/偏移/大小    │
+│   Solid Compressed Block│  ← 全部文件拼成一条流整体压缩（跨文件复用字典）
 ├─────────────────────────┤
-│   Compressed Blocks     │  ← 压缩的文件数据
+│   Header                │
+│   - Magic: "WINDPKG\0"  │
+│   - version / 压缩类型    │
+│   - manifest（运行期清单）│  ← v3：app.toml 的 [app]/[ui]/[ime]/[[font]] 的 TOML 文本
+│   - logo（UI 图片字节）   │  ← v3：UI 显示的 logo，未压缩，廉价读取
+│   - 文件路径/偏移/大小表  │
 ├─────────────────────────┤
 │   Footer (16 bytes)     │
 │   - Header offset (u64) │
 │   - Magic: "WINDEND\0"  │
 └─────────────────────────┘  ← 文件结束
 ```
+
+> **打包管线**：`wind-packer build` 先用 `editpe` 给**干净 stub**写入图标（此时无尾部
+> overlay，规避 PE 重建丢弃 overlay 的风险），再压缩源目录、嵌入 manifest/logo 到头部，
+> 最后拼接 `stub + 压缩块 + Header + Footer`。卸载器是被解压到安装目录的裸 stub（无附加
+> 归档），故安装时会把清单与 logo 另存为安装目录下的 `.manifest` / `.logo` 供其读取。
 
 ## 3. 归档格式详细规范
 
@@ -48,29 +66,40 @@ Offset  Size  Field
 8       8     magic: "WINDEND\0"
 ```
 
-### 3.2 Header
+### 3.2 Header（v3）
 
 ```
-Offset  Size  Field
-0       8     magic: "WINDPKG\0"
-8       4     version: u32 (LE) — 当前版本 = 1
-12      1     compression: u8  — 0=Zstd, 1=LZMA
-13      4     entry_count: u32 (LE)
-17      4     payload_size: u32 (LE) — 压缩数据总大小（不含 header/footer）
-21      ...   entries: [Entry; entry_count]
+Offset  Size       Field
+0       8          magic: "WINDPKG\0"
+8       4          version: u32 (LE) — 当前版本 = 3
+12      1          compression: u8  — 0=Zstd, 1=LZMA
+13      4          manifest_len: u32 (LE)            ← v3 新增
+17      manifest_len  manifest: TOML 文本（运行期清单 AppManifest）
++0      4          logo_len: u32 (LE)                ← v3 新增
++4      logo_len   logo: 图片字节（UI 显示，可为 0）
++0      4          entry_count: u32 (LE)
++4      8          solid_compressed_size: u64 (LE)   — 固实压缩块字节数
++12     ...        entries: [Entry; entry_count]
 ```
+
+manifest 与 logo 位于头部、未压缩，运行期无需解压固实块即可廉价读取（启动时显示 UI）。
 
 ### 3.3 Entry
 
 ```
-Offset  Size  Field
-0       2     path_len: u16 (LE)
+Offset  Size      Field
+0       2         path_len: u16 (LE)
 2       path_len  path: UTF-8 bytes（相对路径，如 "wind_tsf.dll"）
-+0      8     offset: u64 (LE) — 压缩数据在文件中的绝对偏移
-+8      8     compressed_size: u64 (LE)
-+16     8     original_size: u64 (LE)
-+24     4     crc32: u32 (LE) — 原始数据的 CRC32
++0      8         offset: u64 (LE) — 在**解压后数据流**中的字节起点（固实压缩，与文件偏移无关）
++8      8         compressed_size: u64 (LE) — 固实模式下恒为 0
++16     8         original_size: u64 (LE)
++24     4         crc32: u32 (LE) — 原始数据的 CRC32
 ```
+
+> **固实压缩（v2 起）**：所有文件原始数据拼成一条流整体压缩一次，压缩器跨文件复用字典，
+> 对含大量相似文件（词典 YAML 等）的归档压缩率显著优于逐文件压缩。`entry.offset` 因此是
+> 解压后流中的偏移，与 stub 大小无关——`bundle` 拼接时头部字节可原样复制，仅需更新 Footer
+> 的 `header_offset`（加上 stub 大小）。
 
 ## 4. 压缩算法
 

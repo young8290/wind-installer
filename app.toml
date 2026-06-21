@@ -1,0 +1,59 @@
+# ============================================================================
+#  Wind Installer 应用清单（示例：清风输入法）
+# ============================================================================
+#  这是「通用安装器生成器」的唯一配置来源。修改本文件即可为不同应用生成安装包，
+#  无需重新编译 stub：
+#       wind-packer build --config app.toml --stub wind-installer.exe
+#
+#  [app]/[ui]/[ime]/[[font]] 会被嵌入归档头部，由安装/卸载器运行期读取；
+#  [package] 仅打包时使用，不进归档。
+# ============================================================================
+
+[app]
+# ── 应用标识（注册表键名、默认安装目录名等）──────────────────────────────
+id              = "WindInput"
+display_name    = "清风输入法"
+version         = "0.1.0"
+publisher       = "清风输入法 项目"
+description     = "轻量开源输入法"
+# ── 可执行文件名（相对安装目录）──────────────────────────────────────────
+main_exe        = "wind_input.exe"
+setting_exe     = "wind_setting.exe"
+# ── 显示与安装行为 ────────────────────────────────────────────────────────
+start_menu_folder = "清风输入法"
+window_title    = "清风输入法 安装向导"   # 留空则回退 "<display_name> 安装向导"
+url_protocol    = "windinput"             # 留空则跳过 URL 协议注册
+agreement_url   = ""                      # 留空则不显示协议链接
+portable_marker = "portable_mode"         # 便携模式标记文件名
+# ── 进程 / 权限 / 升级清理 ────────────────────────────────────────────────
+process_names   = ["wind_setting", "wind_portable", "wind_input"]  # 安装/卸载前终止
+acl_dlls        = ["wind_tsf.dll", "wind_tsf_x86.dll"]  # 需 ALL APP PACKAGES 权限
+legacy_files    = ["wind_dwrite.dll"]     # 升级时清理的旧版遗留文件（相对安装目录）
+legacy_dirs     = []                      # 升级时清理的旧版遗留目录
+
+[ui]
+install_win   = { w = 520, h = 420 }
+uninstall_win = { w = 480, h = 420 }
+
+# ── 输入法（TSF）注册：整段缺省即跳过。非输入法应用删除本段即可 ───────────
+[ime]
+clsid        = "{99C2EE30-5C57-45A2-9C63-FB54B34FD90A}"
+profile_guid = "{99C2EE31-5C57-45A2-9C63-FB54B34FD90A}"
+lang_id      = "0804"                     # 简体中文
+dll_x64      = "wind_tsf.dll"
+dll_x86      = "wind_tsf_x86.dll"         # 留空则跳过 32 位注册
+
+# ── 字体安装：可多条，缺省即跳过。普通应用通常删除本段 ─────────────────────
+[[font]]
+file         = "HeiTiZiGen.ttf"
+display_name = "黑体字根 (TrueType)"
+source_rel   = "data/schemas/wubi86/HeiTiZiGen.ttf"   # 相对安装目录
+
+# ── 打包参数（仅 wind-packer 使用，不进归档）──────────────────────────────
+[package]
+compression = "lzma"                      # zstd（解压快）或 lzma（压缩率高）
+source_dir  = "../WindInput/build"        # 待打包的应用构建产物目录（相对本文件）
+output_name = "WindInput-Setup"           # 输出名（自动追加 -<version>）
+output_dir  = "./dist"
+logo        = "assets/logo.png"           # UI 显示的 logo，字节嵌入归档头部
+icon        = "assets/installer.ico"      # 安装器 EXE 图标，由 editpe 写入 PE 资源

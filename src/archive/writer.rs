@@ -1,3 +1,6 @@
+// ArchiveWriter 仅 wind-packer 与测试使用；installer/uninstaller 二进制不构造它。
+#![allow(dead_code)]
+
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::Path;

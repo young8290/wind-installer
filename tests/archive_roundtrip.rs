@@ -250,6 +250,44 @@ fn bundle_exe_fixes_offsets_so_content_readable_after_prepending_stub() {
         "b.txt 内容不一致");
 }
 
+/// 核心回归测试：清单 + logo 经 pack → bundle → read 全程保持完整。
+///
+/// 验证通用安装器的关键链路：打包时嵌入的 manifest/logo 字节，在追加 stub overlay
+/// 后仍能被运行期从最终 exe 的头部正确读出（bundle_exe 原样复制头部字节）。
+#[test]
+fn manifest_and_logo_survive_pack_and_bundle() {
+    let dir = TempDir::new("manifest_bundle");
+    let manifest = b"[app]\nid = \"WindInput\"\ndisplay_name = \"\xe6\xb8\x85\xe9\xa3\x8e\"\n".to_vec();
+    let logo = vec![0x89u8, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x11, 0x22]; // 伪 PNG
+
+    // pack：写入归档并设置清单/logo
+    let archive_path = dir.path().join("data.bin");
+    let mut writer = ArchiveWriter::new(&archive_path, CompressionType::Lzma).unwrap();
+    writer.set_manifest(manifest.clone(), logo.clone());
+    let src = dir.write_file("payload.bin", &vec![0x5Au8; 3000]);
+    writer.add_file(&src, "payload.bin").unwrap();
+    writer.finish().unwrap();
+
+    // 直接从 .bin 读回
+    let reader = ArchiveReader::open(&archive_path).unwrap();
+    assert_eq!(reader.manifest_bytes(), &manifest[..], ".bin 清单应一致");
+    assert_eq!(reader.logo_bytes(), &logo[..], ".bin logo 应一致");
+
+    // bundle：追加 stub overlay 后从最终 exe 读回
+    let stub: Vec<u8> = (0u8..=255).cycle().take(6000).collect();
+    let stub_path = dir.write_file("stub.exe", &stub);
+    let installer = dir.path().join("setup.exe");
+    archive::bundle_exe(&stub_path, &archive_path, &installer).unwrap();
+
+    let reader2 = ArchiveReader::open(&installer).unwrap();
+    assert_eq!(reader2.manifest_bytes(), &manifest[..], "bundle 后清单应一致");
+    assert_eq!(reader2.logo_bytes(), &logo[..], "bundle 后 logo 应一致");
+    // 数据仍可正确解压
+    let out_dir = dir.path().join("out");
+    extract_all_to(&installer, &out_dir);
+    assert_eq!(std::fs::read(out_dir.join("payload.bin")).unwrap(), vec![0x5Au8; 3000]);
+}
+
 /// bundle_exe 对 stub_size=0（无前缀）应与直接读取 .bin 等价。
 #[test]
 fn bundle_exe_with_empty_stub_reads_identically_to_plain_archive() {

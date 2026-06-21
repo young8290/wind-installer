@@ -114,7 +114,7 @@ pub fn run_install_wizard() {
                 .spacing(6)
                 .cross(Align::Center)
                 .child(
-                    Element::image_bytes(include_bytes!("../../assets/logo.png"))
+                    Element::image_bytes(meta::logo())
                         .size(72, 72)
                         .corner(18.0),
                 )
@@ -391,12 +391,19 @@ pub fn run_install_wizard() {
                         }
 
                         if install_mode == InstallMode::Standard {
-                            // 持久化清单到安装目录，供卸载器读取
+                            // 持久化清单 + logo 到安装目录，供卸载器读取
                             let mb = thread_archive.manifest_bytes();
                             if !mb.is_empty() {
                                 let _ = std::fs::write(
                                     config.install_dir.join(crate::meta::MANIFEST_FILE),
                                     mb,
+                                );
+                            }
+                            let lb = thread_archive.logo_bytes();
+                            if !lb.is_empty() {
+                                let _ = std::fs::write(
+                                    config.install_dir.join(crate::meta::LOGO_FILE),
+                                    lb,
                                 );
                             }
                             step!("正在设置文件权限...");

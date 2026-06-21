@@ -14,9 +14,28 @@ use std::sync::OnceLock;
 use crate::manifest::AppManifest;
 
 static MANIFEST: OnceLock<AppManifest> = OnceLock::new();
+static LOGO: OnceLock<Vec<u8>> = OnceLock::new();
+
+/// 编译期默认 logo——清单未提供 logo 时的兜底，确保 UI 始终有图。
+const DEFAULT_LOGO: &[u8] = include_bytes!("../assets/logo.png");
 
 /// 安装目录中持久化的清单文件名（供卸载器读取）。
 pub const MANIFEST_FILE: &str = ".manifest";
+/// 安装目录中持久化的 logo 文件名（供卸载器 UI 读取）。
+pub const LOGO_FILE: &str = ".logo";
+
+/// 设置运行期 logo 字节（bootstrap 时调用）。
+pub fn set_logo(bytes: Vec<u8>) {
+    let _ = LOGO.set(bytes);
+}
+
+/// 运行期 UI logo 字节；未载入或为空时回退到编译期默认 logo。
+pub fn logo() -> &'static [u8] {
+    match LOGO.get() {
+        Some(v) if !v.is_empty() => v,
+        _ => DEFAULT_LOGO,
+    }
+}
 
 /// 载入清单（仅首次生效）。必须在任何访问器调用前完成。
 pub fn init(manifest: AppManifest) {
@@ -34,26 +53,25 @@ pub fn bootstrap() -> Result<(), String> {
         let bytes = reader.manifest_bytes();
         if !bytes.is_empty() {
             init(AppManifest::from_toml_bytes(bytes)?);
+            set_logo(reader.logo_bytes().to_vec());
             return Ok(());
         }
     }
 
-    // 2. 安装目录中的 .manifest（卸载器场景）
+    // 2. 安装目录中的 .manifest / .logo（卸载器场景）
     let exe = std::env::current_exe().map_err(|e| format!("获取自身路径失败: {}", e))?;
     if let Some(dir) = exe.parent() {
         let path = dir.join(MANIFEST_FILE);
         if let Ok(bytes) = std::fs::read(&path) {
             init(AppManifest::from_toml_bytes(&bytes)?);
+            if let Ok(logo) = std::fs::read(dir.join(LOGO_FILE)) {
+                set_logo(logo);
+            }
             return Ok(());
         }
     }
 
     Err("未找到安装清单：归档头部为空且 .manifest 不可读".into())
-}
-
-/// 是否已载入清单。
-pub fn is_initialized() -> bool {
-    MANIFEST.get().is_some()
 }
 
 /// 获取全局清单。未初始化即 panic——属于编程错误（启动时必须先 init）。
@@ -97,11 +115,6 @@ pub fn start_menu_folder() -> &'static str {
 }
 pub fn setting_exe_stem() -> &'static str {
     manifest().setting_exe_stem()
-}
-
-/// 卸载备份目录名（空则回退 "<id>_Backup"）。
-pub fn backup_dir() -> String {
-    manifest().backup_dir()
 }
 
 /// 向导窗口标题：清单留空则回退到 "<display_name> 安装向导"。

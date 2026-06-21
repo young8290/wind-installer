@@ -5,6 +5,7 @@ pub mod writer;
 #[allow(unused_imports)]
 pub use format::{ArchiveEntry, ArchiveFooter, ArchiveHeader, CompressionType, FORMAT_VERSION, MAGIC_FOOTER, MAGIC_HEADER};
 pub use reader::ArchiveReader;
+#[allow(unused_imports)]
 pub use writer::ArchiveWriter;
 
 use std::io::{BufReader, BufWriter, Read, Write};

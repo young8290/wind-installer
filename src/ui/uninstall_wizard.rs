@@ -82,7 +82,7 @@ pub fn run_uninstall_wizard() {
         .spacing(8)
         .cross(Align::Center)
         .child(
-            Element::image_bytes(include_bytes!("../../assets/logo.png"))
+            Element::image_bytes(meta::logo())
                 .size(52, 52)
                 .corner(13.0)
         )

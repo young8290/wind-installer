@@ -1,64 +1,6 @@
 fn main() {
-    // Cargo.toml 变动时重新运行
-    println!("cargo:rerun-if-changed=Cargo.toml");
-
-    // 读取 [package.metadata.installer] 并作为编译期环境变量输出
-    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
-    let cargo_toml_path = format!("{}/Cargo.toml", manifest_dir);
-    let raw = std::fs::read_to_string(&cargo_toml_path)
-        .unwrap_or_default();
-    let doc: toml::Value = toml::from_str(&raw).unwrap_or(toml::Value::Table(Default::default()));
-
-    let meta = doc
-        .get("package")
-        .and_then(|p| p.get("metadata"))
-        .and_then(|m| m.get("installer"));
-
-    let get = |key: &str, default: &str| -> String {
-        meta.and_then(|m| m.get(key))
-            .and_then(|v| v.as_str())
-            .unwrap_or(default)
-            .to_string()
-    };
-
-    println!("cargo:rustc-env=WIND_DISPLAY_NAME={}", get("display_name", "清风输入法"));
-    println!("cargo:rustc-env=WIND_PUBLISHER={}", get("publisher", "清风输入法 项目"));
-    println!("cargo:rustc-env=WIND_START_MENU_FOLDER={}", get("start_menu_folder", "清风输入法"));
-    println!("cargo:rustc-env=WIND_WINDOW_TITLE={}", get("window_title", "清风输入法 安装向导"));
-    println!("cargo:rustc-env=WIND_APP_ID={}", get("app_id", "App"));
-    println!("cargo:rustc-env=WIND_MAIN_EXE={}", get("main_exe", "app.exe"));
-    println!("cargo:rustc-env=WIND_SETTING_EXE={}", get("setting_exe", ""));
-    println!("cargo:rustc-env=WIND_URL_PROTOCOL={}", get("url_protocol", ""));
-    println!("cargo:rustc-env=WIND_PROCESS_NAMES={}", get("process_names", ""));
-    println!("cargo:rustc-env=WIND_ACL_DLLS={}", get("acl_dlls", ""));
-    println!("cargo:rustc-env=WIND_BACKUP_DIR={}", get("backup_dir", ""));
-    println!("cargo:rustc-env=WIND_PORTABLE_MARKER={}", get("portable_marker", "portable_mode"));
-    println!("cargo:rustc-env=WIND_LEGACY_FILES={}", get("legacy_files", ""));
-    println!("cargo:rustc-env=WIND_LEGACY_DIRS={}", get("legacy_dirs", ""));
-    println!("cargo:rustc-env=WIND_AGREEMENT_URL={}", get("agreement_url", ""));
-
-    // 窗口尺寸：TOML 整数用 as_integer() 读取，写入生成文件供 include! 使用
-    let get_int = |key: &str, default: i64| -> i64 {
-        meta.and_then(|m| m.get(key))
-            .and_then(|v| v.as_integer())
-            .unwrap_or(default)
-    };
-    let out_dir = std::env::var("OUT_DIR").unwrap();
-    let iw = get_int("install_win_w",   520);
-    let ih = get_int("install_win_h",   490);
-    let uw = get_int("uninstall_win_w", 480);
-    let uh = get_int("uninstall_win_h", 440);
-    std::fs::write(
-        format!("{}/window_size.rs", out_dir),
-        format!(
-            "pub const INSTALL_WIN_W: i32 = {};\n\
-             pub const INSTALL_WIN_H: i32 = {};\n\
-             pub const UNINSTALL_WIN_W: i32 = {};\n\
-             pub const UNINSTALL_WIN_H: i32 = {};\n",
-            iw, ih, uw, uh
-        ),
-    ).unwrap();
-
-    // UAC Manifest + 图标
+    // 嵌入 UAC manifest + 默认图标到两个 GUI 二进制。
+    // 应用身份不再来自 Cargo.toml——已改为打包时由 app.toml 嵌入归档（见 src/manifest.rs）。
+    // 安装器 EXE 的最终图标由 wind-packer 用 editpe 按 app.toml 覆盖；此处仅提供默认占位图标。
     embed_resource::compile_for("assets/app.rc", ["wind-installer", "wind-uninstaller"], embed_resource::NONE);
 }

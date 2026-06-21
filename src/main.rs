@@ -44,20 +44,6 @@ enum Mode {
     Install,
     /// 卸载模式
     Uninstall,
-    /// 打包模式（独立工具）
-    Pack {
-        /// 源目录
-        #[arg(short, long)]
-        source: PathBuf,
-
-        /// 输出文件
-        #[arg(short, long)]
-        output: PathBuf,
-
-        /// 压缩算法 (zstd/lzma)
-        #[arg(short, long, default_value = "zstd")]
-        compression: String,
-    },
 }
 
 fn main() {
@@ -79,9 +65,6 @@ fn main() {
         }
         Some(Mode::Uninstall) => {
             run_uninstall(args);
-        }
-        Some(Mode::Pack { source, output, compression }) => {
-            run_pack(source, output, compression);
         }
     }
 }
@@ -169,39 +152,4 @@ fn run_uninstall(args: Args) {
     }
 
     util::single::release_lock();
-}
-
-/// 运行打包
-fn run_pack(source: PathBuf, output: PathBuf, compression: String) {
-    use archive::{ArchiveWriter, CompressionType};
-
-    let compression_type = match compression.to_lowercase().as_str() {
-        "lzma" => CompressionType::Lzma,
-        _ => CompressionType::Zstd,
-    };
-
-    let mut writer = match ArchiveWriter::new(&output, compression_type) {
-        Ok(w) => w,
-        Err(e) => {
-            eprintln!("Failed to create archive writer: {}", e);
-            std::process::exit(1);
-        }
-    };
-
-    if let Err(e) = writer.add_directory(&source, "") {
-        eprintln!("Failed to add directory: {}", e);
-        std::process::exit(1);
-    }
-
-    let entry_count = writer.entry_count();
-
-    match writer.finish() {
-        Ok(header_offset) => {
-            println!("Archive created: {} entries, header at {}", entry_count, header_offset);
-        }
-        Err(e) => {
-            eprintln!("Failed to finish archive: {}", e);
-            std::process::exit(1);
-        }
-    }
 }

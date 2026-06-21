@@ -10,6 +10,10 @@
 //! - [`ProjectConfig`]：`app.toml` 的完整映射 = 清单 + `[package]` 打包参数。
 //! - [`PackageConfig`]：仅打包期使用（压缩、源目录、logo/icon 路径等）。
 
+// ProjectConfig/PackageConfig 及多个序列化/默认值辅助仅 wind-packer 使用，
+// 在 installer/uninstaller 二进制中不构造，故模块级允许 dead_code。
+#![allow(dead_code)]
+
 use serde::{Deserialize, Serialize};
 
 /// 运行期清单：序列化为 TOML 文本存入归档头部，安装/卸载器启动时读取。
@@ -58,9 +62,6 @@ pub struct AppInfo {
     /// 用户协议链接，空则不显示。
     #[serde(default)]
     pub agreement_url: String,
-    /// 卸载备份到桌面时的目录名，空则回退到 "<id>_Backup"。
-    #[serde(default)]
-    pub backup_dir: String,
     /// 便携模式标记文件名。
     #[serde(default = "default_portable_marker")]
     pub portable_marker: String,
@@ -184,13 +185,6 @@ impl AppManifest {
     /// 开始菜单文件夹名，空则回退到 display_name。
     pub fn start_menu_folder(&self) -> &str {
         non_empty(&self.app.start_menu_folder).unwrap_or(&self.app.display_name)
-    }
-
-    /// 卸载备份目录名，空则回退到 "<id>_Backup"。
-    pub fn backup_dir(&self) -> String {
-        non_empty(&self.app.backup_dir)
-            .map(str::to_string)
-            .unwrap_or_else(|| format!("{}_Backup", self.app.id))
     }
 
     /// 设置程序文件名去掉 .exe 后缀（进程名）。
