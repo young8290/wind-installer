@@ -42,14 +42,14 @@ impl Default for InstallConfig {
             });
 
         Self {
-            app_name: meta::APP_DISPLAY_NAME.to_string(),
-            app_version: meta::APP_VERSION.to_string(),
-            install_dir: PathBuf::from(program_files).join(meta::APP_ID),
-            data_dir: PathBuf::from(app_data).join(meta::APP_ID),
+            app_name: meta::app_display_name().to_string(),
+            app_version: meta::app_version().to_string(),
+            install_dir: PathBuf::from(program_files).join(meta::app_id()),
+            data_dir: PathBuf::from(app_data).join(meta::app_id()),
             use_custom_data_dir: false,
             custom_data_dir: None,
-            start_menu_folder: meta::APP_START_MENU_FOLDER.to_string(),
-            publisher: meta::APP_PUBLISHER.to_string(),
+            start_menu_folder: meta::start_menu_folder().to_string(),
+            publisher: meta::app_publisher().to_string(),
         }
     }
 }

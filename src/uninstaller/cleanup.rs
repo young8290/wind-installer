@@ -21,7 +21,7 @@ impl Default for CleanupOptions {
             .unwrap_or_else(|_| r"C:\Program Files".to_string());
 
         Self {
-            install_dir: PathBuf::from(program_files).join(meta::APP_ID),
+            install_dir: PathBuf::from(program_files).join(meta::app_id()),
             clean_roaming: false,
             clean_local_cache: true,
             keep_user_data: false,
@@ -40,7 +40,7 @@ impl CleanupOptions {
                 p.to_string_lossy().to_string()
             });
         let datadir_conf = PathBuf::from(&local_app_data)
-            .join(meta::APP_ID)
+            .join(meta::app_id())
             .join("datadir.conf");
 
         if datadir_conf.exists() {
@@ -59,7 +59,7 @@ impl CleanupOptions {
                 p.push("AppData\\Roaming");
                 p.to_string_lossy().to_string()
             });
-        PathBuf::from(app_data).join(meta::APP_ID)
+        PathBuf::from(app_data).join(meta::app_id())
     }
 
     /// 获取本地缓存目录
@@ -70,7 +70,7 @@ impl CleanupOptions {
                 p.push("AppData\\Local");
                 p.to_string_lossy().to_string()
             });
-        PathBuf::from(local_app_data).join(meta::APP_ID).join("cache")
+        PathBuf::from(local_app_data).join(meta::app_id()).join("cache")
     }
 }
 

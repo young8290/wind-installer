@@ -64,6 +64,30 @@ fn header_roundtrip_unicode_path() {
 }
 
 #[test]
+fn header_roundtrip_preserves_manifest_and_logo() {
+    let mut h = ArchiveHeader::new(CompressionType::Lzma);
+    h.manifest = b"[app]\nid = \"MyApp\"\n".to_vec();
+    h.logo = vec![0x89, 0x50, 0x4E, 0x47, 0x00, 0xFF, 0x42]; // 伪 PNG 头 + 任意字节
+    h.entries.push(make_entry("a.txt", 0, 1, 2, 3));
+    h.entry_count = 1;
+
+    let parsed = ArchiveHeader::from_bytes(&h.to_bytes()).unwrap();
+
+    assert_eq!(parsed.manifest, h.manifest, "manifest 字节应 roundtrip");
+    assert_eq!(parsed.logo, h.logo, "logo 字节应 roundtrip");
+    assert_eq!(parsed.entries.len(), 1);
+    assert_eq!(parsed.entries[0].path, "a.txt");
+}
+
+#[test]
+fn header_roundtrip_empty_manifest_and_logo() {
+    let h = ArchiveHeader::new(CompressionType::Zstd);
+    let parsed = ArchiveHeader::from_bytes(&h.to_bytes()).unwrap();
+    assert!(parsed.manifest.is_empty());
+    assert!(parsed.logo.is_empty());
+}
+
+#[test]
 fn header_rejects_invalid_magic() {
     let mut bytes = ArchiveHeader::new(CompressionType::Zstd).to_bytes();
     bytes[0] = 0xFF;

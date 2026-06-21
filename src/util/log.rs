@@ -10,7 +10,7 @@ pub struct InstallLogger {
 
 impl InstallLogger {
     pub fn new() -> Self {
-        let path = std::env::temp_dir().join(format!("{}-install.log", crate::meta::APP_ID));
+        let path = std::env::temp_dir().join(format!("{}-install.log", crate::meta::app_id()));
         let file = OpenOptions::new()
             .create(true)
             .append(true)

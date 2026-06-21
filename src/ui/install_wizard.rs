@@ -18,9 +18,6 @@ const PAGE_CONFIG: usize = 0;
 const PAGE_PROGRESS: usize = 1;
 const PAGE_FINISH: usize = 2;
 
-const WIN_W: i32 = crate::meta::INSTALL_WIN_W;
-const WIN_H: i32 = crate::meta::INSTALL_WIN_H;
-
 enum ProgressMsg {
     Status(String),
     Total(usize),
@@ -29,6 +26,10 @@ enum ProgressMsg {
 }
 
 pub fn run_install_wizard() {
+    // ---- 运行期窗口尺寸 / 标题（来自清单）----
+    let (win_w, win_h) = meta::install_win();
+    let title = meta::window_title();
+
     // ---- 状态 ----
     let is_fresh_install = crate::installer::registry::detect_installed_version().is_none();
     let current_page = Rc::new(Cell::new(PAGE_CONFIG));
@@ -118,14 +119,14 @@ pub fn run_install_wizard() {
                         .corner(18.0),
                 )
                 .child(
-                    Element::label(meta::APP_DISPLAY_NAME)
+                    Element::label(meta::app_display_name())
                         .width_match()
                         .font_size(22.0)
                         .fg(Color::hex(theme::TEXT_PRIMARY))
                         .text_align(Align::Center),
                 )
                 .child(
-                    Element::label(meta::APP_VERSION)
+                    Element::label(meta::app_version())
                         .width_match()
                         .font_size(12.0)
                         .fg(Color::hex(theme::TEXT_MUTED))
@@ -246,13 +247,13 @@ pub fn run_install_wizard() {
                 .cross(Align::Center)
                 .spacing(4)
                 .child(Element::checkbox("我已阅读并同意", agreed.clone()))
-                .child(if meta::AGREEMENT_URL.is_empty() {
+                .child(if meta::agreement_url().is_empty() {
                     Element::label("《用户服务协议》")
                         .font_size(13.0)
                         .fg(Color::hex(theme::TEXT_SECONDARY))
                 } else {
                     Element::link("《用户服务协议》")
-                        .url(meta::AGREEMENT_URL)
+                        .url(meta::agreement_url())
                 })
         )
         // 校验错误提示（仅未勾协议时可见）
@@ -323,8 +324,7 @@ pub fn run_install_wizard() {
                             }
                         }
 
-                        #[cfg(feature = "ime")]
-                        if install_mode == InstallMode::Standard {
+                        if install_mode == InstallMode::Standard && crate::meta::manifest().ime.is_some() {
                             step!("正在反注册旧 COM...");
                             if let Err(e) = crate::installer::ime::unregister_old_com(&config.install_dir) {
                                 log.log(&format!("  警告: {}", e));
@@ -391,19 +391,25 @@ pub fn run_install_wizard() {
                         }
 
                         if install_mode == InstallMode::Standard {
+                            // 持久化清单到安装目录，供卸载器读取
+                            let mb = thread_archive.manifest_bytes();
+                            if !mb.is_empty() {
+                                let _ = std::fs::write(
+                                    config.install_dir.join(crate::meta::MANIFEST_FILE),
+                                    mb,
+                                );
+                            }
                             step!("正在设置文件权限...");
                             if let Err(e) = crate::installer::acl::set_dll_permissions(&config.install_dir) {
                                 log.log(&format!("  警告: {}", e));
                             }
-                            #[cfg(feature = "font")]
-                            {
+                            if !crate::meta::manifest().font.is_empty() {
                                 step!("正在安装字体...");
                                 if let Err(e) = crate::installer::font::install_font(&config.install_dir) {
                                     log.log(&format!("  警告: {}", e));
                                 }
                             }
-                            #[cfg(feature = "ime")]
-                            {
+                            if crate::meta::manifest().ime.is_some() {
                                 step!("正在注册 COM 组件...");
                                 if let Err(e) = crate::installer::ime::register_com(&config.install_dir) {
                                     log.log(&format!("  警告: {}", e));
@@ -417,7 +423,7 @@ pub fn run_install_wizard() {
                             if let Err(e) = crate::installer::registry::set_auto_start(&config.install_dir) {
                                 log.log(&format!("  警告: {}", e));
                             }
-                            if !crate::meta::URL_PROTOCOL.is_empty() {
+                            if !crate::meta::url_protocol().is_empty() {
                                 step!("正在注册协议...");
                                 if let Err(e) = crate::installer::registry::register_url_protocol(&config.install_dir) {
                                     log.log(&format!("  警告: {}", e));
@@ -443,7 +449,7 @@ pub fn run_install_wizard() {
                             }
                         } else {
                             let _ = std::fs::write(
-                                config.install_dir.join(crate::meta::PORTABLE_MARKER),
+                                config.install_dir.join(crate::meta::portable_marker()),
                                 "portable=1\n",
                             );
                         }
@@ -522,7 +528,7 @@ pub fn run_install_wizard() {
                         .fg(Color::hex(theme::TEXT_PRIMARY))
                 )
                 .child(
-                    Element::label(format!("{} 已准备就绪，可以开始使用", meta::APP_DISPLAY_NAME))
+                    Element::label(format!("{} 已准备就绪，可以开始使用", meta::app_display_name()))
                         .font_size(13.0)
                         .fg(Color::hex(theme::TEXT_SECONDARY))
                 )
@@ -624,7 +630,7 @@ pub fn run_install_wizard() {
         .window_drag()
         .child(Element::leaf().width(14))
         .child(
-            Element::label(meta::APP_WINDOW_TITLE)
+            Element::label(title.clone())
                 .font_size(12.0)
                 .fg(Color::hex(theme::TEXT_SECONDARY)),
         )
@@ -636,7 +642,7 @@ pub fn run_install_wizard() {
     //  组装根节点
     // ============================================================
     let root = Element::col()
-        .size(WIN_W, WIN_H)
+        .size(win_w, win_h)
         .bg(Color::hex(theme::BG_PRIMARY));
 
     #[cfg(feature = "frameless")]
@@ -648,7 +654,7 @@ pub fn run_install_wizard() {
         .child(page_finish)
         .child(poll_leaf);
 
-    let app = App::new(meta::APP_WINDOW_TITLE, WIN_W, WIN_H)
+    let app = App::new(title.as_str(), win_w, win_h)
         .centered()
         .resizable(false)
         .bg(Color::hex(theme::BG_PRIMARY))
@@ -666,7 +672,7 @@ fn default_install_dir() -> String {
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
     let key_path = format!(
         r"Software\Microsoft\Windows\CurrentVersion\Uninstall\{}",
-        crate::meta::APP_DISPLAY_NAME
+        crate::meta::app_display_name()
     );
     if let Ok(key) = hklm.open_subkey_with_flags(&key_path, KEY_READ) {
         if let Ok(dir) = key.get_value::<String, _>("InstallLocation") {
@@ -675,15 +681,15 @@ fn default_install_dir() -> String {
             }
         }
     }
-    format!(r"%ProgramFiles%\{}", crate::meta::APP_ID)
+    format!(r"%ProgramFiles%\{}", crate::meta::app_id())
 }
 
 fn default_portable_dir() -> String {
-    format!(r"%USERPROFILE%\{}", crate::meta::APP_ID)
+    format!(r"%USERPROFILE%\{}", crate::meta::app_id())
 }
 
 fn default_data_dir() -> String {
-    format!(r"%APPDATA%\{}", crate::meta::APP_ID)
+    format!(r"%APPDATA%\{}", crate::meta::app_id())
 }
 
 /// 展开路径中的 %VAR% 环境变量占位符。
@@ -730,8 +736,8 @@ fn browse_folder(_title: &str) -> Option<PathBuf> {
                     Ok(name) => {
                         let path = PathBuf::from(name.to_string().unwrap_or_default());
                         // 如果用户选择的目录名不是 APP_ID，自动追加子目录
-                        if path.file_name().map(|n| n != crate::meta::APP_ID).unwrap_or(true) {
-                            Some(path.join(crate::meta::APP_ID))
+                        if path.file_name().map(|n| n != crate::meta::app_id()).unwrap_or(true) {
+                            Some(path.join(crate::meta::app_id()))
                         } else {
                             Some(path)
                         }

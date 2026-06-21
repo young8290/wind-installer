@@ -5,11 +5,9 @@ pub mod legacy;
 pub mod registry;
 pub mod userdata;
 pub mod shortcut;
-#[cfg(feature = "font")]
 pub mod font;
 pub mod acl;
 pub mod process;
-#[cfg(feature = "ime")]
 pub mod ime;
 
 use config::InstallConfig;
@@ -50,9 +48,8 @@ pub fn perform_install(config: &InstallConfig, mode: InstallMode) -> InstallResu
         }
     }
 
-    // 2. 反注册旧 COM（标准模式）
-    #[cfg(feature = "ime")]
-    if mode == InstallMode::Standard {
+    // 2. 反注册旧 COM（标准模式，仅当清单含 ime 段）
+    if mode == InstallMode::Standard && meta::manifest().ime.is_some() {
         if let Err(e) = ime::unregister_old_com(&config.install_dir) {
             eprintln!("Warning: Failed to unregister old COM: {}", e);
         }
@@ -72,6 +69,16 @@ pub fn perform_install(config: &InstallConfig, mode: InstallMode) -> InstallResu
                     need_reboot,
                 };
             }
+            // 持久化清单到安装目录，供卸载器（无附加归档的裸 stub）启动时读取
+            if mode == InstallMode::Standard {
+                let manifest_bytes = archive.manifest_bytes();
+                if !manifest_bytes.is_empty() {
+                    let _ = std::fs::write(
+                        config.install_dir.join(meta::MANIFEST_FILE),
+                        manifest_bytes,
+                    );
+                }
+            }
         }
         Err(e) => {
             let _ = registry::clear_installer_running();
@@ -90,23 +97,24 @@ pub fn perform_install(config: &InstallConfig, mode: InstallMode) -> InstallResu
             eprintln!("Warning: Failed to set DLL permissions: {}", e);
         }
 
-        // 安装字体
-        #[cfg(feature = "font")]
-        if let Err(e) = font::install_font(&config.install_dir) {
-            eprintln!("Warning: Failed to install font: {}", e);
+        // 安装字体（仅当清单含 font 段）
+        if !meta::manifest().font.is_empty() {
+            if let Err(e) = font::install_font(&config.install_dir) {
+                eprintln!("Warning: Failed to install font: {}", e);
+            }
         }
 
-        // 注册 COM
-        #[cfg(feature = "ime")]
-        if let Err(e) = ime::register_com(&config.install_dir) {
-            eprintln!("Warning: Failed to register COM: {}", e);
-            need_reboot = true;
-        }
-
-        // 注册输入法
-        #[cfg(feature = "ime")]
-        if let Err(e) = ime::register_input_method() {
-            eprintln!("Warning: Failed to register input method: {}", e);
+        // 注册输入法（仅当清单含 ime 段）
+        if meta::manifest().ime.is_some() {
+            // 注册 COM
+            if let Err(e) = ime::register_com(&config.install_dir) {
+                eprintln!("Warning: Failed to register COM: {}", e);
+                need_reboot = true;
+            }
+            // 注册系统输入法
+            if let Err(e) = ime::register_input_method() {
+                eprintln!("Warning: Failed to register input method: {}", e);
+            }
         }
 
         // 配置自启动（输入法必须自启）
@@ -115,7 +123,7 @@ pub fn perform_install(config: &InstallConfig, mode: InstallMode) -> InstallResu
         }
 
         // 注册 URL 协议（留空则跳过）
-        if !meta::URL_PROTOCOL.is_empty() {
+        if !meta::url_protocol().is_empty() {
             if let Err(e) = registry::register_url_protocol(&config.install_dir) {
                 eprintln!("Warning: Failed to register URL protocol: {}", e);
             }
@@ -139,7 +147,7 @@ pub fn perform_install(config: &InstallConfig, mode: InstallMode) -> InstallResu
 
     // 6. 便携模式标记
     if mode == InstallMode::Portable {
-        if let Err(e) = std::fs::write(config.install_dir.join(meta::PORTABLE_MARKER), "portable=1\n") {
+        if let Err(e) = std::fs::write(config.install_dir.join(meta::portable_marker()), "portable=1\n") {
             eprintln!("Warning: Failed to create portable mode marker: {}", e);
         }
     }

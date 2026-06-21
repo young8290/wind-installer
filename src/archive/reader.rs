@@ -72,6 +72,11 @@ impl ArchiveReader {
     pub fn entries(&self) -> &[ArchiveEntry] { &self.header.entries }
     pub fn compression_type(&self) -> CompressionType { self.header.compression }
 
+    /// 运行期清单字节（AppManifest 的 TOML 文本），无解压开销。
+    pub fn manifest_bytes(&self) -> &[u8] { &self.header.manifest }
+    /// UI logo 图片字节，无解压开销。
+    pub fn logo_bytes(&self) -> &[u8] { &self.header.logo }
+
     /// 提前将压缩块整体解压到内存缓冲。
     /// 安装向导在进入逐文件循环前调用此方法，可在独立步骤中显示解压进度消息。
     pub fn prepare(&mut self) -> Result<(), String> {

@@ -14,13 +14,29 @@ pub struct ArchiveWriter {
     output: File,
     /// (archive_path, raw_data)
     pending: Vec<(String, Vec<u8>)>,
+    /// 运行期安装配置（AppManifest 的 TOML 文本字节）
+    manifest: Vec<u8>,
+    /// UI 显示的 logo 图片字节
+    logo: Vec<u8>,
 }
 
 impl ArchiveWriter {
     pub fn new(output_path: &Path, compression: CompressionType) -> Result<Self, String> {
         let output = File::create(output_path)
             .map_err(|e| format!("Failed to create output file: {}", e))?;
-        Ok(Self { compression, output, pending: Vec::new() })
+        Ok(Self {
+            compression,
+            output,
+            pending: Vec::new(),
+            manifest: Vec::new(),
+            logo: Vec::new(),
+        })
+    }
+
+    /// 设置运行期清单与 logo，写入归档头部。
+    pub fn set_manifest(&mut self, manifest: Vec<u8>, logo: Vec<u8>) {
+        self.manifest = manifest;
+        self.logo = logo;
     }
 
     /// 将文件加入待压缩队列（暂存到内存，不立即写盘）
@@ -89,6 +105,8 @@ impl ArchiveWriter {
         // 4. 构建并写入 Header
         let mut header = ArchiveHeader::new(self.compression);
         header.magic = *MAGIC_HEADER;
+        header.manifest = std::mem::take(&mut self.manifest);
+        header.logo = std::mem::take(&mut self.logo);
         header.entry_count = entries.len() as u32;
         header.solid_compressed_size = solid_compressed_size;
         header.entries = entries;

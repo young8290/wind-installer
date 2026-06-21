@@ -26,7 +26,7 @@ pub fn trigger_self_delete(install_dir: &Path) -> Result<(), String> {
 
     let temp_dir = std::env::temp_dir();
     let suffix = std::process::id().wrapping_mul(2654435761);
-    let temp_exe = temp_dir.join(format!("{}_uninst_{:08x}.exe", meta::APP_ID.to_lowercase(), suffix));
+    let temp_exe = temp_dir.join(format!("{}_uninst_{:08x}.exe", meta::app_id().to_lowercase(), suffix));
 
     std::fs::copy(&current_exe, &temp_exe)
         .map_err(|e| format!("复制到临时目录失败: {}", e))?;

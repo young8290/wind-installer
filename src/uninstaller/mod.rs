@@ -26,19 +26,21 @@ pub fn perform_uninstall(options: &CleanupOptions) -> UninstallResult {
         eprintln!("Warning: Failed to stop processes: {}", e);
     }
 
-    // 3. 反注册输入法
-    if let Err(e) = crate::installer::ime::unregister_input_method() {
-        eprintln!("Warning: Failed to unregister input method: {}", e);
+    // 3-4. 反注册输入法 + COM（仅当清单含 ime 段）
+    if crate::meta::manifest().ime.is_some() {
+        if let Err(e) = crate::installer::ime::unregister_input_method() {
+            eprintln!("Warning: Failed to unregister input method: {}", e);
+        }
+        if let Err(e) = crate::installer::ime::unregister_old_com(&options.install_dir) {
+            eprintln!("Warning: Failed to unregister COM: {}", e);
+        }
     }
 
-    // 4. 反注册 COM
-    if let Err(e) = crate::installer::ime::unregister_old_com(&options.install_dir) {
-        eprintln!("Warning: Failed to unregister COM: {}", e);
-    }
-
-    // 5. 卸载字体
-    if let Err(e) = crate::installer::font::uninstall_font() {
-        eprintln!("Warning: Failed to uninstall font: {}", e);
+    // 5. 卸载字体（仅当清单含 font 段）
+    if !crate::meta::manifest().font.is_empty() {
+        if let Err(e) = crate::installer::font::uninstall_font() {
+            eprintln!("Warning: Failed to uninstall font: {}", e);
+        }
     }
 
     // 6. 删除安装文件

@@ -22,7 +22,7 @@ pub fn terminate_windinput_processes() -> Result<(), String> {
     for round in 0..3 {
         let alive: Vec<&str> = exe_names
             .iter()
-            .copied()
+            .map(|s| s.as_str())
             .filter(|n| !find_pids(&format!("{}.exe", n)).is_empty())
             .collect();
 
@@ -46,7 +46,7 @@ pub fn terminate_windinput_processes() -> Result<(), String> {
     }
 
     // 仍存活：警告后继续，BackupIfLocked 兜底文件锁问题
-    for name in &exe_names {
+    for name in exe_names {
         if !find_pids(&format!("{}.exe", name)).is_empty() {
             eprintln!("Warning: {}.exe could not be terminated, relying on BackupIfLocked", name);
         }
@@ -128,9 +128,9 @@ fn find_pids(exe_lower: &str) -> Vec<u32> {
 pub fn prestart_service(install_dir: &Path) -> Result<(), String> {
     const DETACHED_PROCESS: u32 = 0x0000_0008;
 
-    let exe_path = install_dir.join(meta::MAIN_EXE);
+    let exe_path = install_dir.join(meta::main_exe());
     if !exe_path.exists() {
-        return Err(format!("{} not found", meta::MAIN_EXE));
+        return Err(format!("{} not found", meta::main_exe()));
     }
 
     Command::new(&exe_path)

@@ -21,18 +21,16 @@ const PAGE_CONFIRM: usize = 0;
 const PAGE_PROGRESS: usize = 1;
 const PAGE_FINISH: usize = 2;
 
-const WIN_W: i32 = crate::meta::UNINSTALL_WIN_W;
-#[cfg(feature = "frameless")]
-const WIN_H: i32 = crate::meta::UNINSTALL_WIN_H;
-#[cfg(not(feature = "frameless"))]
-const WIN_H: i32 = crate::meta::UNINSTALL_WIN_H - 40;
-
 enum UninstallMsg {
     Status(String),
     Finished(bool, String),
 }
 
 pub fn run_uninstall_wizard() {
+    // ---- 运行期窗口尺寸（来自清单；非无边框模式高度 -40 补偿系统标题栏）----
+    let (win_w, base_h) = meta::uninstall_win();
+    let win_h = if cfg!(feature = "frameless") { base_h } else { base_h - 40 };
+
     // ---- 状态 ----
     let current_page = Rc::new(Cell::new(PAGE_CONFIRM));
     let clean_roaming = Rc::new(Cell::new(false));
@@ -89,14 +87,14 @@ pub fn run_uninstall_wizard() {
                 .corner(13.0)
         )
         .child(
-            Element::label(meta::APP_DISPLAY_NAME)
+            Element::label(meta::app_display_name())
                 .width_match()
                 .font_size(17.0)
                 .fg(Color::hex(theme::TEXT_PRIMARY))
                 .text_align(Align::Center),
         )
         .child(
-            Element::label(meta::APP_VERSION)
+            Element::label(meta::app_version())
                 .width_match()
                 .font_size(11.0)
                 .fg(Color::hex(theme::TEXT_MUTED))
@@ -113,17 +111,17 @@ pub fn run_uninstall_wizard() {
         .spacing(12)
         .visible_when(move || page_vis0.get() == PAGE_CONFIRM)
         .child(
-            Element::label(format!("即将从您的电脑中卸载 {}，请确认：", meta::APP_DISPLAY_NAME))
+            Element::label(format!("即将从您的电脑中卸载 {}，请确认：", meta::app_display_name()))
                 .font_size(13.0)
                 .fg(Color::hex(theme::TEXT_SECONDARY))
                 .width_match(),
         )
         .child(Element::checkbox(
-            &format!("删除用户词库和配置数据（%APPDATA%\\{}）", meta::APP_ID),
+            &format!("删除用户词库和配置数据（%APPDATA%\\{}）", meta::app_id()),
             clean_roaming.clone(),
         ))
         .child(Element::checkbox(
-            &format!("清除本地词库缓存（%LOCALAPPDATA%\\{}\\cache）", meta::APP_ID),
+            &format!("清除本地词库缓存（%LOCALAPPDATA%\\{}\\cache）", meta::app_id()),
             clean_cache.clone(),
         ))
         .child(Element::leaf().weight(1.0))
@@ -175,8 +173,7 @@ pub fn run_uninstall_wizard() {
                                 step!("正在停止相关进程...");
                                 let _ = crate::installer::process::terminate_windinput_processes();
 
-                                #[cfg(feature = "ime")]
-                                {
+                                if crate::meta::manifest().ime.is_some() {
                                     step!("正在反注册输入法...");
                                     let _ = crate::installer::ime::unregister_input_method();
 
@@ -184,8 +181,7 @@ pub fn run_uninstall_wizard() {
                                     let _ = crate::installer::ime::unregister_old_com(&options.install_dir);
                                 }
 
-                                #[cfg(feature = "font")]
-                                {
+                                if !crate::meta::manifest().font.is_empty() {
                                     step!("正在卸载字体...");
                                     let _ = crate::installer::font::uninstall_font();
                                 }
@@ -276,7 +272,7 @@ pub fn run_uninstall_wizard() {
                         .fg(Color::hex(theme::TEXT_PRIMARY)),
                 )
                 .child(
-                    Element::label(format!("{} 已从您的电脑中移除", meta::APP_DISPLAY_NAME))
+                    Element::label(format!("{} 已从您的电脑中移除", meta::app_display_name()))
                         .font_size(13.0)
                         .fg(Color::hex(theme::TEXT_SECONDARY)),
                 ),
@@ -363,7 +359,7 @@ pub fn run_uninstall_wizard() {
     // ============================================================
     #[cfg(feature = "frameless")]
     let title_bar = {
-        let title_text = format!("{} 卸载程序", meta::APP_DISPLAY_NAME);
+        let title_text = format!("{} 卸载程序", meta::app_display_name());
         Element::row()
             .width_match()
             .height(36)
@@ -385,7 +381,7 @@ pub fn run_uninstall_wizard() {
     //  根节点
     // ============================================================
     let root = Element::col()
-        .size(WIN_W, WIN_H)
+        .size(win_w, win_h)
         .bg(Color::hex(theme::BG_PRIMARY));
 
     #[cfg(feature = "frameless")]
@@ -399,9 +395,9 @@ pub fn run_uninstall_wizard() {
         .child(poll_leaf);
 
     let app = App::new(
-        format!("{} 卸载程序", meta::APP_DISPLAY_NAME),
-        WIN_W,
-        WIN_H,
+        format!("{} 卸载程序", meta::app_display_name()),
+        win_w,
+        win_h,
     )
     .centered()
     .resizable(false)
@@ -418,7 +414,7 @@ pub fn run_uninstall_wizard() {
 fn confirm_delete_user_data() -> bool {
     let msg: Vec<u16> = format!(
         "此操作将永久删除 %APPDATA%\\{} 下的所有词库和配置数据，无法恢复。\n\n确定要继续吗？\0",
-        crate::meta::APP_ID
+        crate::meta::app_id()
     )
     .encode_utf16()
     .collect();
@@ -441,7 +437,7 @@ fn detect_install_dir() -> PathBuf {
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
     let key_path = format!(
         r"Software\Microsoft\Windows\CurrentVersion\Uninstall\{}",
-        meta::APP_DISPLAY_NAME
+        meta::app_display_name()
     );
     if let Ok(key) = hklm.open_subkey_with_flags(&key_path, KEY_READ) {
         if let Ok(dir) = key.get_value::<String, _>("InstallLocation") {
@@ -451,5 +447,5 @@ fn detect_install_dir() -> PathBuf {
         }
     }
     let pf = std::env::var("ProgramFiles").unwrap_or_else(|_| r"C:\Program Files".to_string());
-    PathBuf::from(pf).join(meta::APP_ID)
+    PathBuf::from(pf).join(meta::app_id())
 }

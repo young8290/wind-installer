@@ -9,7 +9,7 @@ pub fn write_datadir_conf(data_dir: &Path) -> Result<(), String> {
         let up = std::env::var("USERPROFILE").unwrap_or_default();
         format!(r"{}\AppData\Local", up)
     });
-    let conf_dir = std::path::PathBuf::from(local_app_data).join(meta::APP_ID);
+    let conf_dir = std::path::PathBuf::from(local_app_data).join(meta::app_id());
     std::fs::create_dir_all(&conf_dir)
         .map_err(|e| format!("Failed to create conf dir: {}", e))?;
     std::fs::write(conf_dir.join("datadir.conf"), data_dir.to_string_lossy().as_bytes())

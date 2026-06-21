@@ -6,6 +6,7 @@ use clap::Parser;
 
 mod archive;
 mod installer;
+mod manifest;
 mod meta;
 mod uninstaller;
 mod ui;
@@ -87,6 +88,12 @@ fn main() {
 
 /// 运行安装
 fn run_install(args: Args) {
+    // 载入清单（来自自身追加的归档）
+    if let Err(e) = meta::bootstrap() {
+        eprintln!("无法载入安装清单: {}", e);
+        std::process::exit(1);
+    }
+
     // 检查单实例
     if util::single::is_another_instance_running() {
         std::process::exit(0);
@@ -141,6 +148,12 @@ fn run_uninstall(args: Args) {
             uninstaller::selfdelete::execute_self_delete(&dir);
         }
         return;
+    }
+
+    // 载入清单（来自安装目录的 .manifest）
+    if let Err(e) = meta::bootstrap() {
+        eprintln!("无法载入卸载清单: {}", e);
+        std::process::exit(1);
     }
 
     if args.silent {
