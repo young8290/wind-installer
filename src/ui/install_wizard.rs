@@ -714,7 +714,6 @@ fn expand_env_path(s: &str) -> std::path::PathBuf {
 }
 
 fn browse_folder(_title: &str) -> Option<PathBuf> {
-    use windows::Win32::Foundation::HWND;
     use windows::Win32::System::Com::{
         CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED,
     };
@@ -730,7 +729,7 @@ fn browse_folder(_title: &str) -> Option<PathBuf> {
                 Err(_) => return None,
             };
         let _ = dialog.SetOptions(FOS_PICKFOLDERS);
-        if dialog.Show(HWND(owner.0)).is_err() {
+        if dialog.Show(Some(owner)).is_err() {
             return None;
         }
         match dialog.GetResult() {

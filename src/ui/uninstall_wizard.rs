@@ -421,7 +421,7 @@ fn confirm_delete_user_data() -> bool {
     let title: Vec<u16> = "确认删除用户数据\0".encode_utf16().collect();
     unsafe {
         MessageBoxW(
-            GetForegroundWindow(),
+            Some(GetForegroundWindow()),
             PCWSTR(msg.as_ptr()),
             PCWSTR(title.as_ptr()),
             MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2,
