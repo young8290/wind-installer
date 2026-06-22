@@ -4,10 +4,6 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::sync::mpsc;
 
-use windows::Win32::UI::WindowsAndMessaging::{
-    GetForegroundWindow, MessageBoxW, IDYES, MB_DEFBUTTON2, MB_ICONWARNING, MB_YESNO,
-};
-use windows::core::PCWSTR;
 use windui::app::App;
 use windui::core::EventCtx;
 use windui::geometry::Color;
@@ -40,6 +36,8 @@ pub fn run_uninstall_wizard() {
     let finish_error = Rc::new(RefCell::new(String::new()));
     let status_text = Rc::new(RefCell::new(String::from("正在准备卸载...")));
     let install_dir = Rc::new(RefCell::new(detect_install_dir()));
+    // 删除用户数据的二次确认对话框显示标志（windui 应用内模态）
+    let show_delete_confirm = Rc::new(Cell::new(false));
 
     let rx: Arc<Mutex<Option<mpsc::Receiver<UninstallMsg>>>> = Arc::new(Mutex::new(None));
 
@@ -101,6 +99,26 @@ pub fn run_uninstall_wizard() {
                 .text_align(Align::Center),
         );
 
+    // 删除用户数据：危险勾选行（真 CheckBox，与其它复选框像素级对齐）。
+    // 借助 windui 的受控 on_toggle：设回调后点击不自动翻转，由 app 决定——未勾时弹
+    // 应用内确认对话框（确认后才置真，零闪烁）、已勾时直接取消；danger() 让勾选框标红。
+    let delete_data_row = {
+        let cr_toggle = clean_roaming.clone();
+        let show_open = show_delete_confirm.clone();
+        Element::checkbox(
+            format!("删除用户词库和配置数据（%APPDATA%\\{}）", meta::app_id()),
+            clean_roaming.clone(),
+        )
+        .danger()
+        .on_toggle(move |_ctx: &mut EventCtx| {
+            if cr_toggle.get() {
+                cr_toggle.set(false); // 已勾 → 直接取消
+            } else {
+                show_open.set(true); // 未勾 → 弹确认，确认后才勾
+            }
+        })
+    };
+
     // ============================================================
     //  PAGE 0：确认页
     // ============================================================
@@ -116,10 +134,7 @@ pub fn run_uninstall_wizard() {
                 .fg(Color::hex(theme::TEXT_SECONDARY))
                 .width_match(),
         )
-        .child(Element::checkbox(
-            &format!("删除用户词库和配置数据（%APPDATA%\\{}）", meta::app_id()),
-            clean_roaming.clone(),
-        ))
+        .child(delete_data_row)
         .child(Element::checkbox(
             &format!("清除本地词库缓存（%LOCALAPPDATA%\\{}\\cache）", meta::app_id()),
             clean_cache.clone(),
@@ -141,12 +156,7 @@ pub fn run_uninstall_wizard() {
                         .enabled(conf_enabled)
                         .on_click(move |_ctx: &mut EventCtx| {
                             let _ = conf_btn.get(); // enabled() 已做拦截
-
-                            // 勾选删除用户数据时，Win32 弹框二次确认
-                            if cr_btn.get() && !confirm_delete_user_data() {
-                                return;
-                            }
-
+                            // 删除用户数据已在勾选时经 windui 对话框确认，此处直接进入卸载
                             page_btn.set(PAGE_PROGRESS);
 
                             let options = crate::uninstaller::cleanup::CleanupOptions {
@@ -380,19 +390,83 @@ pub fn run_uninstall_wizard() {
     // ============================================================
     //  根节点
     // ============================================================
-    let root = Element::col()
+    // 删除用户数据二次确认对话框（windui 应用内模态；确认后才真正勾选）
+    let delete_dialog = {
+        let show_cancel = show_delete_confirm.clone();
+        let cr_confirm = clean_roaming.clone();
+        let show_done = show_delete_confirm.clone();
+        Element::dialog(
+            show_delete_confirm.clone(),
+            Element::col()
+                .width(360)
+                .bg(Color::hex(theme::BG_PRIMARY))
+                .corner(14.0)
+                .padding(22)
+                .spacing(14)
+                .child(
+                    Element::label("删除用户数据")
+                        .font_size(17.0)
+                        .fg(Color::hex(theme::TEXT_PRIMARY))
+                        .width_match(),
+                )
+                .child(
+                    Element::label(format!(
+                        "将永久删除 %APPDATA%\\{} 下的所有词库和配置数据，卸载后无法恢复。\n\n确定要勾选删除吗？",
+                        meta::app_id()
+                    ))
+                    .font_size(13.0)
+                    .fg(Color::hex(theme::TEXT_SECONDARY))
+                    .width_match(),
+                )
+                .child(
+                    Element::row()
+                        .width_match()
+                        .spacing(10)
+                        .child(Element::leaf().weight(1.0))
+                        .child(
+                            Element::button("取消")
+                                .width(80)
+                                .height(38)
+                                .corner(8.0)
+                                .on_click(move |_ctx: &mut EventCtx| {
+                                    show_cancel.set(false);
+                                }),
+                        )
+                        .child(
+                            Element::button("确定删除")
+                                .width(100)
+                                .height(38)
+                                .corner(8.0)
+                                .bg(Color::hex(theme::ERROR))
+                                .fg(Color::hex(0xFFFFFF))
+                                .on_click(move |_ctx: &mut EventCtx| {
+                                    cr_confirm.set(true); // 确认后才真正勾选
+                                    show_done.set(false);
+                                }),
+                        ),
+                ),
+        )
+    };
+
+    let content = Element::col()
         .size(win_w, win_h)
         .bg(Color::hex(theme::BG_PRIMARY));
 
     #[cfg(feature = "frameless")]
-    let root = root.child(title_bar);
+    let content = content.child(title_bar);
 
-    let root = root
+    let content = content
         .child(brand)
         .child(page_confirm)
         .child(page_progress)
         .child(page_finish)
         .child(poll_leaf);
+
+    // 用 stack 叠加模态对话框（显示时覆盖全窗）
+    let root = Element::stack()
+        .size(win_w, win_h)
+        .child(content)
+        .child(delete_dialog);
 
     let app = App::new(
         format!("{} 卸载程序", meta::app_display_name()),
@@ -408,25 +482,6 @@ pub fn run_uninstall_wizard() {
     let app = app.frameless();
 
     app.run();
-}
-
-/// 删除用户数据的 Win32 二次确认对话框；返回 true 表示用户选择继续。
-fn confirm_delete_user_data() -> bool {
-    let msg: Vec<u16> = format!(
-        "此操作将永久删除 %APPDATA%\\{} 下的所有词库和配置数据，无法恢复。\n\n确定要继续吗？\0",
-        crate::meta::app_id()
-    )
-    .encode_utf16()
-    .collect();
-    let title: Vec<u16> = "确认删除用户数据\0".encode_utf16().collect();
-    unsafe {
-        MessageBoxW(
-            Some(GetForegroundWindow()),
-            PCWSTR(msg.as_ptr()),
-            PCWSTR(title.as_ptr()),
-            MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2,
-        ) == IDYES
-    }
 }
 
 /// 从注册表读取安装目录；找不到时回退到默认路径

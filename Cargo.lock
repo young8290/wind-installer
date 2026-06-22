@@ -1335,7 +1335,7 @@ checksum = "ed94fce61571a4006852b7389a063ab983c02eb1bb37b47f8272ce92d06d9538"
 [[package]]
 name = "windui"
 version = "0.1.0"
-source = "git+https://github.com/huanfeng/wind-ui-rust#8935f1152c6fa245e578fcbc2f2d017b543db24b"
+source = "git+https://github.com/huanfeng/wind-ui-rust#d78f0a1939b94cae5b198ceaf493bc2bbff1ebc7"
 dependencies = [
  "objc2",
  "objc2-app-kit",
