@@ -7,12 +7,10 @@ use crate::meta;
 pub struct CleanupOptions {
     /// 安装目录
     pub install_dir: PathBuf,
-    /// 是否清除用户配置数据（%APPDATA%\WindInput）
+    /// 是否清除用户配置数据（%APPDATA%\AppID）
     pub clean_roaming: bool,
-    /// 是否清除本地缓存（%LOCALAPPDATA%\WindInput\cache）
+    /// 是否清除本地缓存（%LOCALAPPDATA%\AppID\cache）
     pub clean_local_cache: bool,
-    /// 是否备份配置到桌面
-    pub backup_to_desktop: bool,
     /// 静默模式下的保留用户数据标志
     pub keep_user_data: bool,
 }
@@ -26,7 +24,6 @@ impl Default for CleanupOptions {
             install_dir: PathBuf::from(program_files).join(meta::APP_ID),
             clean_roaming: false,
             clean_local_cache: true,
-            backup_to_desktop: true,
             keep_user_data: false,
         }
     }
@@ -157,17 +154,6 @@ pub fn cleanup_user_data(options: &CleanupOptions) -> Result<(), String> {
     let user_data_dir = options.user_data_dir();
     let local_cache_dir = options.local_cache_dir();
 
-    // 备份配置到桌面（如果需要）
-    if options.clean_roaming && options.backup_to_desktop {
-        if user_data_dir.exists() {
-            let desktop = get_desktop_path();
-            let backup_dir = desktop.join(meta::BACKUP_DIR);
-            if let Err(e) = copy_dir_all(&user_data_dir, &backup_dir) {
-                eprintln!("Warning: Failed to backup user data: {}", e);
-            }
-        }
-    }
-
     // 清除用户配置
     if options.clean_roaming && user_data_dir.exists() {
         if let Err(e) = std::fs::remove_dir_all(&user_data_dir) {
@@ -192,24 +178,3 @@ pub fn cleanup_user_data(options: &CleanupOptions) -> Result<(), String> {
     Ok(())
 }
 
-/// 获取桌面路径
-fn get_desktop_path() -> PathBuf {
-    let user_profile = std::env::var("USERPROFILE").unwrap_or_default();
-    PathBuf::from(user_profile).join("Desktop")
-}
-
-/// 递归复制目录
-fn copy_dir_all(src: &PathBuf, dst: &PathBuf) -> Result<(), std::io::Error> {
-    std::fs::create_dir_all(dst)?;
-    for entry in std::fs::read_dir(src)? {
-        let entry = entry?;
-        let ty = entry.file_type()?;
-        let dest = dst.join(entry.file_name());
-        if ty.is_dir() {
-            copy_dir_all(&entry.path(), &dest)?;
-        } else {
-            std::fs::copy(entry.path(), dest)?;
-        }
-    }
-    Ok(())
-}

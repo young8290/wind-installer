@@ -25,12 +25,20 @@ portable_marker = "portable_mode"       # 便携模式标记文件名
 # ── 升级兼容清理（旧版遗留、新版已移除的文件/目录）─────────────
 legacy_files    = "wind_dwrite.dll"     # 逗号分隔，相对于 install_dir，留空则跳过
 legacy_dirs     = ""                    # 逗号分隔，相对于 install_dir，留空则跳过
+# ── 用户协议 ──────────────────────────────────────────────────────
+agreement_url   = ""                    # 安装向导协议链接，留空则不显示可点击链接
+# ── 窗口尺寸 ──────────────────────────────────────────────────────
+install_win_w   = 520                   # 安装向导宽度（px）
+install_win_h   = 420                   # 安装向导高度（px）
+uninstall_win_w = 480                   # 卸载向导宽度（px）
+uninstall_win_h = 420                   # 卸载向导高度（px）
 
 [features]
 # 默认启用 WindInput 专有功能；其他应用在自己的 Cargo.toml 中设 default = [] 即可禁用
-default = ["ime", "font"]
-ime  = []   # TSF 输入法注册（风输入法专用，依赖 wind_tsf.dll GUID/CLSID）
-font = []   # 字体安装（风输入法附带字体，其他应用通常不需要）
+default = ["ime", "font", "frameless"]
+ime       = []   # TSF 输入法注册（风输入法专用，依赖 wind_tsf.dll GUID/CLSID）
+font      = []   # 字体安装（风输入法附带字体，其他应用通常不需要）
+frameless = []   # 无边框自定义标题栏（启用后使用主题色标题栏代替系统标题栏）
 
 [lib]
 name = "wind_installer"

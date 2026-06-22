@@ -4,11 +4,15 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::sync::mpsc;
 
+use windows::Win32::UI::WindowsAndMessaging::{
+    GetForegroundWindow, MessageBoxW, IDYES, MB_DEFBUTTON2, MB_ICONWARNING, MB_YESNO,
+};
+use windows::core::PCWSTR;
 use windui::app::App;
 use windui::core::EventCtx;
 use windui::geometry::Color;
 use windui::spec::Align;
-use windui::ui::Element;
+use windui::ui::{Element, WindowButtonKind};
 
 use crate::meta;
 use super::theme;
@@ -17,8 +21,11 @@ const PAGE_CONFIRM: usize = 0;
 const PAGE_PROGRESS: usize = 1;
 const PAGE_FINISH: usize = 2;
 
-const WIN_W: i32 = 480;
-const WIN_H: i32 = 400;
+const WIN_W: i32 = crate::meta::UNINSTALL_WIN_W;
+#[cfg(feature = "frameless")]
+const WIN_H: i32 = crate::meta::UNINSTALL_WIN_H;
+#[cfg(not(feature = "frameless"))]
+const WIN_H: i32 = crate::meta::UNINSTALL_WIN_H - 40;
 
 enum UninstallMsg {
     Status(String),
@@ -30,7 +37,6 @@ pub fn run_uninstall_wizard() {
     let current_page = Rc::new(Cell::new(PAGE_CONFIRM));
     let clean_roaming = Rc::new(Cell::new(false));
     let clean_cache = Rc::new(Cell::new(true));
-    let backup_desktop = Rc::new(Cell::new(false));
     let confirmed = Rc::new(Cell::new(false));
     let finish_success = Rc::new(Cell::new(false));
     let finish_error = Rc::new(RefCell::new(String::new()));
@@ -64,7 +70,6 @@ pub fn run_uninstall_wizard() {
     let page_btn = current_page.clone();
     let cr_btn = clean_roaming.clone();
     let cc_btn = clean_cache.clone();
-    let bd_btn = backup_desktop.clone();
     let idir_btn = install_dir.clone();
 
     // ---- 完成按钮克隆 ----
@@ -118,10 +123,6 @@ pub fn run_uninstall_wizard() {
             clean_roaming.clone(),
         ))
         .child(Element::checkbox(
-            "卸载前备份配置到桌面（推荐）",
-            backup_desktop.clone(),
-        ))
-        .child(Element::checkbox(
             &format!("清除本地词库缓存（%LOCALAPPDATA%\\{}\\cache）", meta::APP_ID),
             clean_cache.clone(),
         ))
@@ -136,19 +137,24 @@ pub fn run_uninstall_wizard() {
                     Element::button("开始卸载")
                         .width(120)
                         .height(42)
-                        .corner(21.0)
+                        .corner(8.0)
                         .bg(Color::hex(theme::ERROR))
                         .fg(Color::hex(0xFFFFFF))
                         .enabled(conf_enabled)
                         .on_click(move |_ctx: &mut EventCtx| {
                             let _ = conf_btn.get(); // enabled() 已做拦截
+
+                            // 勾选删除用户数据时，Win32 弹框二次确认
+                            if cr_btn.get() && !confirm_delete_user_data() {
+                                return;
+                            }
+
                             page_btn.set(PAGE_PROGRESS);
 
                             let options = crate::uninstaller::cleanup::CleanupOptions {
                                 install_dir: idir_btn.borrow().clone(),
                                 clean_roaming: cr_btn.get(),
                                 clean_local_cache: cc_btn.get(),
-                                backup_to_desktop: bd_btn.get(),
                                 keep_user_data: false,
                             };
 
@@ -303,9 +309,9 @@ pub fn run_uninstall_wizard() {
         .child(Element::leaf().weight(1.0))
         .child(
             Element::button("完 成")
-                .width(180)
-                .height(42)
-                .corner(21.0)
+                .width(200)
+                .height(48)
+                .corner(8.0)
                 .bg(Color::hex(theme::ACCENT))
                 .fg(Color::hex(0xFFFFFF))
                 .align(Align::Center)
@@ -353,19 +359,46 @@ pub fn run_uninstall_wizard() {
         });
 
     // ============================================================
+    //  无边框自定义标题栏
+    // ============================================================
+    #[cfg(feature = "frameless")]
+    let title_bar = {
+        let title_text = format!("{} 卸载程序", meta::APP_DISPLAY_NAME);
+        Element::row()
+            .width_match()
+            .height(36)
+            .cross(Align::Center)
+            .bg(Color::hex(theme::BG_PRIMARY))
+            .window_drag()
+            .child(Element::leaf().width(14))
+            .child(
+                Element::label(title_text)
+                    .font_size(12.0)
+                    .fg(Color::hex(theme::TEXT_MUTED)),
+            )
+            .child(Element::leaf().weight(1.0))
+            .child(Element::window_button(WindowButtonKind::Minimize).fg(Color::hex(theme::TEXT_SECONDARY)))
+            .child(Element::window_button(WindowButtonKind::Close).fg(Color::hex(theme::TEXT_SECONDARY)))
+    };
+
+    // ============================================================
     //  根节点
     // ============================================================
     let root = Element::col()
         .size(WIN_W, WIN_H)
-        .bg(Color::hex(theme::BG_PRIMARY))
+        .bg(Color::hex(theme::BG_PRIMARY));
+
+    #[cfg(feature = "frameless")]
+    let root = root.child(title_bar);
+
+    let root = root
         .child(brand)
-        .child(Element::divider())
         .child(page_confirm)
         .child(page_progress)
         .child(page_finish)
         .child(poll_leaf);
 
-    App::new(
+    let app = App::new(
         format!("{} 卸载程序", meta::APP_DISPLAY_NAME),
         WIN_W,
         WIN_H,
@@ -373,8 +406,31 @@ pub fn run_uninstall_wizard() {
     .centered()
     .resizable(false)
     .bg(Color::hex(theme::BG_PRIMARY))
-    .content(root)
-    .run();
+    .content(root);
+
+    #[cfg(feature = "frameless")]
+    let app = app.frameless();
+
+    app.run();
+}
+
+/// 删除用户数据的 Win32 二次确认对话框；返回 true 表示用户选择继续。
+fn confirm_delete_user_data() -> bool {
+    let msg: Vec<u16> = format!(
+        "此操作将永久删除 %APPDATA%\\{} 下的所有词库和配置数据，无法恢复。\n\n确定要继续吗？\0",
+        crate::meta::APP_ID
+    )
+    .encode_utf16()
+    .collect();
+    let title: Vec<u16> = "确认删除用户数据\0".encode_utf16().collect();
+    unsafe {
+        MessageBoxW(
+            GetForegroundWindow(),
+            PCWSTR(msg.as_ptr()),
+            PCWSTR(title.as_ptr()),
+            MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2,
+        ) == IDYES
+    }
 }
 
 /// 从注册表读取安装目录；找不到时回退到默认路径

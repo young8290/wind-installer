@@ -11,10 +11,14 @@ pub const SETTING_EXE: &str = env!("WIND_SETTING_EXE");
 pub const URL_PROTOCOL: &str = env!("WIND_URL_PROTOCOL");
 pub const PROCESS_NAMES_CSV: &str = env!("WIND_PROCESS_NAMES");
 pub const ACL_DLLS_CSV: &str = env!("WIND_ACL_DLLS");
+#[allow(dead_code)]
 pub const BACKUP_DIR: &str = env!("WIND_BACKUP_DIR");
 pub const PORTABLE_MARKER: &str = env!("WIND_PORTABLE_MARKER");
 pub const LEGACY_FILES_CSV: &str = env!("WIND_LEGACY_FILES");
 pub const LEGACY_DIRS_CSV: &str = env!("WIND_LEGACY_DIRS");
+pub const AGREEMENT_URL: &str = env!("WIND_AGREEMENT_URL");
+
+include!(concat!(env!("OUT_DIR"), "/window_size.rs"));
 
 pub fn legacy_files() -> Vec<&'static str> {
     split_csv(LEGACY_FILES_CSV)

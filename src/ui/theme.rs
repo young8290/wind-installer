@@ -1,9 +1,9 @@
 #![allow(dead_code)]
 
-/// 清风输入法安装器主题 — 蓝色系
-pub const ACCENT: u32 = 0x2B6CB0;
-pub const ACCENT_HOVER: u32 = 0x245A96;
-pub const ACCENT_PRESSED: u32 = 0x1E4D80;
+/// 清风输入法安装器主题 — 蓝色系（与 windui 默认 palette.accent 保持一致）
+pub const ACCENT: u32 = 0x4C8BF5;
+pub const ACCENT_HOVER: u32 = 0x6BA3FF;
+pub const ACCENT_PRESSED: u32 = 0x3A6FD0;
 
 /// 背景
 pub const BG_PRIMARY: u32 = 0xFFFFFF;

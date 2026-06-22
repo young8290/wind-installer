@@ -35,6 +35,29 @@ fn main() {
     println!("cargo:rustc-env=WIND_PORTABLE_MARKER={}", get("portable_marker", "portable_mode"));
     println!("cargo:rustc-env=WIND_LEGACY_FILES={}", get("legacy_files", ""));
     println!("cargo:rustc-env=WIND_LEGACY_DIRS={}", get("legacy_dirs", ""));
+    println!("cargo:rustc-env=WIND_AGREEMENT_URL={}", get("agreement_url", ""));
+
+    // 窗口尺寸：TOML 整数用 as_integer() 读取，写入生成文件供 include! 使用
+    let get_int = |key: &str, default: i64| -> i64 {
+        meta.and_then(|m| m.get(key))
+            .and_then(|v| v.as_integer())
+            .unwrap_or(default)
+    };
+    let out_dir = std::env::var("OUT_DIR").unwrap();
+    let iw = get_int("install_win_w",   520);
+    let ih = get_int("install_win_h",   490);
+    let uw = get_int("uninstall_win_w", 480);
+    let uh = get_int("uninstall_win_h", 440);
+    std::fs::write(
+        format!("{}/window_size.rs", out_dir),
+        format!(
+            "pub const INSTALL_WIN_W: i32 = {};\n\
+             pub const INSTALL_WIN_H: i32 = {};\n\
+             pub const UNINSTALL_WIN_W: i32 = {};\n\
+             pub const UNINSTALL_WIN_H: i32 = {};\n",
+            iw, ih, uw, uh
+        ),
+    ).unwrap();
 
     // UAC Manifest + 图标
     embed_resource::compile_for("assets/app.rc", ["wind-installer", "wind-uninstaller"], embed_resource::NONE);

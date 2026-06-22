@@ -8,7 +8,7 @@ use windui::app::App;
 use windui::core::EventCtx;
 use windui::geometry::Color;
 use windui::spec::Align;
-use windui::ui::Element;
+use windui::ui::{Element, WindowButtonKind};
 
 use crate::installer::InstallMode;
 use crate::meta;
@@ -18,8 +18,8 @@ const PAGE_CONFIG: usize = 0;
 const PAGE_PROGRESS: usize = 1;
 const PAGE_FINISH: usize = 2;
 
-const WIN_W: i32 = 480;
-const WIN_H: i32 = 400;
+const WIN_W: i32 = crate::meta::INSTALL_WIN_W;
+const WIN_H: i32 = crate::meta::INSTALL_WIN_H;
 
 enum ProgressMsg {
     Status(String),
@@ -34,6 +34,7 @@ pub fn run_install_wizard() {
     let current_page = Rc::new(Cell::new(PAGE_CONFIG));
     let install_mode = Rc::new(Cell::new(0usize));
     let install_dir = Rc::new(RefCell::new(default_install_dir()));
+    let install_dir_portable = Rc::new(RefCell::new(default_portable_dir()));
     let data_dir = Rc::new(RefCell::new(default_data_dir()));
     let use_custom_data_dir = Rc::new(Cell::new(false));
     let progress_text = Rc::new(RefCell::new(String::from("正在准备安装...")));
@@ -62,6 +63,7 @@ pub fn run_install_wizard() {
     // ---- 安装按钮所需克隆 ----
     let rx_btn = rx.clone();
     let idir_btn = install_dir.clone();
+    let idir_portable_btn = install_dir_portable.clone();
     let mode_btn = install_mode.clone();
     let ddir_btn = data_dir.clone();
     let custom_btn = use_custom_data_dir.clone();
@@ -73,41 +75,26 @@ pub fn run_install_wizard() {
     // ---- UI 绑定克隆 ----
     let install_dir_input = install_dir.clone();
     let install_dir_browse = install_dir.clone();
+    let install_dir_portable_input = install_dir_portable.clone();
+    let install_dir_portable_browse = install_dir_portable.clone();
     let data_dir_input = data_dir.clone();
     let data_dir_browse_btn = data_dir.clone();
+
+    // ---- 模式可见性克隆（每个 visible_when 闭包独立克隆）----
+    let mode_idir_std      = install_mode.clone();
+    let mode_idir_std_btn  = install_mode.clone();
+    let mode_idir_port     = install_mode.clone();
+    let mode_idir_port_btn = install_mode.clone();
+    let mode_ddir_std      = install_mode.clone();
+    let mode_ddir_std_btn  = install_mode.clone();
+    let mode_ddir_port     = install_mode.clone();
     let progress_text_label = progress_text.clone();
     let config_error_label = config_error.clone();
     let finish_error_label = finish_error.clone();
     let finish_success_ok = finish_success.clone();
     let finish_success_err = finish_success.clone();
 
-    // ============================================================
-    //  顶部品牌区（各页共用）
-    // ============================================================
-    let brand_section = Element::col()
-        .width_match()
-        .padding_xy(0, 18)
-        .spacing(8)
-        .cross(Align::Center)
-        .child(
-            Element::image_bytes(include_bytes!("../../assets/logo.png"))
-                .size(52, 52)
-                .corner(13.0)
-        )
-        .child(
-            Element::label(meta::APP_DISPLAY_NAME)
-                .width_match()
-                .font_size(17.0)
-                .fg(Color::hex(theme::TEXT_PRIMARY))
-                .text_align(Align::Center)
-        )
-        .child(
-            Element::label(meta::APP_VERSION)
-                .width_match()
-                .font_size(11.0)
-                .fg(Color::hex(theme::TEXT_MUTED))
-                .text_align(Align::Center)
-        );
+    // brand_section 已内嵌到 page_config 顶部，各页面无需持久品牌区
 
     // ============================================================
     //  PAGE 0：配置页
@@ -116,71 +103,122 @@ pub fn run_install_wizard() {
         .fill()
         .weight(1.0)
         .padding_xy(40, 0)
-        .spacing(14)
+        .spacing(8)
         .visible_when(move || page_vis0.get() == PAGE_CONFIG)
-        // 安装路径
+        // ── 品牌区（Logo + 应用名 + 版本）─────────────────────────
+        .child(Element::leaf().weight(1.0))
         .child(
             Element::col()
                 .width_match()
-                .spacing(5)
+                .spacing(6)
+                .cross(Align::Center)
+                .child(
+                    Element::image_bytes(include_bytes!("../../assets/logo.png"))
+                        .size(72, 72)
+                        .corner(18.0),
+                )
+                .child(
+                    Element::label(meta::APP_DISPLAY_NAME)
+                        .width_match()
+                        .font_size(22.0)
+                        .fg(Color::hex(theme::TEXT_PRIMARY))
+                        .text_align(Align::Center),
+                )
+                .child(
+                    Element::label(meta::APP_VERSION)
+                        .width_match()
+                        .font_size(12.0)
+                        .fg(Color::hex(theme::TEXT_MUTED))
+                        .text_align(Align::Center),
+                ),
+        )
+        .child(Element::leaf().height(10))
+        // 安装目录（行高固定 34，内容随模式切换，避免布局抖动）
+        .child(
+            Element::row()
+                .width_match()
+                .height(34)
+                .spacing(8)
+                .cross(Align::Center)
                 .child(
                     Element::label("安装目录")
+                        .width(64)
                         .font_size(12.0)
                         .fg(Color::hex(theme::TEXT_SECONDARY))
                 )
                 .child(
-                    Element::row()
-                        .width_match()
-                        .spacing(8)
-                        .cross(Align::Center)
-                        .child(
-                            Element::text_input(install_dir_input, "安装路径")
-                                .weight(1.0)
-                                .height(34)
-                        )
-                        .child(
-                            Element::button("更改")
-                                .height(34)
-                                .on_click(move |_ctx: &mut EventCtx| {
-                                    if let Some(path) = browse_folder("选择安装目录") {
-                                        *install_dir_browse.borrow_mut() =
-                                            path.to_string_lossy().to_string();
-                                    }
-                                })
-                        )
+                    Element::text_input(install_dir_input, "安装路径")
+                        .weight(1.0)
+                        .height(34)
+                        .visible_when(move || mode_idir_std.get() == 0)
+                )
+                .child(
+                    Element::button("更改")
+                        .height(34)
+                        .visible_when(move || mode_idir_std_btn.get() == 0)
+                        .on_click(move |_ctx: &mut EventCtx| {
+                            if let Some(path) = browse_folder("选择安装目录") {
+                                *install_dir_browse.borrow_mut() =
+                                    path.to_string_lossy().to_string();
+                            }
+                        })
+                )
+                .child(
+                    Element::text_input(install_dir_portable_input, "安装路径")
+                        .weight(1.0)
+                        .height(34)
+                        .visible_when(move || mode_idir_port.get() == 1)
+                )
+                .child(
+                    Element::button("更改")
+                        .height(34)
+                        .visible_when(move || mode_idir_port_btn.get() == 1)
+                        .on_click(move |_ctx: &mut EventCtx| {
+                            if let Some(path) = browse_folder("选择安装目录") {
+                                *install_dir_portable_browse.borrow_mut() =
+                                    path.to_string_lossy().to_string();
+                            }
+                        })
                 )
         )
-        // 数据目录（仅首次安装显示；升级时沿用旧配置）
+        // 数据目录（行高固定 34；便捷模式显示说明文字）
         .child(
-            Element::col()
+            Element::row()
                 .width_match()
-                .spacing(5)
-                .visible_when(move || is_fresh_install)
+                .height(34)
+                .spacing(8)
+                .cross(Align::Center)
                 .child(
-                    Element::label("数据目录（词库、配置）")
+                    Element::label("数据目录")
+                        .width(64)
                         .font_size(12.0)
                         .fg(Color::hex(theme::TEXT_SECONDARY))
                 )
                 .child(
-                    Element::row()
-                        .width_match()
-                        .spacing(8)
-                        .cross(Align::Center)
-                        .child(
-                            Element::text_input(data_dir_input, "数据目录路径")
-                                .weight(1.0)
-                                .height(34)
-                        )
-                        .child(
-                            Element::button("更改")
-                                .height(34)
-                                .on_click(move |_ctx: &mut EventCtx| {
-                                    if let Some(path) = browse_folder("选择数据目录") {
-                                        *data_dir_browse_btn.borrow_mut() =
-                                            path.to_string_lossy().to_string();
-                                    }
-                                })
-                        )
+                    Element::text_input(data_dir_input, "词库、配置路径")
+                        .weight(1.0)
+                        .height(34)
+                        .enabled(Rc::new(Cell::new(is_fresh_install)))
+                        .visible_when(move || mode_ddir_std.get() == 0)
+                )
+                .child(
+                    Element::button("更改")
+                        .height(34)
+                        .enabled(Rc::new(Cell::new(is_fresh_install)))
+                        .visible_when(move || mode_ddir_std_btn.get() == 0)
+                        .on_click(move |_ctx: &mut EventCtx| {
+                            if let Some(path) = browse_folder("选择数据目录") {
+                                *data_dir_browse_btn.borrow_mut() =
+                                    path.to_string_lossy().to_string();
+                            }
+                        })
+                )
+                .child(
+                    Element::label("便捷模式不配置数据目录")
+                        .weight(1.0)
+                        .font_size(12.0)
+                        .fg(Color::hex(theme::TEXT_MUTED))
+                        .visible_when(move || mode_ddir_port.get() == 1)
                 )
         )
         // 安装模式
@@ -204,10 +242,19 @@ pub fn run_install_wizard() {
         )
         // 用户协议
         .child(
-            Element::checkbox("我已阅读并同意《用户服务协议》", agreed.clone())
+            Element::row()
+                .cross(Align::Center)
+                .spacing(4)
+                .child(Element::checkbox("我已阅读并同意", agreed.clone()))
+                .child(if meta::AGREEMENT_URL.is_empty() {
+                    Element::label("《用户服务协议》")
+                        .font_size(13.0)
+                        .fg(Color::hex(theme::TEXT_SECONDARY))
+                } else {
+                    Element::link("《用户服务协议》")
+                        .url(meta::AGREEMENT_URL)
+                })
         )
-        // 弹性空白，将按钮推到底部
-        .child(Element::leaf().weight(1.0))
         // 校验错误提示（仅未勾协议时可见）
         .child(
             Element::label_rc(config_error_label)
@@ -218,9 +265,9 @@ pub fn run_install_wizard() {
         // 安装按钮（align=Center 使其在父 col 中水平居中）
         .child(
             Element::button("立即安装")
-                .width(200)
-                .height(42)
-                .corner(21.0)
+                .width(300)
+                .height(48)
+                .corner(8.0)
                 .bg(Color::hex(theme::ACCENT))
                 .fg(Color::hex(0xFFFFFF))
                 .align(Align::Center)
@@ -232,8 +279,12 @@ pub fn run_install_wizard() {
 
                     page_btn.set(PAGE_PROGRESS);
 
-                    let install_dir_val = PathBuf::from(idir_btn.borrow().clone());
-                    let data_dir_val = PathBuf::from(ddir_btn.borrow().clone());
+                    let install_dir_val = if mode_btn.get() == 0 {
+                        expand_env_path(&idir_btn.borrow())
+                    } else {
+                        expand_env_path(&idir_portable_btn.borrow())
+                    };
+                    let data_dir_val = expand_env_path(&ddir_btn.borrow());
                     let use_custom = custom_btn.get();
                     let install_mode = if mode_btn.get() == 0 {
                         InstallMode::Standard
@@ -403,7 +454,7 @@ pub fn run_install_wizard() {
                     });
                 })
         )
-        .child(Element::leaf().height(20));
+        .child(Element::leaf().weight(1.0));
 
     // ============================================================
     //  PAGE 1：进度页
@@ -506,9 +557,9 @@ pub fn run_install_wizard() {
         // 完成按钮
         .child(
             Element::button("完 成")
-                .width(180)
-                .height(42)
-                .corner(21.0)
+                .width(200)
+                .height(48)
+                .corner(8.0)
                 .bg(Color::hex(theme::ACCENT))
                 .fg(Color::hex(0xFFFFFF))
                 .align(Align::Center)
@@ -519,79 +570,138 @@ pub fn run_install_wizard() {
         .child(Element::leaf().height(20));
 
     // ============================================================
+    //  0×0 进度轮询节点（每帧收取后台消息）
+    // ============================================================
+    let poll_leaf = Element::leaf()
+        .size(0, 0)
+        .visible_when(move || {
+            if let Ok(mut guard) = rx_poll.lock() {
+                if let Some(ref rx) = *guard {
+                    let mut done = false;
+                    while let Ok(msg) = rx.try_recv() {
+                        match msg {
+                            ProgressMsg::Status(s) => {
+                                *ptext_poll.borrow_mut() = s;
+                            }
+                            ProgressMsg::Total(t) => {
+                                ptotal_poll.set(t.max(1));
+                            }
+                            ProgressMsg::Done(n) => {
+                                let total = ptotal_poll.get();
+                                pval_poll.set((n as f32 / total as f32).min(0.99));
+                            }
+                            ProgressMsg::Finished(success, detail) => {
+                                pval_poll.set(1.0);
+                                success_poll.set(success);
+                                if !success {
+                                    *error_poll.borrow_mut() = detail;
+                                }
+                                page_poll.set(PAGE_FINISH);
+                                done = true;
+                            }
+                        }
+                    }
+                    if done {
+                        *guard = None;
+                        windui::anim::request_repaint();
+                    } else {
+                        windui::anim::request_repaint();
+                    }
+                }
+            }
+            false
+        });
+
+    // ============================================================
+    //  无边框自定义标题栏：浅色，与窗口背景同色，左侧标题右侧按钮
+    // ============================================================
+    #[cfg(feature = "frameless")]
+    let title_bar = Element::row()
+        .width_match()
+        .height(36)
+        .cross(Align::Center)
+        .bg(Color::hex(theme::BG_PRIMARY))
+        .window_drag()
+        .child(Element::leaf().width(14))
+        .child(
+            Element::label(meta::APP_WINDOW_TITLE)
+                .font_size(12.0)
+                .fg(Color::hex(theme::TEXT_SECONDARY)),
+        )
+        .child(Element::leaf().weight(1.0))
+        .child(Element::window_button(WindowButtonKind::Minimize).fg(Color::hex(theme::TEXT_SECONDARY)))
+        .child(Element::window_button(WindowButtonKind::Close).fg(Color::hex(theme::TEXT_SECONDARY)));
+
+    // ============================================================
     //  组装根节点
     // ============================================================
     let root = Element::col()
         .size(WIN_W, WIN_H)
-        .bg(Color::hex(theme::BG_PRIMARY))
-        .child(brand_section)
-        .child(Element::divider())
+        .bg(Color::hex(theme::BG_PRIMARY));
+
+    #[cfg(feature = "frameless")]
+    let root = root.child(title_bar);
+
+    let root = root
         .child(page_config)
         .child(page_progress)
         .child(page_finish)
-        // 0×0 隐藏节点：每帧调用 vis_cond 轮询后台进度消息
-        .child(
-            Element::leaf()
-                .size(0, 0)
-                .visible_when(move || {
-                    if let Ok(mut guard) = rx_poll.lock() {
-                        if let Some(ref rx) = *guard {
-                            let mut done = false;
-                            while let Ok(msg) = rx.try_recv() {
-                                match msg {
-                                    ProgressMsg::Status(s) => {
-                                        *ptext_poll.borrow_mut() = s;
-                                    }
-                                    ProgressMsg::Total(t) => {
-                                        ptotal_poll.set(t.max(1));
-                                    }
-                                    ProgressMsg::Done(n) => {
-                                        let total = ptotal_poll.get();
-                                        pval_poll.set((n as f32 / total as f32).min(0.99));
-                                    }
-                                    ProgressMsg::Finished(success, detail) => {
-                                        pval_poll.set(1.0);
-                                        success_poll.set(success);
-                                        if !success {
-                                            *error_poll.borrow_mut() = detail;
-                                        }
-                                        page_poll.set(PAGE_FINISH);
-                                        done = true;
-                                    }
-                                }
-                            }
-                            if done {
-                                *guard = None;
-                                windui::anim::request_repaint(); // 触发最后一帧显示完成页
-                            } else {
-                                windui::anim::request_repaint();
-                            }
-                        }
-                    }
-                    false
-                })
-        );
+        .child(poll_leaf);
 
-    App::new(meta::APP_WINDOW_TITLE, WIN_W, WIN_H)
+    let app = App::new(meta::APP_WINDOW_TITLE, WIN_W, WIN_H)
         .centered()
         .resizable(false)
         .bg(Color::hex(theme::BG_PRIMARY))
-        .content(root)
-        .run();
+        .content(root);
+
+    #[cfg(feature = "frameless")]
+    let app = app.frameless();
+
+    app.run();
 }
 
 fn default_install_dir() -> String {
-    let program_files = std::env::var("ProgramFiles")
-        .unwrap_or_else(|_| r"C:\Program Files".to_string());
-    format!(r"{}\{}", program_files, crate::meta::APP_ID)
+    use winreg::enums::*;
+    use winreg::RegKey;
+    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+    let key_path = format!(
+        r"Software\Microsoft\Windows\CurrentVersion\Uninstall\{}",
+        crate::meta::APP_DISPLAY_NAME
+    );
+    if let Ok(key) = hklm.open_subkey_with_flags(&key_path, KEY_READ) {
+        if let Ok(dir) = key.get_value::<String, _>("InstallLocation") {
+            if !dir.is_empty() {
+                return dir;
+            }
+        }
+    }
+    format!(r"%ProgramFiles%\{}", crate::meta::APP_ID)
+}
+
+fn default_portable_dir() -> String {
+    format!(r"%USERPROFILE%\{}", crate::meta::APP_ID)
 }
 
 fn default_data_dir() -> String {
-    let app_data = std::env::var("APPDATA").unwrap_or_else(|_| {
-        let up = std::env::var("USERPROFILE").unwrap_or_default();
-        format!(r"{}\AppData\Roaming", up)
-    });
-    format!(r"{}\{}", app_data, crate::meta::APP_ID)
+    format!(r"%APPDATA%\{}", crate::meta::APP_ID)
+}
+
+/// 展开路径中的 %VAR% 环境变量占位符。
+fn expand_env_path(s: &str) -> std::path::PathBuf {
+    let mut result = s.to_string();
+    for (var, fallback) in &[
+        ("ProgramFiles", r"C:\Program Files"),
+        ("APPDATA",      r"C:\Users\Default\AppData\Roaming"),
+        ("LOCALAPPDATA", r"C:\Users\Default\AppData\Local"),
+        ("USERPROFILE",  r"C:\Users\Default"),
+    ] {
+        let token = format!("%{}%", var);
+        if result.contains(&token) {
+            let val = std::env::var(var).unwrap_or_else(|_| fallback.to_string());
+            result = result.replace(&token, &val);
+        }
+    }
+    std::path::PathBuf::from(result)
 }
 
 fn browse_folder(_title: &str) -> Option<PathBuf> {
