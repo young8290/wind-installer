@@ -1,8 +1,6 @@
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::{Arc, Mutex};
-use std::sync::mpsc;
 
 use windui::app::App;
 use windui::core::EventCtx;
@@ -45,16 +43,34 @@ pub fn run_install_wizard() {
     let finish_error = Rc::new(RefCell::new(String::new()));
     let config_error = Rc::new(RefCell::new(String::new()));
     let agreed = Rc::new(Cell::new(false));
-    let rx: Arc<Mutex<Option<mpsc::Receiver<ProgressMsg>>>> = Arc::new(Mutex::new(None));
 
-    // ---- 进度轮询闭包所需克隆 ----
-    let ptext_poll = progress_text.clone();
-    let pval_poll = progress_value.clone();
-    let ptotal_poll = progress_total.clone();
-    let rx_poll = rx.clone();
-    let success_poll = finish_success.clone();
-    let error_poll = finish_error.clone();
-    let page_poll = current_page.clone();
+    // ---- 跨线程进度通道（windui App::channel：后台线程 send 唤醒一帧，
+    //      on_message 在 UI 线程写状态；替代旧的「每帧轮询 + 无条件重绘」）----
+    let mut app = App::new(title.as_str(), win_w, win_h);
+    let tx = {
+        let ptext = progress_text.clone();
+        let pval = progress_value.clone();
+        let ptotal = progress_total.clone();
+        let success = finish_success.clone();
+        let error = finish_error.clone();
+        let page = current_page.clone();
+        app.channel::<ProgressMsg>(move |msg| match msg {
+            ProgressMsg::Status(s) => *ptext.borrow_mut() = s,
+            ProgressMsg::Total(t) => ptotal.set(t.max(1)),
+            ProgressMsg::Done(n) => {
+                let total = ptotal.get();
+                pval.set((n as f32 / total as f32).min(0.99));
+            }
+            ProgressMsg::Finished(ok, detail) => {
+                pval.set(1.0);
+                success.set(ok);
+                if !ok {
+                    *error.borrow_mut() = detail;
+                }
+                page.set(PAGE_FINISH);
+            }
+        })
+    };
 
     // ---- 页面可见性克隆 ----
     let page_vis0 = current_page.clone();
@@ -62,7 +78,7 @@ pub fn run_install_wizard() {
     let page_vis2 = current_page.clone();
 
     // ---- 安装按钮所需克隆 ----
-    let rx_btn = rx.clone();
+    let tx_btn = tx;
     let idir_btn = install_dir.clone();
     let idir_portable_btn = install_dir_portable.clone();
     let mode_btn = install_mode.clone();
@@ -293,11 +309,7 @@ pub fn run_install_wizard() {
                         InstallMode::Portable
                     };
 
-                    let (tx, new_rx) = mpsc::channel::<ProgressMsg>();
-                    if let Ok(mut guard) = rx_btn.lock() {
-                        *guard = Some(new_rx);
-                    }
-
+                    let tx = tx_btn.clone();
                     std::thread::spawn(move || {
                         let mut log = crate::util::log::InstallLogger::new();
                         log.log(&format!("安装目录: {:?}", install_dir_val));
@@ -534,6 +546,8 @@ pub fn run_install_wizard() {
                     Element::label(format!("{} 已准备就绪，可以开始使用", meta::app_display_name()))
                         .font_size(13.0)
                         .fg(Color::hex(theme::TEXT_SECONDARY))
+                        .width_match()
+                        .text_align(Align::Center)
                 )
         )
         // 安装失败内容
@@ -579,49 +593,6 @@ pub fn run_install_wizard() {
         .child(Element::leaf().height(20));
 
     // ============================================================
-    //  0×0 进度轮询节点（每帧收取后台消息）
-    // ============================================================
-    let poll_leaf = Element::leaf()
-        .size(0, 0)
-        .visible_when(move || {
-            if let Ok(mut guard) = rx_poll.lock() {
-                if let Some(ref rx) = *guard {
-                    let mut done = false;
-                    while let Ok(msg) = rx.try_recv() {
-                        match msg {
-                            ProgressMsg::Status(s) => {
-                                *ptext_poll.borrow_mut() = s;
-                            }
-                            ProgressMsg::Total(t) => {
-                                ptotal_poll.set(t.max(1));
-                            }
-                            ProgressMsg::Done(n) => {
-                                let total = ptotal_poll.get();
-                                pval_poll.set((n as f32 / total as f32).min(0.99));
-                            }
-                            ProgressMsg::Finished(success, detail) => {
-                                pval_poll.set(1.0);
-                                success_poll.set(success);
-                                if !success {
-                                    *error_poll.borrow_mut() = detail;
-                                }
-                                page_poll.set(PAGE_FINISH);
-                                done = true;
-                            }
-                        }
-                    }
-                    if done {
-                        *guard = None;
-                        windui::anim::request_repaint();
-                    } else {
-                        windui::anim::request_repaint();
-                    }
-                }
-            }
-            false
-        });
-
-    // ============================================================
     //  无边框自定义标题栏：浅色，与窗口背景同色，左侧标题右侧按钮
     // ============================================================
     #[cfg(feature = "frameless")]
@@ -654,10 +625,9 @@ pub fn run_install_wizard() {
     let root = root
         .child(page_config)
         .child(page_progress)
-        .child(page_finish)
-        .child(poll_leaf);
+        .child(page_finish);
 
-    let app = App::new(title.as_str(), win_w, win_h)
+    let app = app
         .centered()
         .resizable(false)
         .bg(Color::hex(theme::BG_PRIMARY))

@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::meta;
 
@@ -11,6 +11,8 @@ pub struct CleanupOptions {
     pub clean_roaming: bool,
     /// 是否清除本地缓存（%LOCALAPPDATA%\AppID\cache）
     pub clean_local_cache: bool,
+    /// 清除用户配置数据前是否先备份到桌面（仅在 clean_roaming 时生效）
+    pub backup_to_desktop: bool,
     /// 静默模式下的保留用户数据标志
     pub keep_user_data: bool,
 }
@@ -24,6 +26,7 @@ impl Default for CleanupOptions {
             install_dir: PathBuf::from(program_files).join(meta::app_id()),
             clean_roaming: false,
             clean_local_cache: true,
+            backup_to_desktop: true,
             keep_user_data: false,
         }
     }
@@ -154,8 +157,16 @@ pub fn cleanup_user_data(options: &CleanupOptions) -> Result<(), String> {
     let user_data_dir = options.user_data_dir();
     let local_cache_dir = options.local_cache_dir();
 
-    // 清除用户配置
+    // 清除用户配置（删除前可选备份到桌面）
     if options.clean_roaming && user_data_dir.exists() {
+        if options.backup_to_desktop {
+            // 目录名带本地时间戳，每次卸载生成唯一目录，避免覆盖历史备份
+            let backup_dir = desktop_dir()
+                .join(format!("{}_Backup_{}", meta::app_id(), local_timestamp()));
+            if let Err(e) = copy_dir_all(&user_data_dir, &backup_dir) {
+                eprintln!("Warning: Failed to backup user data to desktop: {}", e);
+            }
+        }
         if let Err(e) = std::fs::remove_dir_all(&user_data_dir) {
             eprintln!("Warning: Failed to remove user data: {}", e);
         }
@@ -175,6 +186,37 @@ pub fn cleanup_user_data(options: &CleanupOptions) -> Result<(), String> {
         let _ = std::fs::remove_dir_all(&setting_cache);
     }
 
+    Ok(())
+}
+
+/// 当前用户桌面目录（%USERPROFILE%\Desktop）
+fn desktop_dir() -> PathBuf {
+    let user_profile = std::env::var("USERPROFILE").unwrap_or_default();
+    PathBuf::from(user_profile).join("Desktop")
+}
+
+/// 本地时间戳 YYYYMMDD_HHMMSS（用于备份目录名，使每次备份唯一、不覆盖历史）
+fn local_timestamp() -> String {
+    use windows::Win32::System::SystemInformation::GetLocalTime;
+    let st = unsafe { GetLocalTime() };
+    format!(
+        "{:04}{:02}{:02}_{:02}{:02}{:02}",
+        st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond
+    )
+}
+
+/// 递归复制目录（用于卸载前备份用户数据到桌面）
+fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let dest = dst.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir_all(&entry.path(), &dest)?;
+        } else {
+            std::fs::copy(entry.path(), &dest)?;
+        }
+    }
     Ok(())
 }
 

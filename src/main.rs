@@ -16,6 +16,9 @@ mod util;
 #[derive(Parser, Debug)]
 #[command(name = "wind-installer")]
 #[command(about = "Lightweight Windows installer for WindInput")]
+// 容忍未知参数：未来版本的安装器可能向已安装的旧版（卸载器）传入新 flag，
+// 旧版不应因不认识的参数而报错退出，只解析自己认识的、忽略其余。
+#[command(ignore_errors = true)]
 struct Args {
     /// 运行模式
     #[command(subcommand)]

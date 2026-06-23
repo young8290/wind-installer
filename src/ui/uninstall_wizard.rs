@@ -1,8 +1,6 @@
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::{Arc, Mutex};
-use std::sync::mpsc;
 
 use windui::app::App;
 use windui::core::EventCtx;
@@ -26,11 +24,14 @@ pub fn run_uninstall_wizard() {
     // ---- 运行期窗口尺寸（来自清单；非无边框模式高度 -40 补偿系统标题栏）----
     let (win_w, base_h) = meta::uninstall_win();
     let win_h = if cfg!(feature = "frameless") { base_h } else { base_h - 40 };
+    let title = format!("{} 卸载程序", meta::app_display_name());
 
     // ---- 状态 ----
     let current_page = Rc::new(Cell::new(PAGE_CONFIRM));
     let clean_roaming = Rc::new(Cell::new(false));
     let clean_cache = Rc::new(Cell::new(true));
+    // 删除前备份配置数据到桌面（默认开启；仅当勾选删除用户数据时可用）
+    let backup_to_desktop = Rc::new(Cell::new(true));
     let confirmed = Rc::new(Cell::new(false));
     let finish_success = Rc::new(Cell::new(false));
     let finish_error = Rc::new(RefCell::new(String::new()));
@@ -39,14 +40,25 @@ pub fn run_uninstall_wizard() {
     // 删除用户数据的二次确认对话框显示标志（windui 应用内模态）
     let show_delete_confirm = Rc::new(Cell::new(false));
 
-    let rx: Arc<Mutex<Option<mpsc::Receiver<UninstallMsg>>>> = Arc::new(Mutex::new(None));
-
-    // ---- 轮询闭包克隆 ----
-    let rx_poll = rx.clone();
-    let page_poll = current_page.clone();
-    let status_poll = status_text.clone();
-    let success_poll = finish_success.clone();
-    let error_poll = finish_error.clone();
+    // ---- 跨线程进度通道（windui App::channel：后台线程 send 唤醒一帧，
+    //      on_message 在 UI 线程写状态；替代旧的「每帧轮询 + 无条件重绘」）----
+    let mut app = App::new(title.clone(), win_w, win_h);
+    let tx = {
+        let status_msg = status_text.clone();
+        let page_msg = current_page.clone();
+        let success_msg = finish_success.clone();
+        let error_msg = finish_error.clone();
+        app.channel::<UninstallMsg>(move |msg| match msg {
+            UninstallMsg::Status(s) => *status_msg.borrow_mut() = s,
+            UninstallMsg::Finished(ok, detail) => {
+                success_msg.set(ok);
+                if !ok {
+                    *error_msg.borrow_mut() = detail;
+                }
+                page_msg.set(PAGE_FINISH);
+            }
+        })
+    };
 
     // ---- 页面可见性克隆 ----
     let page_vis0 = current_page.clone();
@@ -61,11 +73,12 @@ pub fn run_uninstall_wizard() {
 
     // ---- 卸载按钮克隆 ----
     let conf_enabled = confirmed.clone();
-    let rx_btn = rx.clone();
+    let tx_btn = tx;
     let conf_btn = confirmed.clone();
     let page_btn = current_page.clone();
     let cr_btn = clean_roaming.clone();
     let cc_btn = clean_cache.clone();
+    let backup_btn = backup_to_desktop.clone();
     let idir_btn = install_dir.clone();
 
     // ---- 完成按钮克隆 ----
@@ -135,6 +148,10 @@ pub fn run_uninstall_wizard() {
                 .width_match(),
         )
         .child(delete_data_row)
+        .child(
+            Element::checkbox("删除前备份配置数据到桌面（推荐）", backup_to_desktop.clone())
+                .enabled(clean_roaming.clone()),
+        )
         .child(Element::checkbox(
             &format!("清除本地词库缓存（%LOCALAPPDATA%\\{}\\cache）", meta::app_id()),
             clean_cache.clone(),
@@ -163,14 +180,11 @@ pub fn run_uninstall_wizard() {
                                 install_dir: idir_btn.borrow().clone(),
                                 clean_roaming: cr_btn.get(),
                                 clean_local_cache: cc_btn.get(),
+                                backup_to_desktop: backup_btn.get(),
                                 keep_user_data: false,
                             };
 
-                            let (tx, new_rx) = mpsc::channel::<UninstallMsg>();
-                            if let Ok(mut g) = rx_btn.lock() {
-                                *g = Some(new_rx);
-                            }
-
+                            let tx = tx_btn.clone();
                             std::thread::spawn(move || {
                                 macro_rules! step {
                                     ($msg:expr) => {
@@ -332,44 +346,11 @@ pub fn run_uninstall_wizard() {
         .child(Element::leaf().height(20));
 
     // ============================================================
-    //  轮询叶节点（0×0，每帧执行进度消息收取）
-    // ============================================================
-    let poll_leaf = Element::leaf()
-        .size(0, 0)
-        .visible_when(move || {
-            if let Ok(mut guard) = rx_poll.lock() {
-                if let Some(ref rx) = *guard {
-                    let mut done = false;
-                    while let Ok(msg) = rx.try_recv() {
-                        match msg {
-                            UninstallMsg::Status(s) => {
-                                *status_poll.borrow_mut() = s;
-                            }
-                            UninstallMsg::Finished(ok, detail) => {
-                                success_poll.set(ok);
-                                if !ok {
-                                    *error_poll.borrow_mut() = detail;
-                                }
-                                page_poll.set(PAGE_FINISH);
-                                done = true;
-                            }
-                        }
-                    }
-                    if done {
-                        *guard = None;
-                    }
-                    windui::anim::request_repaint();
-                }
-            }
-            false
-        });
-
-    // ============================================================
     //  无边框自定义标题栏
     // ============================================================
     #[cfg(feature = "frameless")]
     let title_bar = {
-        let title_text = format!("{} 卸载程序", meta::app_display_name());
+        let title_text = title.clone();
         Element::row()
             .width_match()
             .height(36)
@@ -459,8 +440,7 @@ pub fn run_uninstall_wizard() {
         .child(brand)
         .child(page_confirm)
         .child(page_progress)
-        .child(page_finish)
-        .child(poll_leaf);
+        .child(page_finish);
 
     // 用 stack 叠加模态对话框（显示时覆盖全窗）
     let root = Element::stack()
@@ -468,15 +448,11 @@ pub fn run_uninstall_wizard() {
         .child(content)
         .child(delete_dialog);
 
-    let app = App::new(
-        format!("{} 卸载程序", meta::app_display_name()),
-        win_w,
-        win_h,
-    )
-    .centered()
-    .resizable(false)
-    .bg(Color::hex(theme::BG_PRIMARY))
-    .content(root);
+    let app = app
+        .centered()
+        .resizable(false)
+        .bg(Color::hex(theme::BG_PRIMARY))
+        .content(root);
 
     #[cfg(feature = "frameless")]
     let app = app.frameless();
