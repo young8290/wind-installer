@@ -1,10 +1,9 @@
-use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
-use std::rc::Rc;
 
 use windui::app::App;
 use windui::core::EventCtx;
 use windui::geometry::Color;
+use windui::signal::signal;
 use windui::spec::Align;
 use windui::ui::{Element, WindowButtonKind};
 
@@ -26,63 +25,30 @@ pub fn run_uninstall_wizard() {
     let win_h = if cfg!(feature = "frameless") { base_h } else { base_h - 40 };
     let title = format!("{} 卸载程序", meta::app_display_name());
 
-    // ---- 状态 ----
-    let current_page = Rc::new(Cell::new(PAGE_CONFIRM));
-    let clean_roaming = Rc::new(Cell::new(false));
-    let clean_cache = Rc::new(Cell::new(true));
-    // 删除前备份配置数据到桌面（默认开启；仅当勾选删除用户数据时可用）
-    let backup_to_desktop = Rc::new(Cell::new(true));
-    let confirmed = Rc::new(Cell::new(false));
-    let finish_success = Rc::new(Cell::new(false));
-    let finish_error = Rc::new(RefCell::new(String::new()));
-    let status_text = Rc::new(RefCell::new(String::from("正在准备卸载...")));
-    let install_dir = Rc::new(RefCell::new(detect_install_dir()));
-    // 删除用户数据的二次确认对话框显示标志（windui 应用内模态）
-    let show_delete_confirm = Rc::new(Cell::new(false));
+    // ---- 状态（Signal<T> 是 Copy 句柄，move 闭包自动复制，无需 clone 样板）----
+    let current_page      = signal(PAGE_CONFIRM);
+    let clean_roaming     = signal(false);
+    let clean_cache       = signal(true);
+    let backup_to_desktop = signal(true);
+    let confirmed         = signal(false);
+    let finish_success    = signal(false);
+    let finish_error      = signal(String::new());
+    let status_text       = signal(String::from("正在准备卸载..."));
+    let install_dir       = signal(detect_install_dir());
+    let show_delete_confirm = signal(false);
 
-    // ---- 跨线程进度通道（windui App::channel：后台线程 send 唤醒一帧，
-    //      on_message 在 UI 线程写状态；替代旧的「每帧轮询 + 无条件重绘」）----
+    // ---- 跨线程进度通道（on_message 在 UI 线程调用，可直接写 Signal）----
     let mut app = App::new(title.clone(), win_w, win_h);
-    let tx = {
-        let status_msg = status_text.clone();
-        let page_msg = current_page.clone();
-        let success_msg = finish_success.clone();
-        let error_msg = finish_error.clone();
-        app.channel::<UninstallMsg>(move |msg| match msg {
-            UninstallMsg::Status(s) => *status_msg.borrow_mut() = s,
-            UninstallMsg::Finished(ok, detail) => {
-                success_msg.set(ok);
-                if !ok {
-                    *error_msg.borrow_mut() = detail;
-                }
-                page_msg.set(PAGE_FINISH);
+    let tx = app.channel::<UninstallMsg>(move |msg| match msg {
+        UninstallMsg::Status(s) => status_text.set(s),
+        UninstallMsg::Finished(ok, detail) => {
+            finish_success.set(ok);
+            if !ok {
+                finish_error.set(detail);
             }
-        })
-    };
-
-    // ---- 页面可见性克隆 ----
-    let page_vis0 = current_page.clone();
-    let page_vis1 = current_page.clone();
-    let page_vis2 = current_page.clone();
-
-    // ---- 标签引用克隆 ----
-    let status_label = status_text.clone();
-    let finish_error_label = finish_error.clone();
-    let finish_success_ok = finish_success.clone();
-    let finish_success_err = finish_success.clone();
-
-    // ---- 卸载按钮克隆 ----
-    let conf_enabled = confirmed.clone();
-    let tx_btn = tx;
-    let conf_btn = confirmed.clone();
-    let page_btn = current_page.clone();
-    let cr_btn = clean_roaming.clone();
-    let cc_btn = clean_cache.clone();
-    let backup_btn = backup_to_desktop.clone();
-    let idir_btn = install_dir.clone();
-
-    // ---- 完成按钮克隆 ----
-    let idir_finish = install_dir.clone();
+            current_page.set(PAGE_FINISH);
+        }
+    });
 
     // ============================================================
     //  品牌区（与安装器一致）
@@ -112,25 +78,19 @@ pub fn run_uninstall_wizard() {
                 .text_align(Align::Center),
         );
 
-    // 删除用户数据：危险勾选行（真 CheckBox，与其它复选框像素级对齐）。
-    // 借助 windui 的受控 on_toggle：设回调后点击不自动翻转，由 app 决定——未勾时弹
-    // 应用内确认对话框（确认后才置真，零闪烁）、已勾时直接取消；danger() 让勾选框标红。
-    let delete_data_row = {
-        let cr_toggle = clean_roaming.clone();
-        let show_open = show_delete_confirm.clone();
-        Element::checkbox(
-            format!("删除用户词库和配置数据（%APPDATA%\\{}）", meta::app_id()),
-            clean_roaming.clone(),
-        )
-        .danger()
-        .on_toggle(move |_ctx: &mut EventCtx| {
-            if cr_toggle.get() {
-                cr_toggle.set(false); // 已勾 → 直接取消
-            } else {
-                show_open.set(true); // 未勾 → 弹确认，确认后才勾
-            }
-        })
-    };
+    // 删除用户数据：危险勾选行（受控 on_toggle：未勾时弹应用内确认对话框，已勾时直接取消）
+    let delete_data_row = Element::checkbox(
+        format!("删除用户词库和配置数据（%APPDATA%\\{}）", meta::app_id()),
+        clean_roaming,
+    )
+    .danger()
+    .on_toggle(move |_ctx: &mut EventCtx| {
+        if clean_roaming.get() {
+            clean_roaming.set(false); // 已勾 → 直接取消
+        } else {
+            show_delete_confirm.set(true); // 未勾 → 弹确认，确认后才勾
+        }
+    });
 
     // ============================================================
     //  PAGE 0：确认页
@@ -140,7 +100,7 @@ pub fn run_uninstall_wizard() {
         .weight(1.0)
         .padding_xy(40, 0)
         .spacing(12)
-        .visible_when(move || page_vis0.get() == PAGE_CONFIRM)
+        .visible_when(move || current_page.get() == PAGE_CONFIRM)
         .child(
             Element::label(format!("即将从您的电脑中卸载 {}，请确认：", meta::app_display_name()))
                 .font_size(13.0)
@@ -149,15 +109,15 @@ pub fn run_uninstall_wizard() {
         )
         .child(delete_data_row)
         .child(
-            Element::checkbox("删除前备份配置数据到桌面（推荐）", backup_to_desktop.clone())
-                .enabled(clean_roaming.clone()),
+            Element::checkbox("删除前备份配置数据到桌面（推荐）", backup_to_desktop)
+                .enabled(clean_roaming),
         )
         .child(Element::checkbox(
             &format!("清除本地词库缓存（%LOCALAPPDATA%\\{}\\cache）", meta::app_id()),
-            clean_cache.clone(),
+            clean_cache,
         ))
         .child(Element::leaf().weight(1.0))
-        .child(Element::checkbox("我已确认，继续卸载", confirmed.clone()))
+        .child(Element::checkbox("我已确认，继续卸载", confirmed))
         .child(
             Element::row()
                 .width_match()
@@ -170,21 +130,19 @@ pub fn run_uninstall_wizard() {
                         .corner(8.0)
                         .bg(Color::hex(theme::ERROR))
                         .fg(Color::hex(0xFFFFFF))
-                        .enabled(conf_enabled)
+                        .enabled(confirmed)
                         .on_click(move |_ctx: &mut EventCtx| {
-                            let _ = conf_btn.get(); // enabled() 已做拦截
-                            // 删除用户数据已在勾选时经 windui 对话框确认，此处直接进入卸载
-                            page_btn.set(PAGE_PROGRESS);
+                            current_page.set(PAGE_PROGRESS);
 
                             let options = crate::uninstaller::cleanup::CleanupOptions {
-                                install_dir: idir_btn.borrow().clone(),
-                                clean_roaming: cr_btn.get(),
-                                clean_local_cache: cc_btn.get(),
-                                backup_to_desktop: backup_btn.get(),
-                                keep_user_data: false,
+                                install_dir:      install_dir.get(),
+                                clean_roaming:    clean_roaming.get(),
+                                clean_local_cache: clean_cache.get(),
+                                backup_to_desktop: backup_to_desktop.get(),
+                                keep_user_data:   false,
                             };
 
-                            let tx = tx_btn.clone();
+                            let tx = tx.clone();
                             std::thread::spawn(move || {
                                 macro_rules! step {
                                     ($msg:expr) => {
@@ -247,7 +205,7 @@ pub fn run_uninstall_wizard() {
         .fill()
         .weight(1.0)
         .padding_xy(56, 0)
-        .visible_when(move || page_vis1.get() == PAGE_PROGRESS)
+        .visible_when(move || current_page.get() == PAGE_PROGRESS)
         .child(Element::leaf().weight(1.0))
         .child(
             Element::col()
@@ -260,7 +218,7 @@ pub fn run_uninstall_wizard() {
                         .fg(Color::hex(theme::TEXT_PRIMARY)),
                 )
                 .child(
-                    Element::label_rc(status_label)
+                    Element::label_rc(status_text)
                         .font_size(12.0)
                         .fg(Color::hex(theme::TEXT_SECONDARY))
                         .width_match()
@@ -276,7 +234,7 @@ pub fn run_uninstall_wizard() {
         .fill()
         .weight(1.0)
         .padding_xy(48, 0)
-        .visible_when(move || page_vis2.get() == PAGE_FINISH)
+        .visible_when(move || current_page.get() == PAGE_FINISH)
         .child(Element::leaf().weight(1.0))
         // 成功
         .child(
@@ -284,7 +242,7 @@ pub fn run_uninstall_wizard() {
                 .width_match()
                 .spacing(8)
                 .cross(Align::Center)
-                .visible_when(move || finish_success_ok.get())
+                .visible_when(move || finish_success.get())
                 .child(
                     Element::label("✓")
                         .font_size(44.0)
@@ -307,7 +265,7 @@ pub fn run_uninstall_wizard() {
                 .width_match()
                 .spacing(8)
                 .cross(Align::Center)
-                .visible_when(move || !finish_success_err.get())
+                .visible_when(move || !finish_success.get())
                 .child(
                     Element::label("✗")
                         .font_size(44.0)
@@ -319,7 +277,7 @@ pub fn run_uninstall_wizard() {
                         .fg(Color::hex(theme::TEXT_PRIMARY)),
                 )
                 .child(
-                    Element::label_rc(finish_error_label)
+                    Element::label_rc(finish_error)
                         .font_size(12.0)
                         .fg(Color::hex(theme::ERROR))
                         .width_match()
@@ -336,10 +294,9 @@ pub fn run_uninstall_wizard() {
                 .fg(Color::hex(0xFFFFFF))
                 .align(Align::Center)
                 .on_click(move |_ctx: &mut EventCtx| {
-                    let dir = idir_finish.borrow().clone();
+                    let dir = install_dir.get();
                     // trigger_self_delete 内部调用 process::exit(0)，不返回
                     let _ = crate::uninstaller::selfdelete::trigger_self_delete(&dir);
-                    // 自删除失败时直接退出
                     std::process::exit(0);
                 }),
         )
@@ -373,11 +330,8 @@ pub fn run_uninstall_wizard() {
     // ============================================================
     // 删除用户数据二次确认对话框（windui 应用内模态；确认后才真正勾选）
     let delete_dialog = {
-        let show_cancel = show_delete_confirm.clone();
-        let cr_confirm = clean_roaming.clone();
-        let show_done = show_delete_confirm.clone();
         Element::dialog(
-            show_delete_confirm.clone(),
+            show_delete_confirm,
             Element::col()
                 .width(360)
                 .bg(Color::hex(theme::BG_PRIMARY))
@@ -410,7 +364,7 @@ pub fn run_uninstall_wizard() {
                                 .height(38)
                                 .corner(8.0)
                                 .on_click(move |_ctx: &mut EventCtx| {
-                                    show_cancel.set(false);
+                                    show_delete_confirm.set(false);
                                 }),
                         )
                         .child(
@@ -421,8 +375,8 @@ pub fn run_uninstall_wizard() {
                                 .bg(Color::hex(theme::ERROR))
                                 .fg(Color::hex(0xFFFFFF))
                                 .on_click(move |_ctx: &mut EventCtx| {
-                                    cr_confirm.set(true); // 确认后才真正勾选
-                                    show_done.set(false);
+                                    clean_roaming.set(true); // 确认后才真正勾选
+                                    show_delete_confirm.set(false);
                                 }),
                         ),
                 ),
@@ -460,7 +414,7 @@ pub fn run_uninstall_wizard() {
     app.run();
 }
 
-/// 从注册表读取安装目录；找不到时回退到默认路径
+/// 从注册表读取安装目录；找不到时回退到默认路径。
 fn detect_install_dir() -> PathBuf {
     use winreg::enums::*;
     use winreg::RegKey;
