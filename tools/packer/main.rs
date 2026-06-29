@@ -31,6 +31,15 @@ enum Command {
         /// app.toml 配置文件
         #[arg(short, long, default_value = "app.toml")]
         config: PathBuf,
+        /// 版本号（覆盖 app.toml 中的 app.version，同时影响嵌入清单与默认输出文件名）
+        #[arg(short = 'V', long)]
+        version: Option<String>,
+        /// 源目录（覆盖 app.toml 中的 package.source_dir；相对路径以当前工作目录为基准）
+        #[arg(short = 'd', long)]
+        source_dir: Option<PathBuf>,
+        /// 压缩算法（覆盖 app.toml 中的 package.compression：lzma | zstd）
+        #[arg(short = 'z', long)]
+        compression: Option<String>,
         /// 输出 .bin（默认 <output_dir>/<output_name>-<version>.bin）
         #[arg(short, long)]
         output: Option<PathBuf>,
@@ -40,6 +49,9 @@ enum Command {
         /// app.toml 配置文件
         #[arg(short, long, default_value = "app.toml")]
         config: PathBuf,
+        /// 版本号（覆盖 app.toml 中的 app.version，影响默认 archive / output 文件名）
+        #[arg(short = 'V', long)]
+        version: Option<String>,
         /// stub 文件（wind-installer.exe）
         #[arg(short, long)]
         stub: PathBuf,
@@ -55,6 +67,15 @@ enum Command {
         /// app.toml 配置文件
         #[arg(short, long, default_value = "app.toml")]
         config: PathBuf,
+        /// 版本号（覆盖 app.toml 中的 app.version，同时影响嵌入清单与默认输出文件名）
+        #[arg(short = 'V', long)]
+        version: Option<String>,
+        /// 源目录（覆盖 app.toml 中的 package.source_dir；相对路径以当前工作目录为基准）
+        #[arg(short = 'd', long)]
+        source_dir: Option<PathBuf>,
+        /// 压缩算法（覆盖 app.toml 中的 package.compression：lzma | zstd）
+        #[arg(short = 'z', long)]
+        compression: Option<String>,
         /// stub 文件（wind-installer.exe）
         #[arg(short, long)]
         stub: PathBuf,
@@ -73,15 +94,34 @@ enum Command {
 fn main() {
     let args = Args::parse();
     let result = match args.command {
-        Command::Pack { config, output } => cmd_pack(&config, output).map(|_| ()),
-        Command::Bundle { config, stub, archive, output } => cmd_bundle(&config, &stub, archive, output),
-        Command::Build { config, stub, output } => cmd_build(&config, &stub, output),
+        Command::Pack { config, version, source_dir, compression, output } => {
+            let ov = Overrides { version, source_dir, compression };
+            cmd_pack(&config, ov, output).map(|_| ())
+        }
+        Command::Bundle { config, version, stub, archive, output } => {
+            let ov = Overrides { version, source_dir: None, compression: None };
+            cmd_bundle(&config, ov, &stub, archive, output)
+        }
+        Command::Build { config, version, source_dir, compression, stub, output } => {
+            let ov = Overrides { version, source_dir, compression };
+            cmd_build(&config, ov, &stub, output)
+        }
         Command::Inspect { file } => cmd_inspect(&file),
     };
     if let Err(e) = result {
         eprintln!("错误: {}", e);
         std::process::exit(1);
     }
+}
+
+// ── CLI 覆盖项 ───────────────────────────────────────────────────────────────
+
+/// CLI 传入的覆盖值；`None` 表示"沿用 app.toml 中的值"。
+struct Overrides {
+    version: Option<String>,
+    /// 源目录（来自 CLI，相对路径以 CWD 为基准）
+    source_dir: Option<PathBuf>,
+    compression: Option<String>,
 }
 
 // ── 配置加载与路径解析 ──────────────────────────────────────────────────────
@@ -105,6 +145,27 @@ fn load(config: &Path) -> Result<Loaded, String> {
 }
 
 impl Loaded {
+    /// 应用 CLI 覆盖项（在 `load` 之后立即调用）。
+    ///
+    /// `source_dir` 来自命令行时相对于 CWD 解析为绝对路径，
+    /// 使后续 `resolve()` 对绝对路径直接透传，不再 join config base dir。
+    fn apply_overrides(&mut self, ov: Overrides) {
+        if let Some(v) = ov.version {
+            self.cfg.manifest.app.version = v;
+        }
+        if let Some(s) = ov.source_dir {
+            let abs = if s.is_absolute() {
+                s
+            } else {
+                std::env::current_dir().unwrap_or_default().join(s)
+            };
+            self.cfg.package.source_dir = abs.to_string_lossy().into_owned();
+        }
+        if let Some(c) = ov.compression {
+            self.cfg.package.compression = c;
+        }
+    }
+
     /// 相对 app.toml 解析路径
     fn resolve(&self, p: &str) -> PathBuf {
         let path = Path::new(p);
@@ -141,8 +202,15 @@ impl Loaded {
 
 // ── pack ────────────────────────────────────────────────────────────────────
 
-fn cmd_pack(config: &Path, output: Option<PathBuf>) -> Result<PathBuf, String> {
-    let l = load(config)?;
+fn cmd_pack(config: &Path, ov: Overrides, output: Option<PathBuf>) -> Result<PathBuf, String> {
+    let mut l = load(config)?;
+    l.apply_overrides(ov);
+    cmd_pack_inner(&l, output)
+}
+
+/// 对已加载并应用过覆盖项的 `Loaded` 执行打包。
+/// `cmd_build` 复用此函数，避免二次加载配置文件。
+fn cmd_pack_inner(l: &Loaded, output: Option<PathBuf>) -> Result<PathBuf, String> {
     let output = output.unwrap_or_else(|| l.default_bin());
     if let Some(dir) = output.parent() {
         std::fs::create_dir_all(dir).ok();
@@ -197,11 +265,13 @@ fn cmd_pack(config: &Path, output: Option<PathBuf>) -> Result<PathBuf, String> {
 
 fn cmd_bundle(
     config: &Path,
+    ov: Overrides,
     stub: &Path,
     archive: Option<PathBuf>,
     output: Option<PathBuf>,
 ) -> Result<(), String> {
-    let l = load(config)?;
+    let mut l = load(config)?;
+    l.apply_overrides(ov);
     let archive = archive.unwrap_or_else(|| l.default_bin());
     let output = output.unwrap_or_else(|| l.default_exe());
     bundle_inner(&l, stub, &archive, &output)
@@ -251,10 +321,11 @@ fn bundle_inner(l: &Loaded, stub: &Path, archive: &Path, output: &Path) -> Resul
 
 // ── build（pack + bundle）───────────────────────────────────────────────────
 
-fn cmd_build(config: &Path, stub: &Path, output: Option<PathBuf>) -> Result<(), String> {
-    let bin = cmd_pack(config, None)?;
-    let l = load(config)?;
+fn cmd_build(config: &Path, ov: Overrides, stub: &Path, output: Option<PathBuf>) -> Result<(), String> {
+    let mut l = load(config)?;
+    l.apply_overrides(ov);
     let output = output.unwrap_or_else(|| l.default_exe());
+    let bin = cmd_pack_inner(&l, None)?;
     bundle_inner(&l, stub, &bin, &output)
 }
 
