@@ -39,6 +39,10 @@ struct Args {
     /// 保留用户数据（卸载时）
     #[arg(long)]
     keep_user_data: bool,
+
+    /// 强制软渲染（禁用 Direct2D 硬件加速）；等效于设置环境变量 WIND_SOFT_RENDER=1
+    #[arg(long)]
+    soft_render: bool,
 }
 
 #[derive(Parser, Debug)]

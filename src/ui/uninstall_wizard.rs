@@ -405,6 +405,7 @@ pub fn run_uninstall_wizard() {
     let app = app
         .centered()
         .resizable(false)
+        .accelerated(super::is_accelerated())
         .bg(Color::hex(theme::BG_PRIMARY))
         .content(root);
 
