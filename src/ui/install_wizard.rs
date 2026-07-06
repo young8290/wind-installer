@@ -123,10 +123,19 @@ pub fn run_install_wizard() {
                     Element::button("更改")
                         .height(34)
                         .visible_when(move || install_mode.get() == 0)
-                        .on_click(move |_ctx: &mut EventCtx| {
-                            if let Some(path) = browse_folder("选择安装目录") {
-                                install_dir.set(path.to_string_lossy().to_string());
-                            }
+                        .on_click(move |ctx: &mut EventCtx| {
+                            ctx.request_pick_folder(
+                                folder_pick_dialog("选择安装目录", &install_dir.get()),
+                                move |path| {
+                                    if let Some(path) = path {
+                                        install_dir.set(
+                                            finalize_picked_folder(path)
+                                                .to_string_lossy()
+                                                .to_string(),
+                                        );
+                                    }
+                                },
+                            );
                         })
                 )
                 .child(
@@ -139,10 +148,19 @@ pub fn run_install_wizard() {
                     Element::button("更改")
                         .height(34)
                         .visible_when(move || install_mode.get() == 1)
-                        .on_click(move |_ctx: &mut EventCtx| {
-                            if let Some(path) = browse_folder("选择安装目录") {
-                                install_dir_portable.set(path.to_string_lossy().to_string());
-                            }
+                        .on_click(move |ctx: &mut EventCtx| {
+                            ctx.request_pick_folder(
+                                folder_pick_dialog("选择安装目录", &install_dir_portable.get()),
+                                move |path| {
+                                    if let Some(path) = path {
+                                        install_dir_portable.set(
+                                            finalize_picked_folder(path)
+                                                .to_string_lossy()
+                                                .to_string(),
+                                        );
+                                    }
+                                },
+                            );
                         })
                 )
         )
@@ -171,10 +189,19 @@ pub fn run_install_wizard() {
                         .height(34)
                         .enabled(signal(is_fresh_install))
                         .visible_when(move || install_mode.get() == 0)
-                        .on_click(move |_ctx: &mut EventCtx| {
-                            if let Some(path) = browse_folder("选择数据目录") {
-                                data_dir.set(path.to_string_lossy().to_string());
-                            }
+                        .on_click(move |ctx: &mut EventCtx| {
+                            ctx.request_pick_folder(
+                                folder_pick_dialog("选择数据目录", &data_dir.get()),
+                                move |path| {
+                                    if let Some(path) = path {
+                                        data_dir.set(
+                                            finalize_picked_folder(path)
+                                                .to_string_lossy()
+                                                .to_string(),
+                                        );
+                                    }
+                                },
+                            );
                         })
                 )
                 .child(
@@ -624,12 +651,29 @@ fn expand_env_path(s: &str) -> std::path::PathBuf {
     std::path::PathBuf::from(result)
 }
 
-/// 用系统原生对话框选择文件夹；若用户选的目录名不是 APP_ID，自动追加子目录。
-fn browse_folder(_title: &str) -> Option<PathBuf> {
-    let path = PickDialog::new().pick_folder()?;
+/// 构建选目录用的 `PickDialog`：起始目录取当前配置路径（`%VAR%` 展开后）最近的
+/// 已存在祖先目录，而不是让 Shell 用它自己记住的上次访问位置——那个位置完全不
+/// 可控（可能是网络共享/已拔出的移动盘/云盘同步目录），既是"偶发打开卡顿"的
+/// 诱因之一，也会让"更改"按钮的默认落点跟用户已经填好的路径对不上。
+fn folder_pick_dialog(title: &str, current_path: &str) -> PickDialog {
+    let mut dialog = PickDialog::new().title(title);
+    let expanded = expand_env_path(current_path);
+    let mut probe = Some(expanded.as_path());
+    while let Some(p) = probe {
+        if p.exists() {
+            dialog = dialog.directory(p);
+            break;
+        }
+        probe = p.parent();
+    }
+    dialog
+}
+
+/// 用户选完目录后的收尾：若选的目录名不是 APP_ID，自动追加子目录。
+fn finalize_picked_folder(path: PathBuf) -> PathBuf {
     if path.file_name().map(|n| n != crate::meta::app_id()).unwrap_or(true) {
-        Some(path.join(crate::meta::app_id()))
+        path.join(crate::meta::app_id())
     } else {
-        Some(path)
+        path
     }
 }
