@@ -31,6 +31,7 @@ rand = "0.8"
 ctrlc = "3"
 # 仅 wind-packer 需要（写 EXE 图标，纯 Rust 跨平台，无外部依赖）；installer/uninstaller 不引入
 editpe = { version = "0.2.3", features = ["images"], optional = true }
+indexmap = "2"
 
 # Windows-only 依赖（installer/uninstaller/ui/util 模块用）。隔离到 cfg(windows)
 # 后，wind-packer 可在 Linux 宿主原生构建（archive 纯 IO，无需 wine）。

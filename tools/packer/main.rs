@@ -252,6 +252,29 @@ fn cmd_pack_inner(l: &Loaded, output: Option<PathBuf>) -> Result<PathBuf, String
     println!("  清单:   {} 字节", manifest_bytes.len());
     println!("  logo:   {} 字节", logo_bytes.len());
 
+    // 注入卸载程序版本属性（如果存在）
+    let uninstaller_path = source.join("uninstall.exe");
+    if uninstaller_path.exists() {
+        let uninst_res_info = version_info::derive_version_info(&l.cfg, true);
+        println!("  检测到卸载程序，注入版本信息:");
+        println!("    描述:     {}", uninst_res_info.file_description);
+        println!("    文件版本: {}", uninst_res_info.file_version);
+
+        let icon_path = if l.cfg.package.icon.is_empty() {
+            None
+        } else {
+            let p = l.resolve(&l.cfg.package.icon);
+            if p.exists() {
+                Some(p)
+            } else {
+                return Err(format!("图标文件不存在: {:?}", p));
+            }
+        };
+
+        set_pe_version_info(&uninstaller_path, &uninst_res_info, icon_path.as_deref())?;
+        println!("    → 成功注入");
+    }
+
     let mut writer = ArchiveWriter::new(&output, compression)?;
     writer.set_manifest(manifest_bytes, logo_bytes);
     writer.add_directory(&source, "")?;
@@ -292,22 +315,32 @@ fn bundle_inner(l: &Loaded, stub: &Path, archive: &Path, output: &Path) -> Resul
 
     println!("Wind Packer · bundle");
 
-    // 先给干净 stub 写图标（在追加归档 overlay 之前），规避 PE overlay 被重建丢弃的风险
-    let mut iconned_stub: Option<PathBuf> = None;
-    let effective_stub: PathBuf = if l.cfg.package.icon.is_empty() {
-        println!("  图标:   （未指定，沿用 stub 自带图标）");
-        stub.to_path_buf()
+    // 推导安装器的版本详细信息
+    let res_info = version_info::derive_version_info(&l.cfg, false);
+    println!("  注入版本信息:");
+    println!("    产品名称: {}", res_info.product_name);
+    println!("    描述:     {}", res_info.file_description);
+    println!("    文件版本: {}", res_info.file_version);
+    println!("    公司:     {}", res_info.company_name);
+
+    let tmp = output.with_extension("stub.tmp");
+    let icon_path = if l.cfg.package.icon.is_empty() {
+        None
     } else {
-        let icon = l.resolve(&l.cfg.package.icon);
-        if !icon.exists() {
-            return Err(format!("图标文件不存在: {:?}", icon));
+        let p = l.resolve(&l.cfg.package.icon);
+        if p.exists() {
+            Some(p)
+        } else {
+            return Err(format!("图标文件不存在: {:?}", p));
         }
-        let tmp = output.with_extension("stub.tmp");
-        set_exe_icon(stub, &icon, &tmp)?;
-        println!("  图标:   {:?} → 已写入 stub", icon);
-        iconned_stub = Some(tmp.clone());
-        tmp
     };
+
+    // 复制 stub 到临时文件然后注入 PE 资源
+    std::fs::copy(stub, &tmp).map_err(|e| format!("复制 stub 失败: {}", e))?;
+    set_pe_version_info(&tmp, &res_info, icon_path.as_deref())?;
+
+    let effective_stub = tmp.clone();
+    let iconned_stub = Some(tmp);
 
     let stub_size = std::fs::metadata(&effective_stub).map(|m| m.len()).unwrap_or(0);
     archive::bundle_exe(&effective_stub, archive, output)?;
@@ -360,24 +393,71 @@ fn cmd_inspect(file: &Path) -> Result<(), String> {
     Ok(())
 }
 
-// ── 图标写入（纯 Rust，无外部依赖）──────────────────────────────────────────
+// ── PE 版本与图标注入 ────────────────────────────────────────────────────────
 
-/// 将 `icon` 写入 `stub` 的 PE 资源，输出到 `out`。
-///
-/// 仅对无 overlay 的干净 stub 使用——重建 PE 资源目录时尾部 overlay 不保证保留，
-/// 因此本函数必须在 bundle 追加归档之前调用。
-fn set_exe_icon(stub: &Path, icon: &Path, out: &Path) -> Result<(), String> {
-    let mut image = editpe::Image::parse_file(stub)
-        .map_err(|e| format!("解析 stub PE 失败: {}", e))?;
+/// 为指定 EXE 注入版本信息和图标（可选）
+fn set_pe_version_info(
+    exe_path: &Path,
+    res_info: &version_info::ResolvedVersionInfo,
+    icon_path: Option<&Path>,
+) -> Result<(), String> {
+    let mut image = editpe::Image::parse_file(exe_path)
+        .map_err(|e| format!("解析 PE 失败: {}", e))?;
     let mut resources = image.resource_directory().cloned().unwrap_or_default();
+
+    // 1. 读取或创建 VersionInfo
+    let mut version_info = resources
+        .get_version_info()
+        .map_err(|e| format!("获取 VersionInfo 失败: {}", e))?
+        .unwrap_or_default();
+
+    // 2. 设置 FixedFileInfo
+    let (f_major, f_minor) = version_info::parse_version_string(&res_info.file_version);
+    version_info.info.file_version = editpe::types::VersionU32 { major: f_major, minor: f_minor };
+
+    let (p_major, p_minor) = version_info::parse_version_string(&res_info.product_version);
+    version_info.info.product_version = editpe::types::VersionU32 { major: p_major, minor: p_minor };
+
+    // 3. 设置语言和翻译段
+    let lang_id = 0x0804u16; // 简体中文
+    let code_page = 0x04b0u16; // Unicode
+    version_info.vars = vec![editpe::types::VersionU16 { major: lang_id, minor: code_page }];
+
+    let table_key = format!("{:04x}{:04x}", lang_id, code_page);
+    let mut strings_map = indexmap::IndexMap::default();
+    strings_map.insert("CompanyName".to_string(), res_info.company_name.clone());
+    strings_map.insert("FileDescription".to_string(), res_info.file_description.clone());
+    strings_map.insert("FileVersion".to_string(), res_info.file_version.clone());
+    strings_map.insert("InternalName".to_string(), res_info.internal_name.clone());
+    strings_map.insert("LegalCopyright".to_string(), res_info.copyright.clone());
+    strings_map.insert("OriginalFilename".to_string(), res_info.original_filename.clone());
+    strings_map.insert("ProductName".to_string(), res_info.product_name.clone());
+    strings_map.insert("ProductVersion".to_string(), res_info.product_version.clone());
+
+    version_info.strings = vec![editpe::VersionStringTable {
+        key: table_key,
+        strings: strings_map,
+    }];
+
     resources
-        .set_main_icon_file(&icon.to_string_lossy())
-        .map_err(|e| format!("设置图标失败: {}", e))?;
+        .set_version_info(&version_info)
+        .map_err(|e| format!("设置 VersionInfo 失败: {}", e))?;
+
+    // 4. 设置图标（可选）
+    if let Some(ico) = icon_path {
+        if ico.exists() {
+            resources
+                .set_main_icon_file(&ico.to_string_lossy())
+                .map_err(|e| format!("设置图标失败: {}", e))?;
+        }
+    }
+
+    // 5. 写回资源
     image
         .set_resource_directory(resources)
         .map_err(|e| format!("写入资源目录失败: {}", e))?;
     image
-        .write_file(out)
-        .map_err(|e| format!("写出带图标 stub 失败: {}", e))?;
+        .write_file(exe_path)
+        .map_err(|e| format!("写出 PE 失败: {}", e))?;
     Ok(())
 }
