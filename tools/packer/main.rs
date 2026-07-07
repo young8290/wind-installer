@@ -16,6 +16,8 @@ use clap::{Parser, Subcommand};
 use wind_installer::archive::{self, ArchiveWriter, CompressionType};
 use wind_installer::manifest::ProjectConfig;
 
+mod version_info;
+
 #[derive(Parser, Debug)]
 #[command(name = "wind-packer")]
 #[command(about = "Generic installer generator driven by app.toml")]
