@@ -116,3 +116,69 @@ source_dir = "./build"
     // 回退访问器
     assert_eq!(cfg.manifest.start_menu_folder(), "My App"); // 回退到 display_name
 }
+
+#[test]
+fn project_config_parses_version_info() {
+    let toml_str = r#"
+[app]
+id           = "MyApp"
+display_name = "My App"
+version      = "1.0.0"
+publisher    = "Me"
+main_exe     = "myapp.exe"
+
+[package]
+source_dir = "./build"
+[package.version_info]
+company_name      = "My Company"
+file_description  = "My File Description"
+file_version      = "1.0.0.0"
+product_name      = "My Product"
+product_version   = "1.0.0.0"
+copyright         = "Copyright (c) 2026"
+original_filename = "myapp.exe"
+"#;
+    let cfg = ProjectConfig::from_toml_str(toml_str).expect("解析包含 version_info 的配置失败");
+    let version_info = cfg.package.version_info.as_ref().expect("应当解析出 version_info");
+    assert_eq!(version_info.company_name.as_deref(), Some("My Company"));
+    assert_eq!(version_info.file_description.as_deref(), Some("My File Description"));
+    assert_eq!(version_info.file_version.as_deref(), Some("1.0.0.0"));
+    assert_eq!(version_info.product_name.as_deref(), Some("My Product"));
+    assert_eq!(version_info.product_version.as_deref(), Some("1.0.0.0"));
+    assert_eq!(version_info.copyright.as_deref(), Some("Copyright (c) 2026"));
+    assert_eq!(version_info.original_filename.as_deref(), Some("myapp.exe"));
+
+    // 验证缺省情况
+    let toml_str_empty_info = r#"
+[app]
+id           = "MyApp"
+display_name = "My App"
+version      = "1.0.0"
+publisher    = "Me"
+main_exe     = "myapp.exe"
+
+[package]
+source_dir = "./build"
+[package.version_info]
+"#;
+    let cfg_empty = ProjectConfig::from_toml_str(toml_str_empty_info).expect("解析空 version_info 失败");
+    let info_empty = cfg_empty.package.version_info.as_ref().expect("空 version_info 块也应解析出 Option");
+    assert!(info_empty.company_name.is_none());
+    assert!(info_empty.file_description.is_none());
+
+    // 验证完全不提供 version_info 时
+    let toml_str_no_info = r#"
+[app]
+id           = "MyApp"
+display_name = "My App"
+version      = "1.0.0"
+publisher    = "Me"
+main_exe     = "myapp.exe"
+
+[package]
+source_dir = "./build"
+"#;
+    let cfg_no_info = ProjectConfig::from_toml_str(toml_str_no_info).expect("不包含 version_info 应解析成功");
+    assert!(cfg_no_info.package.version_info.is_none());
+}
+

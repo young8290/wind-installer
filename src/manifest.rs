@@ -161,6 +161,28 @@ pub struct PackageConfig {
     /// 安装器 EXE 图标路径（.ico），由 rcedit 写入 PE 资源。
     #[serde(default)]
     pub icon: String,
+    /// PE 资源版本信息。
+    #[serde(default)]
+    pub version_info: Option<VersionInfoConfig>,
+}
+
+/// 版本信息，用于写入 PE 文件的 Version Info 资源。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct VersionInfoConfig {
+    #[serde(default)]
+    pub company_name: Option<String>,
+    #[serde(default)]
+    pub file_description: Option<String>,
+    #[serde(default)]
+    pub file_version: Option<String>,
+    #[serde(default)]
+    pub product_name: Option<String>,
+    #[serde(default)]
+    pub product_version: Option<String>,
+    #[serde(default)]
+    pub copyright: Option<String>,
+    #[serde(default)]
+    pub original_filename: Option<String>,
 }
 
 // ── 序列化 / 反序列化 ──────────────────────────────────────────────────────
