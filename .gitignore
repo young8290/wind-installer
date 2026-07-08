@@ -24,6 +24,8 @@ Desktop.ini
 # OMC (开发工具状态)
 .omc/
 .remember/
+.superpowers/
+docs/superpowers/
 
 # 临时文件
 *.tmp
