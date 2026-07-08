@@ -244,8 +244,6 @@ dependencies = [
 [[package]]
 name = "editpe"
 version = "0.2.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "614fce8b3477e83c2c52a5195e77c35e93ee4740b552643eb99e31c5e9a26625"
 dependencies = [
  "debug-ignore",
  "foldhash",

@@ -82,3 +82,8 @@ path = "src/uninstaller_main.rs"
 name = "wind-packer"
 path = "tools/packer/main.rs"
 required-features = ["packer"]
+
+# 本地修补 editpe：上游 0.2.3 的 VersionInfo::build() 用 UTF-8 字节数（String::len()）
+# 计算版本资源头部长度，含中文时结构错乱、Windows 读不到版本信息。vendor 副本已修为 UTF-16 码元数。
+[patch.crates-io]
+editpe = { path = "vendor/editpe" }
