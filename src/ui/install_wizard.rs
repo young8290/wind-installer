@@ -331,10 +331,18 @@ pub fn run_install_wizard() {
                             }
                         };
 
-                        let entries: Vec<crate::archive::format::ArchiveEntry> =
-                            archive.entries().to_vec();
+                        // 便携模式不释放卸载器：外部程序以该文件的存在判定为安装版
+                        let entries: Vec<crate::archive::format::ArchiveEntry> = archive
+                            .entries()
+                            .iter()
+                            .filter(|e| {
+                                mode == InstallMode::Standard
+                                    || !crate::installer::is_uninstaller_entry(&e.path)
+                            })
+                            .cloned()
+                            .collect();
                         let total = entries.len();
-                        log.log(&format!("归档共 {} 个文件", total));
+                        log.log(&format!("待释放 {} 个文件", total));
                         let _ = tx.send(ProgressMsg::Total(total));
 
                         let exe_path = std::env::current_exe().unwrap();
@@ -376,7 +384,7 @@ pub fn run_install_wizard() {
 
                         if mode == InstallMode::Standard {
                             // 给卸载器追加清单 overlay，使其自包含——安装目录不留散落文件
-                            let uninstaller = config.install_dir.join("uninstall.exe");
+                            let uninstaller = config.install_dir.join(crate::installer::UNINSTALLER_NAME);
                             if uninstaller.exists() {
                                 if let Err(e) = crate::archive::append_manifest_overlay(
                                     &uninstaller,

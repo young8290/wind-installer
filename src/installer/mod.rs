@@ -14,6 +14,14 @@ use config::InstallConfig;
 use crate::archive::ArchiveReader;
 use crate::meta;
 
+/// 卸载器文件名（安装目录内）
+pub const UNINSTALLER_NAME: &str = "uninstall.exe";
+
+/// 判断归档条目是否为卸载器。便携模式不释放它——外部程序以该文件的存在判定为安装版。
+pub fn is_uninstaller_entry(path: &str) -> bool {
+    path.eq_ignore_ascii_case(UNINSTALLER_NAME)
+}
+
 /// 安装模式
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InstallMode {
@@ -61,7 +69,7 @@ pub fn perform_install(config: &InstallConfig, mode: InstallMode) -> InstallResu
     // 4. 释放文件
     match ArchiveReader::open_current_exe() {
         Ok(mut archive) => {
-            if let Err(e) = extract::extract_files(&mut archive, &config.install_dir) {
+            if let Err(e) = extract::extract_files(&mut archive, &config.install_dir, mode) {
                 let _ = registry::clear_installer_running();
                 return InstallResult {
                     success: false,
@@ -71,7 +79,7 @@ pub fn perform_install(config: &InstallConfig, mode: InstallMode) -> InstallResu
             }
             // 给卸载器追加清单 overlay，使其自包含——安装目录不留任何散落文件
             if mode == InstallMode::Standard {
-                let uninstaller = config.install_dir.join("uninstall.exe");
+                let uninstaller = config.install_dir.join(UNINSTALLER_NAME);
                 if uninstaller.exists() {
                     if let Err(e) = crate::archive::append_manifest_overlay(
                         &uninstaller,
