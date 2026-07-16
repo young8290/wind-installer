@@ -5,8 +5,11 @@
 #  无需重新编译 stub：
 #       wind-packer build --config app.toml --stub wind-installer.exe
 #
-#  [app]/[ui]/[ime]/[[font]] 会被嵌入归档头部，由安装/卸载器运行期读取；
-#  [package] 仅打包时使用，不进归档。
+#  [app]/[ui]/[ime]/[[font]]/[autostart]/[[shortcut]]/[startup] 会被嵌入归档头部，
+#  由安装/卸载器运行期读取；[package] 仅打包时使用，不进归档。
+#
+#  能力段（[ime]/[[font]]/[autostart]/[[shortcut]]/[startup]）遵循同一约定：
+#  **整段缺省 = 该能力不执行**。删掉不需要的段即可，无需改代码。
 # ============================================================================
 
 [app]
@@ -48,6 +51,36 @@ dll_x86      = "wind_tsf_x86.dll"         # 留空则跳过 32 位注册
 file         = "HeiTiZiGen.ttf"
 display_name = "黑体字根 (TrueType)"
 source_rel   = "data/schemas/wubi86/HeiTiZiGen.ttf"   # 相对安装目录
+
+# ── 开机自启动：整段缺省即不注册（写 HKCU\...\Run，键名 = app.id）──────────
+[autostart]
+enabled = true                            # 段落存在即默认 true；置 false 可保留配置但不生效
+exe     = "wind_input.exe"                # 留空则回退 app.main_exe
+args    = ""                              # 附加命令行参数
+
+# ── 快捷方式：可多条，缺省即不创建 ────────────────────────────────────────
+#    location = "start_menu"（开始菜单 app.start_menu_folder 子目录）或 "desktop"（公共桌面）
+#    name 留空则取 target 去扩展名后的文件名
+[[shortcut]]
+target   = "wind_setting.exe"
+name     = "清风输入法 设置"
+location = "start_menu"
+
+[[shortcut]]
+target   = "uninstall.exe"
+name     = "卸载 清风输入法"
+location = "start_menu"
+
+# ── 安装完成后的启动行为：整段缺省即不启动任何程序 ─────────────────────────
+[startup]
+prestart = true                           # 装完立即以 DETACHED_PROCESS 启动
+exe      = "wind_input.exe"               # 留空则回退 app.main_exe
+
+# ── 用户数据目录配置：整段缺省即不写。普通应用通常删除本段 ─────────────────
+#    首次安装时把向导中选定的数据目录写入 %LOCALAPPDATA%\{app.id}\{conf_file}，
+#    供主程序启动时读取；升级时跳过以保留用户既有配置。
+[datadir]
+conf_file = "datadir.conf"
 
 # ── 打包参数（仅 wind-packer 使用，不进归档）──────────────────────────────
 [package]

@@ -8,6 +8,9 @@ use windui::signal::signal;
 use windui::spec::Align;
 use windui::ui::{Element, WindowButtonKind};
 
+use windui::prelude::Sender;
+
+use crate::installer::step::Reporter;
 use crate::installer::InstallMode;
 use crate::meta;
 use super::theme;
@@ -18,9 +21,50 @@ const PAGE_FINISH: usize = 2;
 
 enum ProgressMsg {
     Status(String),
-    Total(usize),
-    Done(usize),
+    /// 总体进度 ∈ [0,1]，由 [`GuiReporter`] 按「已完成步骤 + 步内比例」折算。
+    Progress(f32),
     Finished(bool, String),
+}
+
+/// 把 [`Reporter`] 事件转成 UI 通道消息，并同步写安装日志。
+///
+/// 进度按步骤折算而非按文件数——旧实现只统计解压文件数，导致注册类步骤全部
+/// 挤在 99% 处不动。
+struct GuiReporter {
+    tx: Sender<ProgressMsg>,
+    logger: crate::util::log::InstallLogger,
+    index: usize,
+    total: usize,
+}
+
+impl GuiReporter {
+    fn emit(&self, fraction_within_step: f32) {
+        let overall = (self.index as f32 + fraction_within_step) / self.total.max(1) as f32;
+        let _ = self.tx.send(ProgressMsg::Progress(overall.clamp(0.0, 0.99)));
+    }
+}
+
+impl Reporter for GuiReporter {
+    fn step_begin(&mut self, index: usize, total: usize, name: &str) {
+        self.index = index;
+        self.total = total;
+        self.logger.log(name);
+        let _ = self.tx.send(ProgressMsg::Status(name.to_string()));
+        self.emit(0.0);
+    }
+
+    fn step_progress(&mut self, detail: &str, fraction: f32) {
+        self.logger.log(&format!("  {}", detail));
+        self.emit(fraction);
+    }
+
+    fn log(&mut self, msg: &str) {
+        self.logger.log(msg);
+    }
+
+    fn warn(&mut self, msg: &str) {
+        self.logger.log(&format!("  警告: {}", msg));
+    }
 }
 
 pub fn run_install_wizard() {
@@ -35,10 +79,8 @@ pub fn run_install_wizard() {
     let install_dir       = signal(default_install_dir());
     let install_dir_portable = signal(default_portable_dir());
     let data_dir          = signal(default_data_dir());
-    let use_custom_data_dir = signal(false);
     let progress_text     = signal(String::from("正在准备安装..."));
     let progress_value    = signal(0.0f32);
-    let progress_total    = signal(1usize);
     let finish_success    = signal(false);
     let finish_error      = signal(String::new());
     let config_error      = signal(String::new());
@@ -47,12 +89,8 @@ pub fn run_install_wizard() {
     // ---- 跨线程进度通道（on_message 在 UI 线程调用，可直接写 Signal）----
     let mut app = App::new(title.as_str(), win_w, win_h);
     let tx = app.channel::<ProgressMsg>(move |msg| match msg {
-        ProgressMsg::Status(s) => progress_text.set(s),
-        ProgressMsg::Total(t)  => progress_total.set(t.max(1)),
-        ProgressMsg::Done(n)   => {
-            let total = progress_total.get();
-            progress_value.set((n as f32 / total as f32).min(0.99));
-        }
+        ProgressMsg::Status(s)   => progress_text.set(s),
+        ProgressMsg::Progress(f) => progress_value.set(f),
         ProgressMsg::Finished(ok, detail) => {
             progress_value.set(1.0);
             finish_success.set(ok);
@@ -274,7 +312,6 @@ pub fn run_install_wizard() {
                         expand_env_path(&install_dir_portable.get())
                     };
                     let data_dir_val   = expand_env_path(&data_dir.get());
-                    let use_custom     = use_custom_data_dir.get();
                     let mode           = if install_mode.get() == 0 {
                         InstallMode::Standard
                     } else {
@@ -283,175 +320,58 @@ pub fn run_install_wizard() {
 
                     let tx = tx.clone();
                     std::thread::spawn(move || {
-                        let mut log = crate::util::log::InstallLogger::new();
-                        log.log(&format!("安装目录: {:?}", install_dir_val));
-                        log.log(&format!("安装模式: {:?}", mode));
-
-                        macro_rules! step {
-                            ($msg:expr) => {{
-                                log.log($msg);
-                                tx.send(ProgressMsg::Status($msg.into())).ok();
-                            }};
-                        }
+                        let mut logger = crate::util::log::InstallLogger::new();
+                        logger.log(&format!("安装目录: {:?}", install_dir_val));
+                        logger.log(&format!("安装模式: {:?}", mode));
+                        let log_path = logger.path.to_string_lossy().to_string();
 
                         let mut config = crate::installer::config::InstallConfig::default();
                         config.install_dir = install_dir_val;
-                        if use_custom {
-                            config.custom_data_dir = Some(data_dir_val.clone());
-                            config.use_custom_data_dir = true;
-                        }
+                        // 数据目录始终取向导里的值（其默认值即 default_data_dir()），
+                        // config 是步骤读取数据目录的唯一入口
+                        config.custom_data_dir = Some(data_dir_val);
+                        config.use_custom_data_dir = true;
 
-                        if mode == InstallMode::Standard {
-                            step!("正在停止旧进程...");
-                            if let Err(e) = crate::installer::process::terminate_windinput_processes() {
-                                log.log(&format!("  警告: {}", e));
-                            }
-                        }
-
-                        if mode == InstallMode::Standard && crate::meta::manifest().ime.is_some() {
-                            step!("正在反注册旧 COM...");
-                            if let Err(e) = crate::installer::ime::unregister_old_com(&config.install_dir) {
-                                log.log(&format!("  警告: {}", e));
-                            }
-                        }
-
-                        if mode == InstallMode::Standard {
-                            step!("正在清理旧版遗留文件...");
-                            crate::installer::legacy::cleanup_legacy(&config.install_dir);
-                        }
-
-                        step!("正在读取安装数据...");
-                        let archive = match crate::archive::ArchiveReader::open_current_exe() {
+                        let mut archive = match crate::archive::ArchiveReader::open_current_exe() {
                             Ok(a) => a,
                             Err(e) => {
                                 let msg = format!("无法打开安装数据: {}", e);
-                                log.log_error(&msg);
+                                logger.log_error(&msg);
                                 tx.send(ProgressMsg::Finished(false, msg)).ok();
                                 return;
                             }
                         };
 
-                        // 便携模式不释放卸载器：外部程序以该文件的存在判定为安装版
-                        let entries: Vec<crate::archive::format::ArchiveEntry> = archive
-                            .entries()
-                            .iter()
-                            .filter(|e| {
-                                mode == InstallMode::Standard
-                                    || !crate::installer::is_uninstaller_entry(&e.path)
-                            })
-                            .cloned()
-                            .collect();
-                        let total = entries.len();
-                        log.log(&format!("待释放 {} 个文件", total));
-                        let _ = tx.send(ProgressMsg::Total(total));
+                        // 与静默路径共用同一份计划，仅 Reporter 不同
+                        let plan = crate::installer::plan::plan_install(crate::meta::manifest(), mode);
+                        let mut reporter = GuiReporter {
+                            tx: tx.clone(),
+                            logger,
+                            index: 0,
+                            total: plan.len(),
+                        };
 
-                        let exe_path = std::env::current_exe().unwrap();
-                        let mut thread_archive = match crate::archive::ArchiveReader::open(&exe_path) {
-                            Ok(a) => a,
+                        let result = crate::installer::step::run_plan(
+                            &plan,
+                            &config,
+                            mode,
+                            is_fresh_install,
+                            &mut archive,
+                            &mut reporter,
+                        );
+
+                        match result {
+                            Ok(_) => {
+                                reporter.log("=== 安装完成 ===");
+                                tx.send(ProgressMsg::Finished(true, log_path)).ok();
+                            }
                             Err(e) => {
-                                let msg = format!("无法读取安装数据: {}", e);
-                                log.log_error(&msg);
-                                tx.send(ProgressMsg::Finished(false, msg)).ok();
-                                return;
+                                // 致命失败：清除标志，否则宿主进程将永久停摆
+                                let _ = crate::installer::registry::clear_installer_running();
+                                reporter.log(&format!("=== 安装失败: {} ===", e));
+                                tx.send(ProgressMsg::Finished(false, e)).ok();
                             }
-                        };
-
-                        let _ = std::fs::create_dir_all(&config.install_dir);
-
-                        step!("正在解压数据...");
-                        if let Err(e) = thread_archive.prepare() {
-                            let msg = format!("解压失败: {}", e);
-                            log.log_error(&msg);
-                            tx.send(ProgressMsg::Finished(false, msg)).ok();
-                            return;
                         }
-
-                        step!("正在释放文件...");
-                        for (i, entry) in entries.iter().enumerate() {
-                            let dest = config.install_dir.join(&entry.path);
-                            log.log(&format!("  解压: {}", entry.path));
-                            let _ = tx.send(ProgressMsg::Status(
-                                format!("正在安装 {}", entry.path)
-                            ));
-                            if let Err(e) = thread_archive.extract_entry(entry, &dest) {
-                                let msg = format!("解压失败 {}: {}", entry.path, e);
-                                log.log_error(&msg);
-                                tx.send(ProgressMsg::Finished(false, msg)).ok();
-                                return;
-                            }
-                            let _ = tx.send(ProgressMsg::Done(i + 1));
-                        }
-
-                        if mode == InstallMode::Standard {
-                            // 给卸载器追加清单 overlay，使其自包含——安装目录不留散落文件
-                            let uninstaller = config.install_dir.join(crate::installer::UNINSTALLER_NAME);
-                            if uninstaller.exists() {
-                                if let Err(e) = crate::archive::append_manifest_overlay(
-                                    &uninstaller,
-                                    thread_archive.manifest_bytes(),
-                                    thread_archive.logo_bytes(),
-                                ) {
-                                    log.log(&format!("  警告: 写入卸载器清单失败: {}", e));
-                                }
-                            }
-                            step!("正在设置文件权限...");
-                            if let Err(e) = crate::installer::acl::set_dll_permissions(&config.install_dir) {
-                                log.log(&format!("  警告: {}", e));
-                            }
-                            if !crate::meta::manifest().font.is_empty() {
-                                step!("正在安装字体...");
-                                if let Err(e) = crate::installer::font::install_font(&config.install_dir) {
-                                    log.log(&format!("  警告: {}", e));
-                                }
-                            }
-                            if crate::meta::manifest().ime.is_some() {
-                                step!("正在注册 COM 组件...");
-                                if let Err(e) = crate::installer::ime::register_com(&config.install_dir) {
-                                    log.log(&format!("  警告: {}", e));
-                                }
-                                step!("正在注册系统输入法...");
-                                if let Err(e) = crate::installer::ime::register_input_method() {
-                                    log.log(&format!("  警告: {}", e));
-                                }
-                            }
-                            step!("正在配置开机自启动...");
-                            if let Err(e) = crate::installer::registry::set_auto_start(&config.install_dir) {
-                                log.log(&format!("  警告: {}", e));
-                            }
-                            if !crate::meta::url_protocol().is_empty() {
-                                step!("正在注册协议...");
-                                if let Err(e) = crate::installer::registry::register_url_protocol(&config.install_dir) {
-                                    log.log(&format!("  警告: {}", e));
-                                }
-                            }
-                            step!("正在创建快捷方式...");
-                            if let Err(e) = crate::installer::shortcut::create_shortcuts(&config.install_dir) {
-                                log.log(&format!("  警告: {}", e));
-                            }
-                            step!("正在写入卸载信息...");
-                            if let Err(e) = crate::installer::registry::write_uninstall_info(&config) {
-                                log.log(&format!("  警告: {}", e));
-                            }
-                            // 首次安装：写入用户数据目录配置
-                            if is_fresh_install {
-                                if let Err(e) = crate::installer::userdata::write_datadir_conf(&data_dir_val) {
-                                    log.log(&format!("  警告: {}", e));
-                                }
-                            }
-                            step!("正在启动服务...");
-                            if let Err(e) = crate::installer::process::prestart_service(&config.install_dir) {
-                                log.log(&format!("  警告: {}", e));
-                            }
-                        } else {
-                            let _ = std::fs::write(
-                                config.install_dir.join(crate::meta::portable_marker()),
-                                "portable=1\n",
-                            );
-                        }
-
-                        log.log("=== 安装完成 ===");
-                        let log_path = log.path.to_string_lossy().to_string();
-                        tx.send(ProgressMsg::Finished(true, log_path)).ok();
                     });
                 })
         )

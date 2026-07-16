@@ -1,29 +1,6 @@
+//! 文件释放辅助。释放主流程见 `steps::ExtractFiles`。
+
 use std::path::Path;
-
-use crate::archive::ArchiveReader;
-use crate::installer::{is_uninstaller_entry, InstallMode};
-
-/// 从归档中释放文件到目标目录；便携模式跳过卸载器
-pub fn extract_files(
-    archive: &mut ArchiveReader,
-    install_dir: &Path,
-    mode: InstallMode,
-) -> Result<(), String> {
-    // 创建安装目录
-    std::fs::create_dir_all(install_dir)
-        .map_err(|e| format!("Failed to create install directory: {}", e))?;
-
-    archive.prepare()?;
-    let entries = archive.entries().to_vec();
-    for entry in &entries {
-        if mode == InstallMode::Portable && is_uninstaller_entry(&entry.path) {
-            continue;
-        }
-        archive.extract_entry(entry, &install_dir.join(&entry.path))?;
-    }
-
-    Ok(())
-}
 
 /// 检查文件是否被锁定
 pub fn is_file_locked(path: &Path) -> bool {

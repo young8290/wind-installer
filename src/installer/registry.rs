@@ -3,18 +3,25 @@ use std::path::Path;
 use winreg::enums::*;
 use winreg::RegKey;
 
+use crate::manifest::AutoStartInfo;
 use crate::meta;
 use super::config::InstallConfig;
 
-/// 卸载信息注册表路径（运行时构造，依赖编译期 APP_DISPLAY_NAME）
+/// 卸载信息注册表路径（运行时由清单 display_name 构造）
 fn uninst_key() -> String {
     format!(r"Software\Microsoft\Windows\CurrentVersion\Uninstall\{}", meta::app_display_name())
 }
 
-/// 设置开机自启动
-pub fn set_auto_start(install_dir: &Path) -> Result<(), String> {
-    let exe_path = install_dir.join(meta::main_exe());
+/// 设置开机自启动，目标与参数由清单 [autostart] 段声明
+pub fn set_auto_start(install_dir: &Path, info: &AutoStartInfo) -> Result<(), String> {
+    let exe_path = install_dir.join(info.exe_or(meta::main_exe()));
     let exe_path_str = exe_path.to_string_lossy().to_string();
+
+    let command = if info.args.trim().is_empty() {
+        format!("\"{}\"", exe_path_str)
+    } else {
+        format!("\"{}\" {}", exe_path_str, info.args.trim())
+    };
 
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let run_key = hkcu
@@ -25,7 +32,7 @@ pub fn set_auto_start(install_dir: &Path) -> Result<(), String> {
         .map_err(|e| format!("Failed to open Run key: {}", e))?;
 
     run_key
-        .set_value(meta::app_id(), &format!("\"{}\"", exe_path_str))
+        .set_value(meta::app_id(), &command)
         .map_err(|e| format!("Failed to set auto-start: {}", e))?;
 
     Ok(())
@@ -48,7 +55,7 @@ pub fn remove_auto_start() -> Result<(), String> {
     Ok(())
 }
 
-/// 注册 windinput:// URL 协议
+/// 注册清单 app.url_protocol 声明的 URL 协议
 pub fn register_url_protocol(install_dir: &Path) -> Result<(), String> {
     let setting_exe = install_dir.join(meta::setting_exe());
     let setting_exe_str = setting_exe.to_string_lossy().to_string();
@@ -189,7 +196,7 @@ pub fn set_installer_running() -> Result<(), String> {
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
     let (key, _) = hklm
         .create_subkey(&format!("Software\\{}", meta::app_id()))
-        .map_err(|e| format!("Failed to create WindInput key: {}", e))?;
+        .map_err(|e| format!("Failed to create app key: {}", e))?;
 
     key.set_value("InstallerRunning", &"1")
         .map_err(|e| format!("Failed to set InstallerRunning: {}", e))?;

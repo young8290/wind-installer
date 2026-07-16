@@ -22,7 +22,7 @@ pub fn perform_uninstall(options: &CleanupOptions) -> UninstallResult {
     }
 
     // 2. 停止进程
-    if let Err(e) = crate::installer::process::terminate_windinput_processes() {
+    if let Err(e) = crate::installer::process::terminate_app_processes() {
         eprintln!("Warning: Failed to stop processes: {}", e);
     }
 
@@ -50,7 +50,7 @@ pub fn perform_uninstall(options: &CleanupOptions) -> UninstallResult {
     }
 
     // 7. 删除快捷方式
-    if let Err(e) = crate::installer::shortcut::delete_shortcuts() {
+    if let Err(e) = crate::installer::shortcut::delete_shortcuts(&crate::meta::manifest().shortcut) {
         eprintln!("Warning: Failed to delete shortcuts: {}", e);
     }
 

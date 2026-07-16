@@ -153,7 +153,7 @@ pub fn run_uninstall_wizard() {
                                 let _ = crate::installer::registry::set_installer_running();
 
                                 step!("正在停止相关进程...");
-                                let _ = crate::installer::process::terminate_windinput_processes();
+                                let _ = crate::installer::process::terminate_app_processes();
 
                                 if crate::meta::manifest().ime.is_some() {
                                     step!("正在反注册输入法...");
@@ -169,7 +169,9 @@ pub fn run_uninstall_wizard() {
                                 }
 
                                 step!("正在删除快捷方式...");
-                                let _ = crate::installer::shortcut::delete_shortcuts();
+                                let _ = crate::installer::shortcut::delete_shortcuts(
+                                    &crate::meta::manifest().shortcut,
+                                );
 
                                 step!("正在删除安装文件...");
                                 let _ = crate::uninstaller::cleanup::delete_install_files(&options.install_dir);

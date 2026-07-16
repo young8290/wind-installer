@@ -1,83 +1,103 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
+use crate::manifest::{ShortcutInfo, ShortcutLocation};
 use crate::meta;
 
-/// 创建开始菜单快捷方式
-pub fn create_shortcuts(install_dir: &Path) -> Result<(), String> {
-    let start_menu_dir = get_start_menu_folder();
-    let setting_exe = install_dir.join(meta::setting_exe());
-    let uninstall_exe = install_dir.join("uninstall.exe");
+/// 创建清单 [[shortcut]] 段声明的快捷方式。目标不存在的条目跳过（不报错）。
+pub fn create_shortcuts(install_dir: &Path, items: &[ShortcutInfo]) -> Result<(), String> {
+    for item in items {
+        let target = install_dir.join(&item.target);
+        if !target.exists() {
+            continue;
+        }
 
-    std::fs::create_dir_all(&start_menu_dir)
-        .map_err(|e| format!("Failed to create start menu directory: {}", e))?;
+        let dir = location_dir(item.location);
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| format!("无法创建快捷方式目录 {:?}: {}", dir, e))?;
 
-    if setting_exe.exists() {
-        let shortcut_path = start_menu_dir.join(format!("{} 设置.lnk", meta::app_display_name()));
+        let link_path = dir.join(format!("{}.lnk", item.effective_name()));
         create_shortcut(
-            &setting_exe,
-            &shortcut_path,
-            Some(&install_dir.to_string_lossy()),
-            Some(&format!("{} 设置", meta::app_display_name())),
+            &target,
+            &link_path,
+            &install_dir.to_string_lossy(),
+            item.effective_description(),
         )?;
     }
-
-    if uninstall_exe.exists() {
-        let shortcut_path = start_menu_dir.join(format!("卸载 {}.lnk", meta::app_display_name()));
-        create_shortcut(
-            &uninstall_exe,
-            &shortcut_path,
-            Some(&install_dir.to_string_lossy()),
-            Some(&format!("卸载 {}", meta::app_display_name())),
-        )?;
-    }
-
     Ok(())
 }
 
-/// 创建单个快捷方式
+/// 删除清单声明的快捷方式：开始菜单整个文件夹 + 逐个桌面快捷方式。
+///
+/// 开始菜单删除失败不提前返回——否则会跳过桌面清理，在桌面留下孤儿 .lnk。
+pub fn delete_shortcuts(items: &[ShortcutInfo]) -> Result<(), String> {
+    let mut errors = Vec::new();
+
+    let start_menu = start_menu_dir();
+    if start_menu.exists() {
+        if let Err(e) = std::fs::remove_dir_all(&start_menu) {
+            errors.push(format!("无法删除开始菜单目录: {}", e));
+        }
+    }
+
+    // 桌面快捷方式散落在公共桌面，只能按名字逐个删
+    for item in items
+        .iter()
+        .filter(|i| i.location == ShortcutLocation::Desktop)
+    {
+        let link = desktop_dir().join(format!("{}.lnk", item.effective_name()));
+        if link.exists() {
+            if let Err(e) = std::fs::remove_file(&link) {
+                errors.push(format!("无法删除桌面快捷方式 {:?}: {}", link, e));
+            }
+        }
+    }
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
+    }
+}
+
 fn create_shortcut(
     target: &Path,
-    shortcut_path: &Path,
-    working_dir: Option<&str>,
-    description: Option<&str>,
+    link_path: &Path,
+    working_dir: &str,
+    description: &str,
 ) -> Result<(), String> {
     let mut link = mslnk::ShellLink::new(target)
-        .map_err(|e| format!("Failed to create link: {}", e))?;
+        .map_err(|e| format!("无法创建快捷方式对象: {}", e))?;
 
-    if let Some(dir) = working_dir {
-        link.set_working_dir(Some(dir.to_string()));
-    }
+    link.set_working_dir(Some(working_dir.to_string()));
+    link.set_name(Some(description.to_string()));
 
-    if let Some(desc) = description {
-        link.set_name(Some(desc.to_string()));
-    }
-
-    link.create_lnk(shortcut_path)
-        .map_err(|e| format!("Failed to save shortcut: {}", e))?;
+    link.create_lnk(link_path)
+        .map_err(|e| format!("无法保存快捷方式 {:?}: {}", link_path, e))?;
 
     Ok(())
 }
 
-/// 删除开始菜单快捷方式
-pub fn delete_shortcuts() -> Result<(), String> {
-    let start_menu_dir = get_start_menu_folder();
-
-    if start_menu_dir.exists() {
-        std::fs::remove_dir_all(&start_menu_dir)
-            .map_err(|e| format!("Failed to remove start menu directory: {}", e))?;
+fn location_dir(loc: ShortcutLocation) -> PathBuf {
+    match loc {
+        ShortcutLocation::StartMenu => start_menu_dir(),
+        ShortcutLocation::Desktop => desktop_dir(),
     }
-
-    Ok(())
 }
 
-/// 获取开始菜单快捷方式目录
-fn get_start_menu_folder() -> std::path::PathBuf {
-    let program_data = std::env::var("ProgramData")
-        .unwrap_or_else(|_| r"C:\ProgramData".to_string());
-    std::path::PathBuf::from(program_data)
+/// 全局开始菜单下的应用文件夹。
+fn start_menu_dir() -> PathBuf {
+    let program_data =
+        std::env::var("ProgramData").unwrap_or_else(|_| r"C:\ProgramData".to_string());
+    PathBuf::from(program_data)
         .join("Microsoft")
         .join("Windows")
         .join("Start Menu")
         .join("Programs")
         .join(meta::start_menu_folder())
+}
+
+/// 公共桌面（对所有用户可见）。
+fn desktop_dir() -> PathBuf {
+    let public = std::env::var("PUBLIC").unwrap_or_else(|_| r"C:\Users\Public".to_string());
+    PathBuf::from(public).join("Desktop")
 }

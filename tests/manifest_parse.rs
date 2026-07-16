@@ -72,6 +72,59 @@ fn project_config_parses_all_sections() {
     assert_eq!(cfg.package.icon, "assets/installer.ico");
 }
 
+/// 仓库自带的 app.toml 必须始终能被当前结构体解析——防止配置与代码漂移。
+#[test]
+fn repo_app_toml_parses_with_all_capability_sections() {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/app.toml");
+    let text = std::fs::read_to_string(path).expect("读取仓库 app.toml 失败");
+    let cfg = ProjectConfig::from_toml_str(&text).expect("解析仓库 app.toml 失败");
+
+    let autostart = cfg.manifest.autostart.as_ref().expect("应有 autostart 段");
+    assert!(autostart.enabled);
+    assert_eq!(autostart.exe_or("fallback.exe"), "wind_input.exe");
+
+    assert_eq!(cfg.manifest.shortcut.len(), 2);
+    assert_eq!(cfg.manifest.shortcut[0].effective_name(), "清风输入法 设置");
+
+    assert!(cfg.manifest.startup.as_ref().expect("应有 startup 段").prestart);
+    assert_eq!(
+        cfg.manifest.datadir.as_ref().expect("应有 datadir 段").conf_file,
+        "datadir.conf"
+    );
+}
+
+/// 能力段的空值回退：name 取 target 文件名，exe 回退 main_exe。
+#[test]
+fn capability_fallbacks_resolve_from_target_and_main_exe() {
+    let toml = r#"
+[app]
+id           = "MyApp"
+display_name = "My App"
+version      = "1.0.0"
+publisher    = "Me"
+main_exe     = "app.exe"
+
+[autostart]
+
+[[shortcut]]
+target = "bin/tool.exe"
+
+[startup]
+prestart = true
+"#;
+    let m = AppManifest::from_toml_bytes(toml.as_bytes()).expect("解析失败");
+
+    let autostart = m.autostart.as_ref().unwrap();
+    assert!(autostart.enabled, "段落存在即默认启用");
+    assert_eq!(autostart.exe_or(&m.app.main_exe), "app.exe");
+
+    // name 留空 → 取 target 的文件名去扩展名；description 留空 → 回退 name
+    assert_eq!(m.shortcut[0].effective_name(), "tool");
+    assert_eq!(m.shortcut[0].effective_description(), "tool");
+
+    assert_eq!(m.startup.as_ref().unwrap().exe_or(&m.app.main_exe), "app.exe");
+}
+
 #[test]
 fn manifest_toml_byte_roundtrip_preserves_all_fields() {
     let cfg = ProjectConfig::from_toml_str(SAMPLE).unwrap();

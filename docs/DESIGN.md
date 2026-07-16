@@ -113,31 +113,61 @@ Offset  Size      Field
 - 解压较慢但压缩包更小
 - 适合对体积极度敏感的场景
 
-## 5. WindInput 安装流程
+## 5. 安装流程
 
-### 5.1 标准安装
+### 5.1 编排架构
 
-1. **检测环境**：64 位系统检查
-2. **检测已安装版本**：读取注册表 `UninstallString`
-3. **停止进程**：wind_input, wind_setting, wind_portable
-4. **反注册旧 COM**：regsvr32 /u
-5. **释放文件**：流式解压到安装目录
-6. **设置权限**：ALL APPLICATION PACKAGES 读取执行
-7. **安装字体**：HeiTiZiGen.ttf → %WINDIR%\Fonts\
-8. **注册 COM**：regsvr32
-9. **注册输入法**：InstallLayoutOrTip
-10. **配置自启动**：HKCU Run 键
-11. **注册 URL 协议**：windinput://
-12. **创建快捷方式**：开始菜单
-13. **写入卸载信息**：注册表 + 生成 uninstall.exe
-14. **预启动服务**：wind_input.exe
+安装流程不是一条写死的语句序列，而是由清单**声明式装配**出的步骤计划：
 
-### 5.2 便携安装
+```
+app.toml ──► AppManifest ──► plan::plan_install(manifest, mode) ──► Vec<Box<dyn Step>>
+                                                                          │
+                                                    step::run_plan(&mut dyn Reporter)
+                                                                          │
+                                                    ┌─────────────────────┴──────────────┐
+                                              CliReporter                          GuiReporter
+                                            (--silent, stderr)              (向导，channel → 进度条)
+```
 
-1. 解压文件到指定目录
-2. 创建 wind_portable_mode 标记文件
-3. 不修改系统注册表
-4. 不注册 COM/TSF
+- **`plan_install` 是「装什么、按什么顺序装」的唯一真相**。GUI 与静默路径共用同一份计划，
+  差异仅在 `Reporter` 实现——历史上两条链各自手写，已漂移出缺陷。
+- **能力段缺省 = 该步骤不入计划**：`[ime]`/`[[font]]`/`[autostart]`/`[[shortcut]]`/
+  `[startup]`/`[datadir]` 任一缺省，对应步骤不会出现在计划里。新增能力 =
+  加一个 `impl Step` + 在 planner 里加一行门控。
+- **失败语义**由 `Step::fatal()` 决定：解压类步骤失败即中止；注册类步骤失败仅记警告并继续。
+- 进度按「已完成步骤数 + 步内比例」折算，而非按解压文件数。
+
+### 5.2 标准安装（步骤计划）
+
+按 `plan_install` 装配顺序，括号内为门控条件（无标注则无条件）：
+
+1. **写 InstallerRunning 标志**：防止宿主进程在安装期间被其他组件重新拉起
+2. **停止进程**（`app.process_names` 非空）
+3. **反注册旧 COM**（含 `[ime]`）
+4. **清理旧版遗留文件**（`legacy_files`/`legacy_dirs` 非空）
+5. **解压数据 + 释放文件**：致命步骤，失败即中止
+6. **追加卸载器清单 overlay**：使 uninstall.exe 自包含
+7. **设置权限**（`acl_dlls` 非空）：ALL APPLICATION PACKAGES 读取执行
+8. **安装字体**（含 `[[font]]`）
+9. **注册 COM + 注册输入法**（含 `[ime]`）
+10. **配置自启动**（含 `[autostart]` 且 `enabled`）：HKCU Run 键
+11. **注册 URL 协议**（`url_protocol` 非空）
+12. **创建快捷方式**（含 `[[shortcut]]`）：开始菜单 / 桌面
+13. **写入卸载信息**：Add/Remove Programs 注册表项
+14. **写数据目录配置**（含 `[datadir]` 且首次安装）
+15. **预启动**（含 `[startup]` 且 `prestart`）
+16. **清除 InstallerRunning 标志**
+
+「是否首次安装」按**机器**判定（注册表 `DisplayVersion`），而非按安装目录——
+`datadir.conf` 写在 `%LOCALAPPDATA%` 是机器全局的，两者维度必须对齐。
+
+### 5.3 便携安装
+
+计划恒为三步，**不触碰系统任何位置**（即便清单声明了输入法/字体/自启动）：
+
+1. 解压数据
+2. 释放文件（**跳过 uninstall.exe**——便携版检测到该文件会误判为安装版）
+3. 写入 `app.portable_marker` 标记文件
 
 ## 6. 卸载流程
 

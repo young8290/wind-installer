@@ -30,6 +30,18 @@ pub struct AppManifest {
     /// 需要安装到系统的字体。空 = 跳过字体安装。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub font: Vec<FontInfo>,
+    /// 开机自启动。整段缺省 = 不注册自启动。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub autostart: Option<AutoStartInfo>,
+    /// 快捷方式。空 = 不创建任何快捷方式。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shortcut: Vec<ShortcutInfo>,
+    /// 安装完成后的启动行为。整段缺省 = 不启动任何程序。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub startup: Option<StartupInfo>,
+    /// 用户数据目录配置落盘。整段缺省 = 不写——普通应用不需要这个约定。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub datadir: Option<DataDirInfo>,
 }
 
 /// 应用身份与安装行为。
@@ -129,6 +141,100 @@ pub struct FontInfo {
     pub display_name: String,
     /// 字体源路径，相对安装目录（如 "data/schemas/wubi86/HeiTiZiGen.ttf"）。
     pub source_rel: String,
+}
+
+/// 开机自启动（写 HKCU\...\Run）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AutoStartInfo {
+    /// 段落存在即默认启用；置 false 可保留配置但不生效。
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// 自启动的可执行文件（相对安装目录），空则回退到 app.main_exe。
+    #[serde(default)]
+    pub exe: String,
+    /// 附加命令行参数。
+    #[serde(default)]
+    pub args: String,
+}
+
+impl AutoStartInfo {
+    /// 自启动目标文件名，空则回退到 main_exe。
+    pub fn exe_or<'a>(&'a self, main_exe: &'a str) -> &'a str {
+        non_empty(&self.exe).unwrap_or(main_exe)
+    }
+}
+
+/// 快捷方式落地位置。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ShortcutLocation {
+    /// 全局开始菜单的 app.start_menu_folder 子目录。
+    #[default]
+    StartMenu,
+    /// 公共桌面。
+    Desktop,
+}
+
+/// 快捷方式定义。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShortcutInfo {
+    /// 目标可执行文件（相对安装目录）。
+    pub target: String,
+    /// 快捷方式显示名（不含 .lnk），空则回退到 target 去扩展名后的文件名。
+    #[serde(default)]
+    pub name: String,
+    /// 落地位置。
+    #[serde(default)]
+    pub location: ShortcutLocation,
+    /// 快捷方式描述（悬停提示），空则回退到 name。
+    #[serde(default)]
+    pub description: String,
+}
+
+impl ShortcutInfo {
+    /// 显示名，空则取 target 的文件名去扩展名。
+    pub fn effective_name(&self) -> &str {
+        non_empty(&self.name).unwrap_or_else(|| {
+            let file = self
+                .target
+                .rsplit(['/', '\\'])
+                .next()
+                .unwrap_or(&self.target);
+            file.strip_suffix(".exe").unwrap_or(file)
+        })
+    }
+
+    /// 描述，空则回退到显示名。
+    pub fn effective_description(&self) -> &str {
+        non_empty(&self.description).unwrap_or_else(|| self.effective_name())
+    }
+}
+
+/// 用户数据目录配置：首次安装时把用户选定的数据目录写到
+/// `%LOCALAPPDATA%\{app.id}\{conf_file}`，供主程序启动时读取。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DataDirInfo {
+    /// 配置文件名。
+    #[serde(default = "default_conf_file")]
+    pub conf_file: String,
+}
+
+/// 安装完成后的启动行为。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StartupInfo {
+    /// 安装完成后立即以 DETACHED_PROCESS 启动目标程序。
+    #[serde(default)]
+    pub prestart: bool,
+    /// 启动的可执行文件（相对安装目录），空则回退到 app.main_exe。
+    #[serde(default)]
+    pub exe: String,
+}
+
+impl StartupInfo {
+    /// 预启动目标文件名，空则回退到 main_exe。
+    pub fn exe_or<'a>(&'a self, main_exe: &'a str) -> &'a str {
+        non_empty(&self.exe).unwrap_or(main_exe)
+    }
 }
 
 // ── app.toml 完整映射（打包期）─────────────────────────────────────────────
@@ -234,6 +340,12 @@ fn non_empty(s: &str) -> Option<&str> {
     }
 }
 
+fn default_true() -> bool {
+    true
+}
+fn default_conf_file() -> String {
+    "datadir.conf".to_string()
+}
 fn default_portable_marker() -> String {
     "portable_mode".to_string()
 }
