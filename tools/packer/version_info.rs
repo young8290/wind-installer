@@ -121,7 +121,7 @@ pub fn derive_version_info(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wind_installer::manifest::{AppManifest, AppInfo, PackageConfig};
+    use wind_installer::manifest::ProjectConfig;
 
     #[test]
     fn test_parse_version() {
@@ -137,42 +137,24 @@ mod tests {
         assert_eq!(format_version_4_parts("1.2.3.4"), "1.2.3.4");
     }
 
+    /// 从 TOML 解析而非手工构造结构体：版本推导只关心 app 的几个字段，
+    /// 手写全部字段会让每次给清单加字段都无谓地断掉本测试（serde 默认值本就覆盖了其余项）。
+    const MINIMAL_CONFIG: &str = r#"
+[app]
+id           = "test-app"
+display_name = "测试应用"
+version      = "1.2.3"
+publisher    = "测试发行商"
+main_exe     = "test.exe"
+
+[package]
+compression = "zstd"
+source_dir  = "src"
+"#;
+
     #[test]
     fn test_derive_version_info_default() {
-        let app = AppInfo {
-            id: "test-app".to_string(),
-            display_name: "测试应用".to_string(),
-            version: "1.2.3".to_string(),
-            publisher: "测试发行商".to_string(),
-            description: "".to_string(),
-            main_exe: "test.exe".to_string(),
-            setting_exe: "".to_string(),
-            start_menu_folder: "".to_string(),
-            window_title: "".to_string(),
-            url_protocol: "".to_string(),
-            agreement_url: "".to_string(),
-            portable_marker: "".to_string(),
-            process_names: vec![],
-            acl_dlls: vec![],
-            legacy_files: vec![],
-            legacy_dirs: vec![],
-        };
-        let manifest = AppManifest {
-            app,
-            ui: Default::default(),
-            ime: None,
-            font: vec![],
-        };
-        let package = PackageConfig {
-            compression: "zstd".to_string(),
-            source_dir: "src".to_string(),
-            output_name: "".to_string(),
-            output_dir: "./dist".to_string(),
-            logo: "".to_string(),
-            icon: "".to_string(),
-            version_info: None,
-        };
-        let cfg = ProjectConfig { manifest, package };
+        let cfg = ProjectConfig::from_toml_str(MINIMAL_CONFIG).expect("解析配置失败");
 
         // Test installer derivation
         let info = derive_version_info(&cfg, false);

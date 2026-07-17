@@ -387,10 +387,60 @@ fn cmd_inspect(file: &Path) -> Result<(), String> {
     println!("  display_name  = {}", m.app.display_name);
     println!("  version       = {}", m.app.version);
     println!("  main_exe      = {}", m.app.main_exe);
-    println!("  url_protocol  = {}", m.app.url_protocol);
-    println!("  ime           = {}", if m.ime.is_some() { "有" } else { "无" });
-    println!("  font          = {} 项", m.font.len());
+
+    // 能力段：缺省即该能力不执行，故必须逐项列出「关」的那些——
+    // 一份漏写 [autostart] 的清单打出来的包不会自启，而这在打包期是静默的。
+    println!("能力:");
+    print_capability("输入法注册 [ime]", m.ime.is_some(), || {
+        m.ime.as_ref().map(|i| format!("lang_id={}", i.lang_id)).unwrap_or_default()
+    });
+    print_capability("字体安装 [[font]]", !m.font.is_empty(), || {
+        format!("{} 项", m.font.len())
+    });
+    print_capability(
+        "开机自启 [autostart]",
+        m.autostart.as_ref().is_some_and(|a| a.enabled),
+        || {
+            m.autostart
+                .as_ref()
+                .map(|a| a.exe_or(&m.app.main_exe).to_string())
+                .unwrap_or_default()
+        },
+    );
+    print_capability("快捷方式 [[shortcut]]", !m.shortcut.is_empty(), || {
+        m.shortcut
+            .iter()
+            .map(|s| s.effective_name().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    });
+    print_capability(
+        "装完启动 [startup]",
+        m.startup.as_ref().is_some_and(|s| s.prestart),
+        || {
+            m.startup
+                .as_ref()
+                .map(|s| s.exe_or(&m.app.main_exe).to_string())
+                .unwrap_or_default()
+        },
+    );
+    print_capability("数据目录配置 [datadir]", m.datadir.is_some(), || {
+        m.datadir.as_ref().map(|d| d.conf_file.clone()).unwrap_or_default()
+    });
+    print_capability("URL 协议", !m.app.url_protocol.trim().is_empty(), || {
+        format!("{}://", m.app.url_protocol)
+    });
+
     Ok(())
+}
+
+/// 打印一项能力的开关状态。关闭的能力也要显示——静默缺省正是最难发现的配置错误。
+fn print_capability(name: &str, enabled: bool, detail: impl FnOnce() -> String) {
+    if enabled {
+        println!("  [✓] {:<22} {}", name, detail());
+    } else {
+        println!("  [ ] {:<22} （未声明，不执行）", name);
+    }
 }
 
 // ── PE 版本与图标注入 ────────────────────────────────────────────────────────
