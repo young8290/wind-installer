@@ -24,6 +24,15 @@ pub struct AppManifest {
     pub app: AppInfo,
     #[serde(default)]
     pub ui: UiInfo,
+    /// 向导主题色。缺省项回退到内置默认。
+    #[serde(default)]
+    pub theme: ThemeInfo,
+    /// 默认路径模板。缺省项回退到内置默认。
+    #[serde(default)]
+    pub paths: PathsInfo,
+    /// 可覆盖的领域相关文案。缺省项回退到内置的中性默认。
+    #[serde(default)]
+    pub strings: StringsInfo,
     /// 输入法（TSF）注册信息。整段缺省 = 跳过输入法注册。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ime: Option<ImeInfo>,
@@ -114,6 +123,88 @@ impl Default for UiInfo {
 pub struct WinSize {
     pub w: i32,
     pub h: i32,
+}
+
+/// 向导主题色，`"#RRGGBB"` 或 `"RRGGBB"`。留空的项回退到 `ui::theme` 的内置默认。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ThemeInfo {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub accent: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub accent_hover: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub accent_pressed: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub bg_primary: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub bg_secondary: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub text_primary: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub text_secondary: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub text_muted: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub success: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub error: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub border: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub divider: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub track: String,
+}
+
+/// 默认路径模板。`{id}` 占位符在运行期替换为 `app.id`，`%VAR%` 由向导展开。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PathsInfo {
+    /// 标准安装默认目录。
+    #[serde(default = "default_install_path")]
+    pub install: String,
+    /// 便携模式默认目录。
+    #[serde(default = "default_portable_path")]
+    pub portable: String,
+    /// 用户数据默认目录。
+    #[serde(default = "default_data_path")]
+    pub data: String,
+}
+
+impl Default for PathsInfo {
+    fn default() -> Self {
+        Self {
+            install: default_install_path(),
+            portable: default_portable_path(),
+            data: default_data_path(),
+        }
+    }
+}
+
+/// 领域相关文案。留空则回退到中性默认——通用安装器不该在界面上说「词库」「输入法」。
+///
+/// 只收录会泄漏应用领域的文案；「安装路径」「更改」「立即安装」这类通用 chrome
+/// 保持内置，不进清单，避免把清单撑成一张翻译表。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct StringsInfo {
+    /// 数据目录输入框的占位提示。默认「数据文件路径」。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub data_dir_hint: String,
+    /// 安装模式说明。默认「标准安装将程序注册到系统；便捷模式仅解压文件，不修改系统」。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub mode_hint: String,
+    /// 协议链接文字。默认「《用户服务协议》」。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub agreement_text: String,
+    /// 卸载页「删除用户数据」勾选项文字。默认「删除用户配置数据」。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub user_data_label: String,
+    /// 卸载页「清除缓存」勾选项文字。默认「清除本地缓存」。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub cache_label: String,
+    /// 删除用户数据二次确认的正文。默认「将永久删除 {path} 下的所有数据，卸载后无法恢复。」
+    /// 支持 `{path}` 占位符。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub delete_data_confirm: String,
 }
 
 /// 输入法（TSF）注册信息。
@@ -345,6 +436,15 @@ fn default_true() -> bool {
 }
 fn default_conf_file() -> String {
     "datadir.conf".to_string()
+}
+fn default_install_path() -> String {
+    r"%ProgramFiles%\{id}".to_string()
+}
+fn default_portable_path() -> String {
+    r"%USERPROFILE%\{id}".to_string()
+}
+fn default_data_path() -> String {
+    r"%APPDATA%\{id}".to_string()
 }
 fn default_portable_marker() -> String {
     "portable_mode".to_string()

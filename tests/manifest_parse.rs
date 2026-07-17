@@ -91,6 +91,11 @@ fn repo_app_toml_parses_with_all_capability_sections() {
         cfg.manifest.datadir.as_ref().expect("应有 datadir 段").conf_file,
         "datadir.conf"
     );
+
+    // UI 段：仓库自带清单显式声明了输入法专用文案，内置默认保持中性
+    assert_eq!(cfg.manifest.theme.accent, "#4C8BF5");
+    assert_eq!(cfg.manifest.paths.install, r"%ProgramFiles%\{id}");
+    assert_eq!(cfg.manifest.strings.data_dir_hint, "词库、配置路径");
 }
 
 /// 能力段的空值回退：name 取 target 文件名，exe 回退 main_exe。

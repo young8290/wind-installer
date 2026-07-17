@@ -126,14 +126,14 @@ pub fn run_install_wizard() {
                     Element::label(meta::app_display_name())
                         .width_match()
                         .font_size(22.0)
-                        .fg(Color::hex(theme::TEXT_PRIMARY))
+                        .fg(Color::hex(theme::text_primary()))
                         .text_align(Align::Center),
                 )
                 .child(
                     Element::label(meta::app_version())
                         .width_match()
                         .font_size(12.0)
-                        .fg(Color::hex(theme::TEXT_MUTED))
+                        .fg(Color::hex(theme::text_muted()))
                         .text_align(Align::Center),
                 ),
         )
@@ -149,7 +149,7 @@ pub fn run_install_wizard() {
                     Element::label("安装目录")
                         .width(64)
                         .font_size(12.0)
-                        .fg(Color::hex(theme::TEXT_SECONDARY))
+                        .fg(Color::hex(theme::text_secondary()))
                 )
                 .child(
                     Element::text_input(install_dir, "安装路径")
@@ -213,10 +213,10 @@ pub fn run_install_wizard() {
                     Element::label("数据目录")
                         .width(64)
                         .font_size(12.0)
-                        .fg(Color::hex(theme::TEXT_SECONDARY))
+                        .fg(Color::hex(theme::text_secondary()))
                 )
                 .child(
-                    Element::text_input(data_dir, "词库、配置路径")
+                    Element::text_input(data_dir, meta::s_data_dir_hint())
                         .weight(1.0)
                         .height(34)
                         .enabled(signal(is_fresh_install))
@@ -246,7 +246,7 @@ pub fn run_install_wizard() {
                     Element::label("便捷模式不配置数据目录")
                         .weight(1.0)
                         .font_size(12.0)
-                        .fg(Color::hex(theme::TEXT_MUTED))
+                        .fg(Color::hex(theme::text_muted()))
                         .visible_when(move || install_mode.get() == 1)
                 )
         )
@@ -263,9 +263,9 @@ pub fn run_install_wizard() {
                         .child(Element::radio("便捷模式", install_mode, 1))
                 )
                 .child(
-                    Element::label("标准安装注册输入法到系统；便捷模式仅解压文件，不修改系统")
+                    Element::label(meta::s_mode_hint())
                         .font_size(11.0)
-                        .fg(Color::hex(theme::TEXT_MUTED))
+                        .fg(Color::hex(theme::text_muted()))
                         .width_match()
                 )
         )
@@ -276,11 +276,11 @@ pub fn run_install_wizard() {
                 .spacing(4)
                 .child(Element::checkbox("我已阅读并同意", agreed))
                 .child(if meta::agreement_url().is_empty() {
-                    Element::label("《用户服务协议》")
+                    Element::label(meta::s_agreement_text())
                         .font_size(13.0)
-                        .fg(Color::hex(theme::TEXT_SECONDARY))
+                        .fg(Color::hex(theme::text_secondary()))
                 } else {
-                    Element::link("《用户服务协议》")
+                    Element::link(meta::s_agreement_text())
                         .url(meta::agreement_url())
                 })
         )
@@ -288,7 +288,7 @@ pub fn run_install_wizard() {
         .child(
             Element::label_rc(config_error)
                 .font_size(11.0)
-                .fg(Color::hex(theme::ERROR))
+                .fg(Color::hex(theme::error()))
                 .align(Align::Center)
         )
         // 安装按钮（align=Center 使其在父 col 中水平居中）
@@ -297,7 +297,7 @@ pub fn run_install_wizard() {
                 .width(300)
                 .height(48)
                 .corner(8.0)
-                .bg(Color::hex(theme::ACCENT))
+                .bg(Color::hex(theme::accent()))
                 .fg(Color::hex(0xFFFFFF))
                 .align(Align::Center)
                 .enabled(agreed)
@@ -394,7 +394,7 @@ pub fn run_install_wizard() {
                 .child(
                     Element::label("正在安装中，请稍候...")
                         .font_size(14.0)
-                        .fg(Color::hex(theme::TEXT_PRIMARY))
+                        .fg(Color::hex(theme::text_primary()))
                 )
                 .child(
                     Element::progress(progress_value)
@@ -405,7 +405,7 @@ pub fn run_install_wizard() {
                 .child(
                     Element::label_rc(progress_text)
                         .font_size(12.0)
-                        .fg(Color::hex(theme::TEXT_SECONDARY))
+                        .fg(Color::hex(theme::text_secondary()))
                         .width_match()
                         .text_align(Align::Center)
                 )
@@ -431,17 +431,17 @@ pub fn run_install_wizard() {
                 .child(
                     Element::label("✓")
                         .font_size(44.0)
-                        .fg(Color::hex(theme::SUCCESS))
+                        .fg(Color::hex(theme::success()))
                 )
                 .child(
                     Element::label("安装完成")
                         .font_size(18.0)
-                        .fg(Color::hex(theme::TEXT_PRIMARY))
+                        .fg(Color::hex(theme::text_primary()))
                 )
                 .child(
                     Element::label(format!("{} 已准备就绪，可以开始使用", meta::app_display_name()))
                         .font_size(13.0)
-                        .fg(Color::hex(theme::TEXT_SECONDARY))
+                        .fg(Color::hex(theme::text_secondary()))
                         .width_match()
                         .text_align(Align::Center)
                 )
@@ -456,17 +456,17 @@ pub fn run_install_wizard() {
                 .child(
                     Element::label("✗")
                         .font_size(44.0)
-                        .fg(Color::hex(theme::ERROR))
+                        .fg(Color::hex(theme::error()))
                 )
                 .child(
                     Element::label("安装失败")
                         .font_size(18.0)
-                        .fg(Color::hex(theme::TEXT_PRIMARY))
+                        .fg(Color::hex(theme::text_primary()))
                 )
                 .child(
                     Element::label_rc(finish_error)
                         .font_size(12.0)
-                        .fg(Color::hex(theme::ERROR))
+                        .fg(Color::hex(theme::error()))
                         .width_match()
                         .text_align(Align::Center)
                 )
@@ -478,7 +478,7 @@ pub fn run_install_wizard() {
                 .width(200)
                 .height(48)
                 .corner(8.0)
-                .bg(Color::hex(theme::ACCENT))
+                .bg(Color::hex(theme::accent()))
                 .fg(Color::hex(0xFFFFFF))
                 .align(Align::Center)
                 .on_click(move |_ctx: &mut EventCtx| {
@@ -495,24 +495,24 @@ pub fn run_install_wizard() {
         .width_match()
         .height(36)
         .cross(Align::Center)
-        .bg(Color::hex(theme::BG_PRIMARY))
+        .bg(Color::hex(theme::bg_primary()))
         .window_drag()
         .child(Element::leaf().width(14))
         .child(
             Element::label(title.clone())
                 .font_size(12.0)
-                .fg(Color::hex(theme::TEXT_SECONDARY)),
+                .fg(Color::hex(theme::text_secondary())),
         )
         .child(Element::leaf().weight(1.0))
-        .child(Element::window_button(WindowButtonKind::Minimize).fg(Color::hex(theme::TEXT_SECONDARY)))
-        .child(Element::window_button(WindowButtonKind::Close).fg(Color::hex(theme::TEXT_SECONDARY)));
+        .child(Element::window_button(WindowButtonKind::Minimize).fg(Color::hex(theme::text_secondary())))
+        .child(Element::window_button(WindowButtonKind::Close).fg(Color::hex(theme::text_secondary())));
 
     // ============================================================
     //  组装根节点
     // ============================================================
     let root = Element::col()
         .size(win_w, win_h)
-        .bg(Color::hex(theme::BG_PRIMARY));
+        .bg(Color::hex(theme::bg_primary()));
 
     #[cfg(feature = "frameless")]
     let root = root.child(title_bar);
@@ -526,7 +526,7 @@ pub fn run_install_wizard() {
         .centered()
         .resizable(false)
         .accelerated(super::is_accelerated())
-        .bg(Color::hex(theme::BG_PRIMARY))
+        .bg(Color::hex(theme::bg_primary()))
         .content(root);
 
     #[cfg(feature = "frameless")]
@@ -550,15 +550,15 @@ fn default_install_dir() -> String {
             }
         }
     }
-    format!(r"%ProgramFiles%\{}", crate::meta::app_id())
+    crate::meta::default_install_path()
 }
 
 fn default_portable_dir() -> String {
-    format!(r"%USERPROFILE%\{}", crate::meta::app_id())
+    crate::meta::default_portable_path()
 }
 
 fn default_data_dir() -> String {
-    format!(r"%APPDATA%\{}", crate::meta::app_id())
+    crate::meta::default_data_path()
 }
 
 /// 展开路径中的 %VAR% 环境变量占位符。

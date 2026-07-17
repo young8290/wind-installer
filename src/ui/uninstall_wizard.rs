@@ -67,20 +67,24 @@ pub fn run_uninstall_wizard() {
             Element::label(meta::app_display_name())
                 .width_match()
                 .font_size(17.0)
-                .fg(Color::hex(theme::TEXT_PRIMARY))
+                .fg(Color::hex(theme::text_primary()))
                 .text_align(Align::Center),
         )
         .child(
             Element::label(meta::app_version())
                 .width_match()
                 .font_size(11.0)
-                .fg(Color::hex(theme::TEXT_MUTED))
+                .fg(Color::hex(theme::text_muted()))
                 .text_align(Align::Center),
         );
 
     // 删除用户数据：危险勾选行（受控 on_toggle：未勾时弹应用内确认对话框，已勾时直接取消）
     let delete_data_row = Element::checkbox(
-        format!("删除用户词库和配置数据（%APPDATA%\\{}）", meta::app_id()),
+        format!(
+            "{}（%APPDATA%\\{}）",
+            meta::s_user_data_label(),
+            meta::app_id()
+        ),
         clean_roaming,
     )
     .danger()
@@ -104,7 +108,7 @@ pub fn run_uninstall_wizard() {
         .child(
             Element::label(format!("即将从您的电脑中卸载 {}，请确认：", meta::app_display_name()))
                 .font_size(13.0)
-                .fg(Color::hex(theme::TEXT_SECONDARY))
+                .fg(Color::hex(theme::text_secondary()))
                 .width_match(),
         )
         .child(delete_data_row)
@@ -113,7 +117,11 @@ pub fn run_uninstall_wizard() {
                 .enabled(clean_roaming),
         )
         .child(Element::checkbox(
-            &format!("清除本地词库缓存（%LOCALAPPDATA%\\{}\\cache）", meta::app_id()),
+            &format!(
+                "{}（%LOCALAPPDATA%\\{}\\cache）",
+                meta::s_cache_label(),
+                meta::app_id()
+            ),
             clean_cache,
         ))
         .child(Element::leaf().weight(1.0))
@@ -128,7 +136,7 @@ pub fn run_uninstall_wizard() {
                         .width(120)
                         .height(42)
                         .corner(8.0)
-                        .bg(Color::hex(theme::ERROR))
+                        .bg(Color::hex(theme::error()))
                         .fg(Color::hex(0xFFFFFF))
                         .enabled(confirmed)
                         .on_click(move |_ctx: &mut EventCtx| {
@@ -217,12 +225,12 @@ pub fn run_uninstall_wizard() {
                 .child(
                     Element::label("正在卸载，请稍候...")
                         .font_size(14.0)
-                        .fg(Color::hex(theme::TEXT_PRIMARY)),
+                        .fg(Color::hex(theme::text_primary())),
                 )
                 .child(
                     Element::label_rc(status_text)
                         .font_size(12.0)
-                        .fg(Color::hex(theme::TEXT_SECONDARY))
+                        .fg(Color::hex(theme::text_secondary()))
                         .width_match()
                         .text_align(Align::Center),
                 ),
@@ -248,17 +256,17 @@ pub fn run_uninstall_wizard() {
                 .child(
                     Element::label("✓")
                         .font_size(44.0)
-                        .fg(Color::hex(theme::SUCCESS)),
+                        .fg(Color::hex(theme::success())),
                 )
                 .child(
                     Element::label("卸载完成")
                         .font_size(18.0)
-                        .fg(Color::hex(theme::TEXT_PRIMARY)),
+                        .fg(Color::hex(theme::text_primary())),
                 )
                 .child(
                     Element::label(format!("{} 已从您的电脑中移除", meta::app_display_name()))
                         .font_size(13.0)
-                        .fg(Color::hex(theme::TEXT_SECONDARY)),
+                        .fg(Color::hex(theme::text_secondary())),
                 ),
         )
         // 失败
@@ -271,17 +279,17 @@ pub fn run_uninstall_wizard() {
                 .child(
                     Element::label("✗")
                         .font_size(44.0)
-                        .fg(Color::hex(theme::ERROR)),
+                        .fg(Color::hex(theme::error())),
                 )
                 .child(
                     Element::label("卸载失败")
                         .font_size(18.0)
-                        .fg(Color::hex(theme::TEXT_PRIMARY)),
+                        .fg(Color::hex(theme::text_primary())),
                 )
                 .child(
                     Element::label_rc(finish_error)
                         .font_size(12.0)
-                        .fg(Color::hex(theme::ERROR))
+                        .fg(Color::hex(theme::error()))
                         .width_match()
                         .text_align(Align::Center),
                 ),
@@ -292,7 +300,7 @@ pub fn run_uninstall_wizard() {
                 .width(200)
                 .height(48)
                 .corner(8.0)
-                .bg(Color::hex(theme::ACCENT))
+                .bg(Color::hex(theme::accent()))
                 .fg(Color::hex(0xFFFFFF))
                 .align(Align::Center)
                 .on_click(move |_ctx: &mut EventCtx| {
@@ -314,17 +322,17 @@ pub fn run_uninstall_wizard() {
             .width_match()
             .height(36)
             .cross(Align::Center)
-            .bg(Color::hex(theme::BG_PRIMARY))
+            .bg(Color::hex(theme::bg_primary()))
             .window_drag()
             .child(Element::leaf().width(14))
             .child(
                 Element::label(title_text)
                     .font_size(12.0)
-                    .fg(Color::hex(theme::TEXT_MUTED)),
+                    .fg(Color::hex(theme::text_muted())),
             )
             .child(Element::leaf().weight(1.0))
-            .child(Element::window_button(WindowButtonKind::Minimize).fg(Color::hex(theme::TEXT_SECONDARY)))
-            .child(Element::window_button(WindowButtonKind::Close).fg(Color::hex(theme::TEXT_SECONDARY)))
+            .child(Element::window_button(WindowButtonKind::Minimize).fg(Color::hex(theme::text_secondary())))
+            .child(Element::window_button(WindowButtonKind::Close).fg(Color::hex(theme::text_secondary())))
     };
 
     // ============================================================
@@ -336,23 +344,23 @@ pub fn run_uninstall_wizard() {
             show_delete_confirm,
             Element::col()
                 .width(360)
-                .bg(Color::hex(theme::BG_PRIMARY))
+                .bg(Color::hex(theme::bg_primary()))
                 .corner(14.0)
                 .padding(22)
                 .spacing(14)
                 .child(
                     Element::label("删除用户数据")
                         .font_size(17.0)
-                        .fg(Color::hex(theme::TEXT_PRIMARY))
+                        .fg(Color::hex(theme::text_primary()))
                         .width_match(),
                 )
                 .child(
-                    Element::label(format!(
-                        "将永久删除 %APPDATA%\\{} 下的所有词库和配置数据，卸载后无法恢复。\n\n确定要勾选删除吗？",
+                    Element::label(meta::s_delete_data_confirm(&format!(
+                        "%APPDATA%\\{}",
                         meta::app_id()
-                    ))
+                    )))
                     .font_size(13.0)
-                    .fg(Color::hex(theme::TEXT_SECONDARY))
+                    .fg(Color::hex(theme::text_secondary()))
                     .width_match(),
                 )
                 .child(
@@ -374,7 +382,7 @@ pub fn run_uninstall_wizard() {
                                 .width(100)
                                 .height(38)
                                 .corner(8.0)
-                                .bg(Color::hex(theme::ERROR))
+                                .bg(Color::hex(theme::error()))
                                 .fg(Color::hex(0xFFFFFF))
                                 .on_click(move |_ctx: &mut EventCtx| {
                                     clean_roaming.set(true); // 确认后才真正勾选
@@ -387,7 +395,7 @@ pub fn run_uninstall_wizard() {
 
     let content = Element::col()
         .size(win_w, win_h)
-        .bg(Color::hex(theme::BG_PRIMARY));
+        .bg(Color::hex(theme::bg_primary()));
 
     #[cfg(feature = "frameless")]
     let content = content.child(title_bar);
@@ -408,7 +416,7 @@ pub fn run_uninstall_wizard() {
         .centered()
         .resizable(false)
         .accelerated(super::is_accelerated())
-        .bg(Color::hex(theme::BG_PRIMARY))
+        .bg(Color::hex(theme::bg_primary()))
         .content(root);
 
     #[cfg(feature = "frameless")]

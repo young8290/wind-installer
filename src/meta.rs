@@ -121,6 +121,62 @@ pub fn legacy_dirs() -> &'static [String] {
     &manifest().app.legacy_dirs
 }
 
+// ── 默认路径模板（`{id}` 替换为 app.id；`%VAR%` 由向导展开）──────────────────
+
+fn expand_id(template: &str) -> String {
+    template.replace("{id}", app_id())
+}
+
+pub fn default_install_path() -> String {
+    expand_id(&manifest().paths.install)
+}
+pub fn default_portable_path() -> String {
+    expand_id(&manifest().paths.portable)
+}
+pub fn default_data_path() -> String {
+    expand_id(&manifest().paths.data)
+}
+
+// ── 可覆盖文案（留空即回退到中性默认）────────────────────────────────────────
+
+/// 清单值优先，留空则用 `default`。
+fn string_or(value: &'static str, default: &'static str) -> &'static str {
+    let t = value.trim();
+    if t.is_empty() {
+        default
+    } else {
+        t
+    }
+}
+
+pub fn s_data_dir_hint() -> &'static str {
+    string_or(&manifest().strings.data_dir_hint, "数据文件路径")
+}
+pub fn s_mode_hint() -> &'static str {
+    string_or(
+        &manifest().strings.mode_hint,
+        "标准安装将程序注册到系统；便捷模式仅解压文件，不修改系统",
+    )
+}
+pub fn s_agreement_text() -> &'static str {
+    string_or(&manifest().strings.agreement_text, "《用户服务协议》")
+}
+pub fn s_user_data_label() -> &'static str {
+    string_or(&manifest().strings.user_data_label, "删除用户配置数据")
+}
+pub fn s_cache_label() -> &'static str {
+    string_or(&manifest().strings.cache_label, "清除本地缓存")
+}
+
+/// 删除用户数据的二次确认正文；`{path}` 替换为实际路径。
+pub fn s_delete_data_confirm(path: &str) -> String {
+    string_or(
+        &manifest().strings.delete_data_confirm,
+        "将永久删除 {path} 下的所有数据，卸载后无法恢复。\n\n确定要勾选删除吗？",
+    )
+    .replace("{path}", path)
+}
+
 // ── 窗口尺寸 ────────────────────────────────────────────────────────────────
 
 pub fn install_win() -> (i32, i32) {

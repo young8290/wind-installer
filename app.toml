@@ -38,6 +38,27 @@ legacy_dirs     = []                      # 升级时清理的旧版遗留目录
 install_win   = { w = 520, h = 420 }
 uninstall_win = { w = 480, h = 420 }
 
+# ── 主题色：逐项可选，留空即用内置默认（中性蓝色系）。格式 "#RRGGBB" ────────
+#    非法值静默回退到默认，不会让安装器起不来
+[theme]
+accent = "#4C8BF5"
+
+# ── 默认路径模板：{id} 替换为 app.id，%VAR% 由向导展开。整段可省 ────────────
+[paths]
+install  = '%ProgramFiles%\{id}'
+portable = '%USERPROFILE%\{id}'
+data     = '%APPDATA%\{id}'
+
+# ── 可覆盖文案：只收录会泄漏应用领域的文案，留空即用中性默认 ────────────────
+#    内置默认不含「输入法」「词库」等字样，故通用应用无需配置本段
+[strings]
+data_dir_hint       = "词库、配置路径"
+mode_hint           = "标准安装注册输入法到系统；便捷模式仅解压文件，不修改系统"
+agreement_text      = "《用户服务协议》"
+user_data_label     = "删除用户词库和配置数据"
+cache_label         = "清除本地词库缓存"
+delete_data_confirm = "将永久删除 {path} 下的所有词库和配置数据，卸载后无法恢复。\n\n确定要勾选删除吗？"
+
 # ── 输入法（TSF）注册：整段缺省即跳过。非输入法应用删除本段即可 ───────────
 [ime]
 clsid        = "{99C2EE30-5C57-45A2-9C63-FB54B34FD90A}"
