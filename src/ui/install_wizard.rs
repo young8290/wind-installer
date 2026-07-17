@@ -342,6 +342,11 @@ pub fn run_install_wizard() {
                             }
                         };
 
+                        // 续写旧回执而非从空起（新清单删掉的能力其产物仍需可撤销）；
+                        // 且须先于 plan 声明（plan 类型带 InstallCtx 生命周期）
+                        let mut receipt =
+                            crate::installer::receipt::Receipt::load_or_default();
+
                         // 与静默路径共用同一份计划，仅 Reporter 不同
                         let plan = crate::installer::plan::plan_install(crate::meta::manifest(), mode);
                         let mut reporter = GuiReporter {
@@ -351,14 +356,15 @@ pub fn run_install_wizard() {
                             total: plan.len(),
                         };
 
-                        let result = crate::installer::step::run_plan(
-                            &plan,
-                            &config,
+                        let mut ctx = crate::installer::step::InstallCtx {
+                            config: &config,
                             mode,
                             is_fresh_install,
-                            &mut archive,
-                            &mut reporter,
-                        );
+                            archive: &mut archive,
+                            receipt: &mut receipt,
+                        };
+
+                        let result = crate::installer::step::run_plan(&plan, &mut ctx, &mut reporter);
 
                         match result {
                             Ok(_) => {

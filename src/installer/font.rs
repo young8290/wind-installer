@@ -4,30 +4,16 @@ use winreg::enums::*;
 use winreg::RegKey;
 
 use crate::manifest::FontInfo;
-use crate::meta;
 
 /// 系统字体注册表路径
 const FONTS_KEY: &str = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts";
 
-/// 字体跟踪注册表路径（运行时构造）
-fn font_tracking_key() -> String {
-    format!(r"SOFTWARE\{}", meta::app_id())
-}
-
-/// 单个字体的跟踪值名（按文件名区分，支持多字体）
-fn tracking_value_name(font: &FontInfo) -> String {
-    format!("InstalledFont_{}", font.file)
-}
-
-/// 安装清单中声明的所有系统字体
-pub fn install_font(install_dir: &Path) -> Result<(), String> {
-    for font in &meta::manifest().font {
-        install_one(install_dir, font)?;
-    }
-    Ok(())
-}
-
-fn install_one(install_dir: &Path, font: &FontInfo) -> Result<(), String> {
+/// 安装单个系统字体。
+///
+/// 调用方（`steps::InstallFonts`）逐个字体调用并按成功与否写回执。安装回执取代了
+/// 此前的「InstalledFont_* 跟踪值」机制：两者作用相同（证明字体是我们装的），
+/// 但回执更精确——装成几个记几条，不会因中途失败而让已装的字体漏记。
+pub fn install_one(install_dir: &Path, font: &FontInfo) -> Result<(), String> {
     let font_source = install_dir.join(&font.source_rel);
     if !font_source.exists() {
         return Err(format!("Font file not found: {:?}", font_source));
@@ -49,7 +35,6 @@ fn install_one(install_dir: &Path, font: &FontInfo) -> Result<(), String> {
     }
 
     register_font_in_registry(font)?;
-    set_font_tracking(font)?;
     Ok(())
 }
 
@@ -67,57 +52,23 @@ fn register_font_in_registry(font: &FontInfo) -> Result<(), String> {
     Ok(())
 }
 
-/// 设置字体安装跟踪标记
-fn set_font_tracking(font: &FontInfo) -> Result<(), String> {
-    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
-    let (tracking_key, _) = hklm
-        .create_subkey(font_tracking_key())
-        .map_err(|e| format!("Failed to create tracking key: {}", e))?;
-
-    tracking_key
-        .set_value(tracking_value_name(font), &"1")
-        .map_err(|e| format!("Failed to set font tracking: {}", e))?;
-
-    Ok(())
-}
-
-/// 卸载清单中声明的、由本安装器安装的所有系统字体
-pub fn uninstall_font() -> Result<(), String> {
-    for font in &meta::manifest().font {
-        uninstall_one(font);
-    }
-    Ok(())
-}
-
-fn uninstall_one(font: &FontInfo) {
-    if !is_font_installed_by_us(font) {
-        return;
-    }
-
+/// 按回执记录的文件名与显示名卸载单个字体。
+///
+/// 不读清单——回执的存在本身即证明这个字体是我们装的，故升级后清单里已删除的
+/// 字体仍能被上一版回执正确清掉。
+pub fn uninstall_font_file(file: &str, display_name: &str) -> Result<(), String> {
     let windir = std::env::var("WINDIR").unwrap_or_else(|_| r"C:\Windows".to_string());
-    let font_path = Path::new(&windir).join("Fonts").join(&font.file);
+    let font_path = Path::new(&windir).join("Fonts").join(file);
 
     if font_path.exists() {
-        let _ = std::fs::remove_file(&font_path);
+        std::fs::remove_file(&font_path)
+            .map_err(|e| format!("删除字体文件失败 {:?}: {}", font_path, e))?;
     }
 
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
     if let Ok(fonts_key) = hklm.open_subkey_with_flags(FONTS_KEY, KEY_WRITE) {
-        let _ = fonts_key.delete_value(&font.display_name);
+        let _ = fonts_key.delete_value(display_name);
     }
 
-    if let Ok(tracking_key) = hklm.open_subkey_with_flags(&font_tracking_key(), KEY_WRITE) {
-        let _ = tracking_key.delete_value(tracking_value_name(font));
-    }
-}
-
-/// 检查指定字体是否由本安装器安装
-pub fn is_font_installed_by_us(font: &FontInfo) -> bool {
-    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
-    if let Ok(key) = hklm.open_subkey_with_flags(&font_tracking_key(), KEY_READ) {
-        if let Ok(value) = key.get_value::<String, _>(tracking_value_name(font)) {
-            return value == "1";
-        }
-    }
-    false
+    Ok(())
 }

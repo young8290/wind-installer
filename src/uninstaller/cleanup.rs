@@ -33,21 +33,25 @@ impl Default for CleanupOptions {
 }
 
 impl CleanupOptions {
-    /// 获取用户数据目录
+    /// 解析用户数据目录：优先读清单 `[datadir]` 声明的配置文件，其次用默认位置。
+    ///
+    /// **必须在 `UndoReceipt` 之前调用**——撤销会把这个配置文件删掉。调用方应在
+    /// 卸载开始时解析一次并带着结果走（见 `steps::UninstallCtx::new`）。
     pub fn user_data_dir(&self) -> PathBuf {
-        // 检查是否有自定义数据目录
         let local_app_data = std::env::var("LOCALAPPDATA")
             .unwrap_or_else(|_| {
                 let mut p = PathBuf::from(std::env::var("USERPROFILE").unwrap_or_default());
                 p.push("AppData\\Local");
                 p.to_string_lossy().to_string()
             });
-        let datadir_conf = PathBuf::from(&local_app_data)
-            .join(meta::app_id())
-            .join("datadir.conf");
 
-        if datadir_conf.exists() {
-            if let Ok(content) = std::fs::read_to_string(&datadir_conf) {
+        // 清单未声明 [datadir] 段则没有配置文件可读，直接用默认位置
+        if let Some(datadir) = meta::manifest().datadir.as_ref() {
+            let conf = PathBuf::from(&local_app_data)
+                .join(meta::app_id())
+                .join(&datadir.conf_file);
+
+            if let Ok(content) = std::fs::read_to_string(&conf) {
                 let content = content.trim();
                 if !content.is_empty() {
                     return PathBuf::from(content);
@@ -136,25 +140,18 @@ pub fn delete_install_files(install_dir: &PathBuf) -> Result<(), String> {
     Ok(())
 }
 
-/// 清理注册表
-pub fn cleanup_registry() {
-    // 移除自启动
-    let _ = crate::installer::registry::remove_auto_start();
+// 注册表清理已由 `steps::UndoReceipt` 按安装回执反向回放接管——它撤销的是安装时
+// **实际写成**的键，而非按当前清单猜测的键，故升级后仍能清掉上一版留下的东西。
 
-    // 移除 URL 协议
-    let _ = crate::installer::registry::unregister_url_protocol();
-
-    // 移除卸载信息
-    let _ = crate::installer::registry::remove_uninstall_info();
-}
-
-/// 清理用户数据
-pub fn cleanup_user_data(options: &CleanupOptions) -> Result<(), String> {
+/// 清理用户数据。
+///
+/// `user_data_dir` 由调用方在卸载开始时解析并传入，而非在此现算——`UndoReceipt`
+/// 会删掉数据目录配置文件，现算就只能拿到默认位置，用户自定义的数据目录会被漏掉。
+pub fn cleanup_user_data(options: &CleanupOptions, user_data_dir: &Path) -> Result<(), String> {
     if options.keep_user_data {
         return Ok(());
     }
 
-    let user_data_dir = options.user_data_dir();
     let local_cache_dir = options.local_cache_dir();
 
     // 清除用户配置（删除前可选备份到桌面）
@@ -163,11 +160,11 @@ pub fn cleanup_user_data(options: &CleanupOptions) -> Result<(), String> {
             // 目录名带本地时间戳，每次卸载生成唯一目录，避免覆盖历史备份
             let backup_dir = desktop_dir()
                 .join(format!("{}_Backup_{}", meta::app_id(), local_timestamp()));
-            if let Err(e) = copy_dir_all(&user_data_dir, &backup_dir) {
+            if let Err(e) = copy_dir_all(user_data_dir, &backup_dir) {
                 eprintln!("Warning: Failed to backup user data to desktop: {}", e);
             }
         }
-        if let Err(e) = std::fs::remove_dir_all(&user_data_dir) {
+        if let Err(e) = std::fs::remove_dir_all(user_data_dir) {
             eprintln!("Warning: Failed to remove user data: {}", e);
         }
     }

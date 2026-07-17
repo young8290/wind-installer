@@ -1,45 +1,48 @@
-//! 安装步骤抽象 —— 编排的唯一真相。
+//! 步骤抽象 —— 编排的唯一真相，安装与卸载共用。
 //!
-//! 历史上 GUI 路径（`ui::install_wizard`）与静默路径（`installer::perform_install`）
-//! 各自手写了一遍步骤序列，两者已漂移出缺陷（静默路径漏写 datadir.conf、GUI 路径
-//! 不设 InstallerRunning 标志）。现在两条路径共用 [`plan_install`] 生成的同一份
-//! [`Step`] 列表，差异收敛到 [`Reporter`]：GUI 传 channel 实现，CLI 传 stderr 实现。
+//! 历史上 GUI 路径与静默路径各自手写了一遍步骤链（安装、卸载各一对），已漂移出缺陷：
+//! 静默安装漏写 datadir.conf，GUI 安装不设 InstallerRunning 标志。现在四条路径共用
+//! [`run_plan`]，差异收敛到两处：
+//! - **装什么** → `plan::plan_install` / `uninstaller::plan::plan_uninstall`
+//! - **怎么汇报** → [`Reporter`]（GUI 传 channel 实现，CLI 传 stderr 实现）
 //!
-//! [`plan_install`]: super::plan::plan_install
+//! [`Step`] 对上下文泛型：安装用 [`InstallCtx`]，卸载用 `uninstaller::steps::UninstallCtx`。
+//! 两者的执行语义（失败是否致命、进度如何汇报）完全一致，故 [`run_plan`] 只需一份。
 
 use crate::archive::ArchiveReader;
 
 use super::config::InstallConfig;
+use super::receipt::Receipt;
 use super::InstallMode;
 
-/// 步骤执行上下文。
-pub struct StepCtx<'a> {
+/// 安装步骤的上下文。
+pub struct InstallCtx<'a> {
     pub config: &'a InstallConfig,
     pub mode: InstallMode,
     /// 是否首次安装（非升级）——决定是否写入用户数据目录配置。
     pub is_fresh_install: bool,
     /// 自身归档，供解压与卸载器 overlay 追加使用。
     pub archive: &'a mut ArchiveReader,
-    /// 进度汇报出口，步骤内的细粒度进度经此上报。
-    pub reporter: &'a mut dyn Reporter,
+    /// 步骤把做成的产物记在这里，卸载时反向回放。
+    pub receipt: &'a mut Receipt,
 }
 
 /// 一个安装/卸载动作。
 ///
-/// 失败语义由 [`Step::fatal`] 决定：致命步骤（如解压）失败即中止安装，
-/// 非致命步骤（注册类）失败仅记警告并继续——这保持了重构前的行为。
-pub trait Step {
+/// 失败语义由 [`Step::fatal`] 决定：致命步骤（如解压）失败即中止，
+/// 非致命步骤（注册类）失败仅记警告并继续。
+pub trait Step<C> {
     /// 进度文案，如「正在注册 COM 组件...」。
     fn name(&self) -> String;
 
-    fn run(&self, ctx: &mut StepCtx) -> Result<(), String>;
+    fn run(&self, ctx: &mut C, reporter: &mut dyn Reporter) -> Result<(), String>;
 
-    /// 失败是否应中止整个安装流程。默认否（仅警告）。
+    /// 失败是否应中止整个流程。默认否（仅警告）。
     fn fatal(&self) -> bool {
         false
     }
 
-    /// 本步骤是否要求重启才能完全生效——COM 注册失败时会置位。
+    /// 本步骤失败是否意味着需要重启才能完全生效。
     fn needs_reboot_on_failure(&self) -> bool {
         false
     }
@@ -63,12 +66,9 @@ pub struct RunOutcome {
 }
 
 /// 按序执行步骤计划。致命步骤失败立即返回 Err，非致命失败记警告后继续。
-pub fn run_plan(
-    plan: &[Box<dyn Step>],
-    config: &InstallConfig,
-    mode: InstallMode,
-    is_fresh_install: bool,
-    archive: &mut ArchiveReader,
+pub fn run_plan<C>(
+    plan: &[Box<dyn Step<C>>],
+    ctx: &mut C,
     reporter: &mut dyn Reporter,
 ) -> Result<RunOutcome, String> {
     let total = plan.len();
@@ -78,18 +78,7 @@ pub fn run_plan(
         let name = step.name();
         reporter.step_begin(i, total, &name);
 
-        let result = {
-            let mut ctx = StepCtx {
-                config,
-                mode,
-                is_fresh_install,
-                archive: &mut *archive,
-                reporter: &mut *reporter,
-            };
-            step.run(&mut ctx)
-        };
-
-        if let Err(e) = result {
+        if let Err(e) = step.run(ctx, reporter) {
             if step.fatal() {
                 return Err(e);
             }

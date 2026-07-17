@@ -3,8 +3,25 @@ use std::path::{Path, PathBuf};
 use crate::manifest::{ShortcutInfo, ShortcutLocation};
 use crate::meta;
 
+/// `create_shortcuts` 实际创建了什么 + 失败信息。
+///
+/// 不用 `Result<_, String>` 是因为回执必须记下「已经做成的部分」：一个条目失败时若
+/// 整体返回 Err 而丢掉已创建的那些，卸载后它们会永久留在桌面/开始菜单，
+/// 且指向已被删除的 exe。
+#[derive(Debug, Default)]
+pub struct CreatedShortcuts {
+    /// 创建成功的 .lnk 绝对路径。
+    pub links: Vec<PathBuf>,
+    /// 若创建过开始菜单快捷方式，则为那个文件夹（卸载时整个删除）。
+    pub start_menu_dir: Option<PathBuf>,
+    pub errors: Vec<String>,
+}
+
 /// 创建清单 [[shortcut]] 段声明的快捷方式。目标不存在的条目跳过（不报错）。
-pub fn create_shortcuts(install_dir: &Path, items: &[ShortcutInfo]) -> Result<(), String> {
+/// 逐条尝试，返回实际创建成功的那些。
+pub fn create_shortcuts(install_dir: &Path, items: &[ShortcutInfo]) -> CreatedShortcuts {
+    let mut created = CreatedShortcuts::default();
+
     for item in items {
         let target = install_dir.join(&item.target);
         if !target.exists() {
@@ -12,52 +29,35 @@ pub fn create_shortcuts(install_dir: &Path, items: &[ShortcutInfo]) -> Result<()
         }
 
         let dir = location_dir(item.location);
-        std::fs::create_dir_all(&dir)
-            .map_err(|e| format!("无法创建快捷方式目录 {:?}: {}", dir, e))?;
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            created
+                .errors
+                .push(format!("无法创建快捷方式目录 {:?}: {}", dir, e));
+            continue;
+        }
 
         let link_path = dir.join(format!("{}.lnk", item.effective_name()));
-        create_shortcut(
+        match create_shortcut(
             &target,
             &link_path,
             &install_dir.to_string_lossy(),
             item.effective_description(),
-        )?;
-    }
-    Ok(())
-}
-
-/// 删除清单声明的快捷方式：开始菜单整个文件夹 + 逐个桌面快捷方式。
-///
-/// 开始菜单删除失败不提前返回——否则会跳过桌面清理，在桌面留下孤儿 .lnk。
-pub fn delete_shortcuts(items: &[ShortcutInfo]) -> Result<(), String> {
-    let mut errors = Vec::new();
-
-    let start_menu = start_menu_dir();
-    if start_menu.exists() {
-        if let Err(e) = std::fs::remove_dir_all(&start_menu) {
-            errors.push(format!("无法删除开始菜单目录: {}", e));
-        }
-    }
-
-    // 桌面快捷方式散落在公共桌面，只能按名字逐个删
-    for item in items
-        .iter()
-        .filter(|i| i.location == ShortcutLocation::Desktop)
-    {
-        let link = desktop_dir().join(format!("{}.lnk", item.effective_name()));
-        if link.exists() {
-            if let Err(e) = std::fs::remove_file(&link) {
-                errors.push(format!("无法删除桌面快捷方式 {:?}: {}", link, e));
+        ) {
+            Ok(()) => {
+                if item.location == ShortcutLocation::StartMenu {
+                    created.start_menu_dir = Some(dir);
+                }
+                created.links.push(link_path);
             }
+            Err(e) => created.errors.push(e),
         }
     }
 
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(errors.join("; "))
-    }
+    created
 }
+
+// 删除快捷方式由 `uninstaller::steps::UndoReceipt` 按回执记录的绝对路径逐个撤销，
+// 无需在此按清单反推——清单改过名字也不会留下孤儿 .lnk。
 
 fn create_shortcut(
     target: &Path,

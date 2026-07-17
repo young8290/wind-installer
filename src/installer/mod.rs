@@ -3,6 +3,7 @@ pub mod config;
 pub mod extract;
 pub mod legacy;
 pub mod plan;
+pub mod receipt;
 pub mod registry;
 pub mod step;
 pub mod steps;
@@ -16,7 +17,8 @@ pub mod ime;
 use config::InstallConfig;
 use crate::archive::ArchiveReader;
 use crate::meta;
-use step::{run_plan, CliReporter};
+use receipt::Receipt;
+use step::{run_plan, CliReporter, InstallCtx};
 
 /// 卸载器文件名（安装目录内）
 pub const UNINSTALLER_NAME: &str = "uninstall.exe";
@@ -64,17 +66,24 @@ pub fn perform_install(config: &InstallConfig, mode: InstallMode) -> InstallResu
     // 故「是否首装」也必须按机器判定，不能按 install_dir 是否存在卸载器判定——
     // 否则装到新目录会覆盖老用户已有的数据目录配置。
     let is_fresh_install = registry::detect_installed_version().is_none();
+    // 续写旧回执而非从空起：新清单里已删掉的能力（如上一版装了字体、这一版删了
+    // [[font]] 段）其产物仍在系统上，回执被覆盖就永远撤销不掉。push 会按等值去重。
+    //
+    // 声明顺序也有讲究：receipt 必须先于 plan——plan 的类型带 InstallCtx 的生命周期，
+    // 后声明会让它在 receipt 之后析构而借用检查不过。
+    let mut receipt = Receipt::load_or_default();
     let plan = plan::plan_install(meta::manifest(), mode);
     let mut reporter = CliReporter;
 
-    match run_plan(
-        &plan,
+    let mut ctx = InstallCtx {
         config,
         mode,
         is_fresh_install,
-        &mut archive,
-        &mut reporter,
-    ) {
+        archive: &mut archive,
+        receipt: &mut receipt,
+    };
+
+    match run_plan(&plan, &mut ctx, &mut reporter) {
         Ok(outcome) => InstallResult {
             success: true,
             message: "Installation completed successfully".into(),

@@ -7,6 +7,9 @@ use windui::signal::signal;
 use windui::spec::Align;
 use windui::ui::{Element, WindowButtonKind};
 
+use windui::prelude::Sender;
+
+use crate::installer::step::Reporter;
 use crate::meta;
 use super::theme;
 
@@ -17,6 +20,25 @@ const PAGE_FINISH: usize = 2;
 enum UninstallMsg {
     Status(String),
     Finished(bool, String),
+}
+
+/// 把 [`Reporter`] 事件转成 UI 通道消息。卸载页只有状态文字、无进度条，
+/// 故步内细粒度进度也走 Status（如「反注册 COM ...」逐条显示）。
+struct GuiReporter {
+    tx: Sender<UninstallMsg>,
+}
+
+impl Reporter for GuiReporter {
+    fn step_begin(&mut self, _index: usize, _total: usize, name: &str) {
+        let _ = self.tx.send(UninstallMsg::Status(name.to_string()));
+    }
+    fn step_progress(&mut self, detail: &str, _fraction: f32) {
+        let _ = self.tx.send(UninstallMsg::Status(detail.to_string()));
+    }
+    fn log(&mut self, _msg: &str) {}
+    fn warn(&mut self, msg: &str) {
+        eprintln!("Warning: {}", msg);
+    }
 }
 
 pub fn run_uninstall_wizard() {
@@ -152,43 +174,17 @@ pub fn run_uninstall_wizard() {
 
                             let tx = tx.clone();
                             std::thread::spawn(move || {
-                                macro_rules! step {
-                                    ($msg:expr) => {
-                                        tx.send(UninstallMsg::Status($msg.into())).ok();
-                                    };
-                                }
+                                // 与静默路径共用同一份计划，仅 Reporter 不同
+                                let plan = crate::uninstaller::plan::plan_uninstall();
+                                let mut reporter = GuiReporter { tx: tx.clone() };
+                                let mut ctx =
+                                    crate::uninstaller::steps::UninstallCtx::new(&options);
 
-                                let _ = crate::installer::registry::set_installer_running();
-
-                                step!("正在停止相关进程...");
-                                let _ = crate::installer::process::terminate_app_processes();
-
-                                if crate::meta::manifest().ime.is_some() {
-                                    step!("正在反注册输入法...");
-                                    let _ = crate::installer::ime::unregister_input_method();
-
-                                    step!("正在反注册 COM 组件...");
-                                    let _ = crate::installer::ime::unregister_old_com(&options.install_dir);
-                                }
-
-                                if !crate::meta::manifest().font.is_empty() {
-                                    step!("正在卸载字体...");
-                                    let _ = crate::installer::font::uninstall_font();
-                                }
-
-                                step!("正在删除快捷方式...");
-                                let _ = crate::installer::shortcut::delete_shortcuts(
-                                    &crate::meta::manifest().shortcut,
+                                let _ = crate::installer::step::run_plan(
+                                    &plan,
+                                    &mut ctx,
+                                    &mut reporter,
                                 );
-
-                                step!("正在删除安装文件...");
-                                let _ = crate::uninstaller::cleanup::delete_install_files(&options.install_dir);
-
-                                step!("正在清理注册表...");
-                                crate::uninstaller::cleanup::cleanup_registry();
-
-                                step!("正在清理用户数据...");
-                                let _ = crate::uninstaller::cleanup::cleanup_user_data(&options);
 
                                 let _ = crate::installer::registry::clear_installer_running();
 

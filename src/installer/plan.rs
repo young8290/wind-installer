@@ -5,7 +5,7 @@
 
 use crate::manifest::AppManifest;
 
-use super::step::Step;
+use super::step::{InstallCtx, Step};
 use super::steps::*;
 use super::InstallMode;
 
@@ -13,8 +13,8 @@ use super::InstallMode;
 ///
 /// 便携模式只做「解压 + 写标记」，不触碰系统任何位置——这是 Standard/Portable
 /// 的全部区别，无需在各步骤内部再判断模式。
-pub fn plan_install(m: &AppManifest, mode: InstallMode) -> Vec<Box<dyn Step>> {
-    let mut plan: Vec<Box<dyn Step>> = Vec::new();
+pub fn plan_install<'a>(m: &AppManifest, mode: InstallMode) -> Vec<Box<dyn Step<InstallCtx<'a>>>> {
+    let mut plan: Vec<Box<dyn Step<InstallCtx<'a>>>> = Vec::new();
 
     if mode == InstallMode::Portable {
         plan.push(Box::new(PrepareArchive));
@@ -75,6 +75,8 @@ pub fn plan_install(m: &AppManifest, mode: InstallMode) -> Vec<Box<dyn Step>> {
         }));
     }
 
+    // 回执必须在所有有副作用的步骤之后落盘
+    plan.push(Box::new(PersistReceipt));
     plan.push(Box::new(ClearInstallerRunning));
     plan
 }

@@ -1,7 +1,12 @@
 pub mod cleanup;
+pub mod plan;
 pub mod selfdelete;
+pub mod steps;
 
 use cleanup::CleanupOptions;
+
+use crate::installer::step::{run_plan, CliReporter};
+use steps::UninstallCtx;
 
 /// 卸载结果
 #[derive(Debug)]
@@ -12,57 +17,20 @@ pub struct UninstallResult {
     pub need_reboot: bool,
 }
 
-/// 执行完整卸载流程
+/// 执行完整卸载流程（静默/CLI 路径）。
+///
+/// GUI 路径见 `ui::uninstall_wizard`——两者共用 `plan::plan_uninstall` 生成的
+/// 同一份步骤计划，仅 Reporter 实现不同。
 pub fn perform_uninstall(options: &CleanupOptions) -> UninstallResult {
-    let mut need_reboot = false;
+    let plan = plan::plan_uninstall();
+    let mut reporter = CliReporter;
 
-    // 1. 设置安装器运行标记
-    if let Err(e) = crate::installer::registry::set_installer_running() {
-        eprintln!("Warning: {}", e);
-    }
+    let mut ctx = UninstallCtx::new(options);
 
-    // 2. 停止进程
-    if let Err(e) = crate::installer::process::terminate_app_processes() {
-        eprintln!("Warning: Failed to stop processes: {}", e);
-    }
+    let outcome = run_plan(&plan, &mut ctx, &mut reporter);
+    // 卸载计划无致命步骤：一路尽力而为，删不掉的东西转化为「需要重启」
+    let need_reboot = ctx.need_reboot || outcome.map(|o| o.need_reboot).unwrap_or(false);
 
-    // 3-4. 反注册输入法 + COM（仅当清单含 ime 段）
-    if crate::meta::manifest().ime.is_some() {
-        if let Err(e) = crate::installer::ime::unregister_input_method() {
-            eprintln!("Warning: Failed to unregister input method: {}", e);
-        }
-        if let Err(e) = crate::installer::ime::unregister_old_com(&options.install_dir) {
-            eprintln!("Warning: Failed to unregister COM: {}", e);
-        }
-    }
-
-    // 5. 卸载字体（仅当清单含 font 段）
-    if !crate::meta::manifest().font.is_empty() {
-        if let Err(e) = crate::installer::font::uninstall_font() {
-            eprintln!("Warning: Failed to uninstall font: {}", e);
-        }
-    }
-
-    // 6. 删除安装文件
-    if let Err(e) = cleanup::delete_install_files(&options.install_dir) {
-        eprintln!("Warning: Failed to delete some files: {}", e);
-        need_reboot = true;
-    }
-
-    // 7. 删除快捷方式
-    if let Err(e) = crate::installer::shortcut::delete_shortcuts(&crate::meta::manifest().shortcut) {
-        eprintln!("Warning: Failed to delete shortcuts: {}", e);
-    }
-
-    // 8. 清理注册表
-    cleanup::cleanup_registry();
-
-    // 9. 清理用户数据
-    if let Err(e) = cleanup::cleanup_user_data(options) {
-        eprintln!("Warning: Failed to cleanup user data: {}", e);
-    }
-
-    // 10. 清除安装器运行标记
     let _ = crate::installer::registry::clear_installer_running();
 
     UninstallResult {

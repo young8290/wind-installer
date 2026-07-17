@@ -7,9 +7,34 @@ use crate::manifest::AutoStartInfo;
 use crate::meta;
 use super::config::InstallConfig;
 
+/// 自启动所在的 Run 键（HKCU）
+const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
+
 /// 卸载信息注册表路径（运行时由清单 display_name 构造）
 fn uninst_key() -> String {
     format!(r"Software\Microsoft\Windows\CurrentVersion\Uninstall\{}", meta::app_display_name())
+}
+
+/// 卸载信息键路径，供安装步骤写入回执。
+pub fn uninstall_key_path() -> String {
+    uninst_key()
+}
+
+/// 卸载信息键是否已存在。
+///
+/// 用于「记录实际存在的产物」：`write_uninstall_info` 先建键、再逐个写值，
+/// 中途失败会留下一个孤儿键。事后按存在性记回执，才能保证它进得了撤销清单。
+pub fn uninstall_key_exists() -> bool {
+    RegKey::predef(HKEY_LOCAL_MACHINE)
+        .open_subkey_with_flags(uninst_key(), KEY_READ)
+        .is_ok()
+}
+
+/// URL 协议键是否已存在。理由同 [`uninstall_key_exists`]。
+pub fn url_protocol_exists(protocol: &str) -> bool {
+    RegKey::predef(HKEY_CURRENT_USER)
+        .open_subkey_with_flags(format!(r"Software\Classes\{}", protocol), KEY_READ)
+        .is_ok()
 }
 
 /// 设置开机自启动，目标与参数由清单 [autostart] 段声明
@@ -38,18 +63,15 @@ pub fn set_auto_start(install_dir: &Path, info: &AutoStartInfo) -> Result<(), St
     Ok(())
 }
 
-/// 移除开机自启动
-pub fn remove_auto_start() -> Result<(), String> {
+/// 移除开机自启动（回执驱动：按记录的值名删，不依赖当前清单的 app_id）
+pub fn remove_auto_start_value(value_name: &str) -> Result<(), String> {
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let run_key = hkcu
-        .open_subkey_with_flags(
-            r"Software\Microsoft\Windows\CurrentVersion\Run",
-            KEY_WRITE,
-        )
+        .open_subkey_with_flags(RUN_KEY, KEY_WRITE)
         .map_err(|e| format!("Failed to open Run key: {}", e))?;
 
     run_key
-        .delete_value(meta::app_id())
+        .delete_value(value_name)
         .map_err(|e| format!("Failed to remove auto-start: {}", e))?;
 
     Ok(())
@@ -90,15 +112,15 @@ pub fn register_url_protocol(install_dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// 移除 URL 协议注册
-pub fn unregister_url_protocol() -> Result<(), String> {
+/// 移除 URL 协议注册（回执驱动：按记录的协议名删）
+pub fn unregister_url_protocol_named(protocol: &str) -> Result<(), String> {
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let classes_key = hkcu
         .open_subkey_with_flags(r"Software\Classes", KEY_WRITE)
         .map_err(|e| format!("Failed to open Classes key: {}", e))?;
 
     classes_key
-        .delete_subkey_all(meta::url_protocol())
+        .delete_subkey_all(protocol)
         .map_err(|e| format!("Failed to remove protocol key: {}", e))?;
 
     Ok(())
@@ -160,11 +182,20 @@ pub fn write_uninstall_info(config: &InstallConfig) -> Result<(), String> {
     Ok(())
 }
 
-/// 移除卸载信息
-pub fn remove_uninstall_info() -> Result<(), String> {
+/// 移除卸载信息（回执驱动：按记录的键路径删，故 display_name 改过也能清掉旧键）
+pub fn remove_uninstall_key(key: &str) -> Result<(), String> {
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
-    hklm.delete_subkey_all(&uninst_key())
+    hklm.delete_subkey_all(key)
         .map_err(|e| format!("Failed to remove uninstall key: {}", e))?;
+
+    Ok(())
+}
+
+/// 删除应用自身的注册表键（含回执与字体跟踪值）。卸载收尾调用。
+pub fn remove_app_key() -> Result<(), String> {
+    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+    hklm.delete_subkey_all(format!("Software\\{}", meta::app_id()))
+        .map_err(|e| format!("Failed to remove app key: {}", e))?;
 
     Ok(())
 }
