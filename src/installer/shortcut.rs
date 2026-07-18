@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use crate::manifest::{ShortcutInfo, ShortcutLocation};
+use crate::manifest::{expand_placeholders, ShortcutInfo, ShortcutLocation};
 use crate::meta;
 
 /// `create_shortcuts` 实际创建了什么 + 失败信息。
@@ -22,8 +22,22 @@ pub struct CreatedShortcuts {
 pub fn create_shortcuts(install_dir: &Path, items: &[ShortcutInfo]) -> CreatedShortcuts {
     let mut created = CreatedShortcuts::default();
 
+    // 占位符替换值（使能力段配置对 dev/release 等变体通用）
+    let (main_exe, setting_exe, display, app_id) = (
+        meta::main_exe(),
+        meta::setting_exe(),
+        meta::app_display_name(),
+        meta::app_id(),
+    );
+    let expand = |s: &str| expand_placeholders(s, main_exe, setting_exe, display, app_id);
+
     for item in items {
-        let target = install_dir.join(&item.target);
+        // {setting_exe} 在未配置设置程序时展开为空 → 跳过该快捷方式
+        let target_rel = expand(&item.target);
+        if target_rel.trim().is_empty() {
+            continue;
+        }
+        let target = install_dir.join(&target_rel);
         if !target.exists() {
             continue;
         }
@@ -36,12 +50,12 @@ pub fn create_shortcuts(install_dir: &Path, items: &[ShortcutInfo]) -> CreatedSh
             continue;
         }
 
-        let link_path = dir.join(format!("{}.lnk", item.effective_name()));
+        let link_path = dir.join(format!("{}.lnk", expand(item.effective_name())));
         match create_shortcut(
             &target,
             &link_path,
             &install_dir.to_string_lossy(),
-            item.effective_description(),
+            &expand(item.effective_description()),
         ) {
             Ok(()) => {
                 if item.location == ShortcutLocation::StartMenu {

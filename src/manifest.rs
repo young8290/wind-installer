@@ -301,6 +301,24 @@ impl ShortcutInfo {
     }
 }
 
+/// 展开清单占位符：`{main_exe}` `{setting_exe}` `{display_name}` `{app_id}`。
+///
+/// 让一份能力段配置对多个应用变体（如 dev/release，其 exe 名与显示名不同）通用：
+/// 快捷方式写 `target = "{setting_exe}"`，安装器运行期按 `[app]` 字段替换，配置无需
+/// 为每个变体各写一份。`{setting_exe}` 在未配置设置程序时展开为空串——调用方据此跳过。
+pub fn expand_placeholders(
+    s: &str,
+    main_exe: &str,
+    setting_exe: &str,
+    display_name: &str,
+    app_id: &str,
+) -> String {
+    s.replace("{main_exe}", main_exe)
+        .replace("{setting_exe}", setting_exe)
+        .replace("{display_name}", display_name)
+        .replace("{app_id}", app_id)
+}
+
 /// 用户数据目录配置：首次安装时把用户选定的数据目录写到
 /// `%LOCALAPPDATA%\{app.id}\{conf_file}`，供主程序启动时读取。
 #[derive(Debug, Clone, Serialize, Deserialize)]

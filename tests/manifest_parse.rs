@@ -98,6 +98,52 @@ fn repo_app_toml_parses_with_all_capability_sections() {
     assert_eq!(cfg.manifest.strings.data_dir_hint, "词库、配置路径");
 }
 
+/// 占位符使一份快捷方式配置对 dev/release 变体通用：同一段 config，按各变体的
+/// [app] 字段展开出不同的 target/name。这是消除「dev.ps1 双真相」的关键机制。
+#[test]
+fn shortcut_placeholders_expand_per_variant() {
+    use wind_installer::manifest::expand_placeholders;
+
+    // release 变体
+    assert_eq!(
+        expand_placeholders("{setting_exe}", "wind_input.exe", "wind_setting.exe", "清风输入法", "WindInput"),
+        "wind_setting.exe"
+    );
+    assert_eq!(
+        expand_placeholders("{display_name} 设置", "wind_input.exe", "wind_setting.exe", "清风输入法", "WindInput"),
+        "清风输入法 设置"
+    );
+
+    // dev 变体：同一份 config 文本，展开出 dev 的 exe 名与显示名
+    assert_eq!(
+        expand_placeholders("{setting_exe}", "wind_input_dev.exe", "wind_setting_dev.exe", "清风输入法 (开发版)", "WindInputDev"),
+        "wind_setting_dev.exe"
+    );
+    assert_eq!(
+        expand_placeholders("卸载 {display_name}", "wind_input_dev.exe", "wind_setting_dev.exe", "清风输入法 (开发版)", "WindInputDev"),
+        "卸载 清风输入法 (开发版)"
+    );
+}
+
+/// 未配置设置程序时 {setting_exe} 展开为空——create_shortcuts 据此跳过该快捷方式，
+/// 无需在配置里为「有/无设置程序」各写一份。
+#[test]
+fn setting_exe_placeholder_empty_when_unset() {
+    use wind_installer::manifest::expand_placeholders;
+    let expanded = expand_placeholders("{setting_exe}", "app.exe", "", "App", "App");
+    assert!(expanded.trim().is_empty());
+}
+
+/// 无占位符的字面 target 原样保留。
+#[test]
+fn literal_target_passes_through_unchanged() {
+    use wind_installer::manifest::expand_placeholders;
+    assert_eq!(
+        expand_placeholders("uninstall.exe", "app.exe", "set.exe", "App", "App"),
+        "uninstall.exe"
+    );
+}
+
 /// 能力段的空值回退：name 取 target 文件名，exe 回退 main_exe。
 #[test]
 fn capability_fallbacks_resolve_from_target_and_main_exe() {

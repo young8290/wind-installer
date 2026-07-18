@@ -408,9 +408,18 @@ fn cmd_inspect(file: &Path) -> Result<(), String> {
         },
     );
     print_capability("快捷方式 [[shortcut]]", !m.shortcut.is_empty(), || {
+        // 展开占位符显示实际快捷方式名（与运行期安装器一致），便于核对
         m.shortcut
             .iter()
-            .map(|s| s.effective_name().to_string())
+            .map(|s| {
+                wind_installer::manifest::expand_placeholders(
+                    s.effective_name(),
+                    &m.app.main_exe,
+                    &m.app.setting_exe,
+                    &m.app.display_name,
+                    &m.app.id,
+                )
+            })
             .collect::<Vec<_>>()
             .join(", ")
     });
