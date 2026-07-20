@@ -71,7 +71,17 @@ impl Step<InstallCtx<'_>> for TerminateProcesses {
         "正在停止旧进程...".into()
     }
     fn run(&self, _ctx: &mut InstallCtx, _r: &mut dyn Reporter) -> Result<(), String> {
-        process::terminate_app_processes()
+        let survivors = process::terminate_app_processes();
+        if survivors.is_empty() {
+            Ok(())
+        } else {
+            // 非致命：文件锁随后由 create_or_backup 改名兜底。但把杀不掉的进程写进日志，
+            // 否则"某进程没杀掉"无从诊断。
+            Err(format!(
+                "以下进程未能终止（占用的文件将靠改名释放）: {}",
+                survivors.join(", ")
+            ))
+        }
     }
 }
 

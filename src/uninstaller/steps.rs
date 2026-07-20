@@ -54,7 +54,12 @@ impl Step<UninstallCtx<'_>> for TerminateProcesses {
         "正在停止进程...".into()
     }
     fn run(&self, _ctx: &mut UninstallCtx, _r: &mut dyn Reporter) -> Result<(), String> {
-        process::terminate_app_processes()
+        let survivors = process::terminate_app_processes();
+        if survivors.is_empty() {
+            Ok(())
+        } else {
+            Err(format!("以下进程未能终止: {}", survivors.join(", ")))
+        }
     }
 }
 

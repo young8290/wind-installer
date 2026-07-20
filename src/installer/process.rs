@@ -14,45 +14,44 @@ use windows::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_T
 
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
-/// 终止清单 app.process_names 声明的进程
-pub fn terminate_app_processes() -> Result<(), String> {
-    let exe_names = meta::process_names();
+/// 终止清单 app.process_names 声明的进程；返回仍存活（杀不掉）的进程映像名。
+///
+/// 以 Win32 `TerminateProcess` 为主手段、**每轮**直接强杀，不再仅依赖 PowerShell
+/// `Stop-Process`（后者在部分机器上会静默失效，而旧实现只在最后一轮才兜底 Win32）；
+/// PowerShell 调用保留为额外兜底。
+///
+/// 返回值非空即表示有进程终止不了——调用方应写入安装日志。历史上这里用 `eprintln`
+/// 告警，但 GUI（windows subsystem）无控制台，告警全部丢失，导致"某进程没杀掉"无从诊断。
+pub fn terminate_app_processes() -> Vec<String> {
+    // 输入统一小写，与 find_pids 内部对实际进程名的小写比较对齐（防 process_names 含大写时漏杀）
+    let images: Vec<String> = meta::process_names()
+        .iter()
+        .map(|n| format!("{}.exe", n.to_lowercase()))
+        .collect();
 
-    // 轮询最多 3 次；每轮用单次 PowerShell 调用杀掉所有存活进程
-    for round in 0..3 {
-        let alive: Vec<&str> = exe_names
-            .iter()
-            .map(|s| s.as_str())
-            .filter(|n| !find_pids(&format!("{}.exe", n)).is_empty())
-            .collect();
-
+    for _ in 0..4 {
+        let alive: Vec<&String> = images.iter().filter(|img| !find_pids(img).is_empty()).collect();
         if alive.is_empty() {
-            return Ok(());
+            return Vec::new();
         }
 
-        // 单次 PowerShell Stop-Process 覆盖所有仍存活的进程（Win11 上比 taskkill 更可靠）
-        stop_process_all(&alive);
-
-        // 最后一轮再兜底一次 Win32 TerminateProcess
-        if round == 2 {
-            for name in &alive {
-                for pid in find_pids(&format!("{}.exe", name)) {
-                    force_kill_pid(pid);
-                }
+        // 主手段：Win32 TerminateProcess 逐 PID 强杀（直接、可靠、无外部进程依赖）
+        for img in &alive {
+            for pid in find_pids(img) {
+                force_kill_pid(pid);
             }
         }
+        // 兜底：单次 PowerShell Stop-Process 覆盖 Win32 偶发失败的边角
+        let names: Vec<&str> = alive.iter().map(|s| s.trim_end_matches(".exe")).collect();
+        stop_process_all(&names);
 
-        std::thread::sleep(std::time::Duration::from_millis(500));
+        std::thread::sleep(std::time::Duration::from_millis(400));
     }
 
-    // 仍存活：警告后继续，BackupIfLocked 兜底文件锁问题
-    for name in exe_names {
-        if !find_pids(&format!("{}.exe", name)).is_empty() {
-            eprintln!("Warning: {}.exe could not be terminated, relying on BackupIfLocked", name);
-        }
-    }
-
-    Ok(())
+    images
+        .into_iter()
+        .filter(|img| !find_pids(img).is_empty())
+        .collect()
 }
 
 /// 单次 PowerShell Stop-Process 杀掉多个进程名（只启动一次 PowerShell，开销小）
