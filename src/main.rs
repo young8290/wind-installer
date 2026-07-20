@@ -24,9 +24,14 @@ struct Args {
     #[command(subcommand)]
     mode: Option<Mode>,
 
-    /// 静默安装（跳过 GUI）
+    /// 完全静默安装（无任何界面）
     #[arg(long)]
     silent: bool,
+
+    /// 带界面的静默安装：跳过配置页直接安装，显示进度，完成后自动退出。
+    /// 应用内自动升级用这个 —— 用户需要看到进度，但不该被要求再确认一次安装路径。
+    #[arg(long)]
+    quiet: bool,
 
     /// 安装目录
     #[arg(long)]
@@ -53,6 +58,41 @@ enum Mode {
     Uninstall,
 }
 
+#[cfg(test)]
+mod arg_tests {
+    use super::*;
+
+    /// 应用内自动升级传入的正是这组参数；解析失败会静默退化成交互式向导
+    /// （`ignore_errors = true` 让 clap 返回全默认值，silent 变回 false）。
+    #[test]
+    fn silent_install_with_quoted_dir() {
+        let args = Args::parse_from([
+            "wind-installer",
+            "--silent",
+            "--dir",
+            r"C:\Program Files\WindInputDev",
+        ]);
+        assert!(args.silent, "--silent 未被识别");
+        assert_eq!(
+            args.dir,
+            Some(PathBuf::from(r"C:\Program Files\WindInputDev"))
+        );
+    }
+
+    #[test]
+    fn silent_alone() {
+        let args = Args::parse_from(["wind-installer", "--silent"]);
+        assert!(args.silent, "--silent 单独传入也未被识别");
+    }
+
+    /// 未知参数应被忽略而不影响已知参数 —— 这是 ignore_errors 的本意。
+    #[test]
+    fn unknown_flag_does_not_swallow_known_ones() {
+        let args = Args::parse_from(["wind-installer", "--silent", "--future-flag"]);
+        assert!(args.silent, "未知参数把 --silent 一起吞掉了");
+    }
+}
+
 fn main() {
     let args = Args::parse();
 
@@ -76,8 +116,32 @@ fn main() {
     }
 }
 
+/// 启动诊断：把解析到的参数与提权状态追加到 %TEMP%\wind_installer_args.log。
+///
+/// 安装器是 `windows_subsystem = "windows"` 的 GUI 进程，没有控制台，`eprintln!` 的
+/// 输出无处可见。排查「为何没有静默安装」时，这个文件是唯一能看到真相的地方 ——
+/// 尤其能暴露 `request_elevation` 重启自身后参数丢失：日志里会出现两条记录，
+/// 第一条 `silent=true admin=false`，第二条 `silent=false admin=true`。
+fn log_startup(tag: &str, args: &Args) {
+    use std::io::Write;
+    let line = format!(
+        "{tag}: silent={} dir={:?} datadir={:?} admin={} argv={:?}\n",
+        args.silent,
+        args.dir,
+        args.datadir,
+        util::admin::is_admin(),
+        std::env::args().collect::<Vec<_>>(),
+    );
+    let _ = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(std::env::temp_dir().join("wind_installer_args.log"))
+        .and_then(|mut f| f.write_all(line.as_bytes()));
+}
+
 /// 运行安装
 fn run_install(args: Args) {
+    log_startup("install", &args);
     // 载入清单（来自自身追加的归档）
     if let Err(e) = meta::bootstrap() {
         eprintln!("无法载入安装清单: {}", e);
@@ -116,7 +180,10 @@ fn run_install(args: Args) {
             std::process::exit(1);
         }
     } else {
-        ui::install_wizard::run_install_wizard();
+        ui::install_wizard::run_install_wizard(ui::install_wizard::WizardOptions {
+            quiet: args.quiet,
+            install_dir: args.dir,
+        });
     }
 
     util::single::release_lock();

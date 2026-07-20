@@ -19,11 +19,20 @@ const PAGE_CONFIG: usize = 0;
 const PAGE_PROGRESS: usize = 1;
 const PAGE_FINISH: usize = 2;
 
+/// quiet 模式在置灰的配置页停留多久后自动开始安装。
+/// 太短则闪一下看不清装的是什么，太长则拖慢升级。
+const QUIET_PREVIEW_MS: u64 = 1000;
+/// quiet 模式安装成功后，完成页停留多久自动退出。
+const QUIET_FINISH_MS: u64 = 2000;
+
 enum ProgressMsg {
     Status(String),
     /// 总体进度 ∈ [0,1]，由 [`GuiReporter`] 按「已完成步骤 + 步内比例」折算。
     Progress(f32),
     Finished(bool, String),
+    /// quiet 模式停留片刻后开始安装 —— 由后台线程发出，UI 线程据此切到进度页。
+    /// 切页必须回到 UI 线程做（Signal 非 Send），故不能在延迟线程里直接写。
+    BeginInstall,
 }
 
 /// 把 [`Reporter`] 事件转成 UI 通道消息，并同步写安装日志。
@@ -67,16 +76,119 @@ impl Reporter for GuiReporter {
     }
 }
 
-pub fn run_install_wizard() {
+/// 向导启动选项。
+#[derive(Debug, Clone, Default)]
+pub struct WizardOptions {
+    /// 带界面的静默安装：跳过配置页直接安装，完成后自动退出。
+    ///
+    /// 用于应用内自动升级 —— 用户已经在设置里点过「立即安装」，不该再被要求
+    /// 确认一遍安装路径（升级必须原地进行，路径可改反而会造成双份安装）。
+    /// 与完全静默（`--silent`，无任何界面）的区别是仍显示进度，让用户知道在装什么。
+    pub quiet: bool,
+    /// 预设安装目录；`quiet` 模式下由调用方传入当前安装位置。
+    pub install_dir: Option<PathBuf>,
+}
+
+/// 后台执行安装计划。向导的「立即安装」按钮与 quiet 模式共用此入口，
+/// 确保两条路径跑的是同一套逻辑（此前该逻辑内联在按钮闭包里，无法复用）。
+fn spawn_install(
+    tx: Sender<ProgressMsg>,
+    install_dir: PathBuf,
+    data_dir: PathBuf,
+    mode: InstallMode,
+    is_fresh_install: bool,
+) {
+    std::thread::spawn(move || {
+        run_install_plan(tx, install_dir, data_dir, mode, is_fresh_install)
+    });
+}
+
+/// 同步执行安装计划（调用方负责放到后台线程）。
+///
+/// 与 [`spawn_install`] 分开，是为了让 quiet 模式能在**同一个**延迟线程里先 sleep、
+/// 再发切页消息、然后接着安装 —— 不必为了延迟而多起一个线程。
+fn run_install_plan(
+    tx: Sender<ProgressMsg>,
+    install_dir: PathBuf,
+    data_dir: PathBuf,
+    mode: InstallMode,
+    is_fresh_install: bool,
+) {
+    {
+        let mut logger = crate::util::log::InstallLogger::new();
+        logger.log(&format!("安装目录: {:?}", install_dir));
+        logger.log(&format!("安装模式: {:?}", mode));
+        let log_path = logger.path.to_string_lossy().to_string();
+
+        let mut config = crate::installer::config::InstallConfig::default();
+        config.install_dir = install_dir;
+        // 数据目录始终显式传入，config 是步骤读取数据目录的唯一入口
+        config.custom_data_dir = Some(data_dir);
+        config.use_custom_data_dir = true;
+
+        let mut archive = match crate::archive::ArchiveReader::open_current_exe() {
+            Ok(a) => a,
+            Err(e) => {
+                let msg = format!("无法打开安装数据: {}", e);
+                logger.log_error(&msg);
+                tx.send(ProgressMsg::Finished(false, msg)).ok();
+                return;
+            }
+        };
+
+        // 续写旧回执而非从空起（新清单删掉的能力其产物仍需可撤销）；
+        // 且须先于 plan 声明（plan 类型带 InstallCtx 生命周期）
+        let mut receipt = crate::installer::receipt::Receipt::load_or_default();
+
+        // 与静默路径共用同一份计划，仅 Reporter 不同
+        let plan = crate::installer::plan::plan_install(crate::meta::manifest(), mode);
+        let mut reporter = GuiReporter {
+            tx: tx.clone(),
+            logger,
+            index: 0,
+            total: plan.len(),
+        };
+
+        let mut ctx = crate::installer::step::InstallCtx {
+            config: &config,
+            mode,
+            is_fresh_install,
+            archive: &mut archive,
+            receipt: &mut receipt,
+        };
+
+        match crate::installer::step::run_plan(&plan, &mut ctx, &mut reporter) {
+            Ok(_) => {
+                reporter.log("=== 安装完成 ===");
+                tx.send(ProgressMsg::Finished(true, log_path)).ok();
+            }
+            Err(e) => {
+                // 致命失败：清除标志，否则宿主进程将永久停摆
+                let _ = crate::installer::registry::clear_installer_running();
+                reporter.log(&format!("=== 安装失败: {} ===", e));
+                tx.send(ProgressMsg::Finished(false, e)).ok();
+            }
+        }
+    }
+}
+
+pub fn run_install_wizard(opts: WizardOptions) {
     // ---- 运行期窗口尺寸 / 标题（来自清单）----
     let (win_w, win_h) = meta::install_win();
     let title = meta::window_title();
 
     // ---- 状态（Signal<T> 是 Copy 句柄，move 闭包自动复制，无需 clone 样板）----
     let is_fresh_install = crate::installer::registry::detect_installed_version().is_none();
-    let current_page      = signal(PAGE_CONFIG);
+    // quiet 模式同样从配置页开始（只是整页置灰不可改），停留片刻再自动进入安装。
+    // 直接跳到进度页会让用户来不及看清"在装什么、装到哪"，观感上像是窗口闪了一下。
+    let current_page = signal(PAGE_CONFIG);
     let install_mode      = signal(0usize);
-    let install_dir       = signal(default_install_dir());
+    let install_dir = signal(
+        opts.install_dir
+            .as_ref()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(default_install_dir),
+    );
     let install_dir_portable = signal(default_portable_dir());
     let data_dir          = signal(default_data_dir());
     let progress_text     = signal(String::from("正在准备安装..."));
@@ -86,11 +198,16 @@ pub fn run_install_wizard() {
     let config_error      = signal(String::new());
     let agreed            = signal(false);
 
+    // bool 是 Copy，可被下面的 channel 闭包直接捕获
+    let quiet = opts.quiet;
+
     // ---- 跨线程进度通道（on_message 在 UI 线程调用，可直接写 Signal）----
     let mut app = App::new(title.as_str(), win_w, win_h);
     let tx = app.channel::<ProgressMsg>(move |msg| match msg {
         ProgressMsg::Status(s)   => progress_text.set(s),
         ProgressMsg::Progress(f) => progress_value.set(f),
+        // 延迟结束，切到进度页；安装已在发出此消息的那个线程里继续进行
+        ProgressMsg::BeginInstall => current_page.set(PAGE_PROGRESS),
         ProgressMsg::Finished(ok, detail) => {
             progress_value.set(1.0);
             finish_success.set(ok);
@@ -98,8 +215,19 @@ pub fn run_install_wizard() {
                 finish_error.set(detail);
             }
             current_page.set(PAGE_FINISH);
+            // quiet 模式装完自动退出：先切到完成页停留片刻再关，用户能看到"装完了"
+            // 而不是窗口凭空消失。失败时**不**自动关，否则错误信息一闪而过无从排查。
+            if quiet && ok {
+                std::thread::spawn(|| {
+                    std::thread::sleep(std::time::Duration::from_millis(QUIET_FINISH_MS));
+                    std::process::exit(0);
+                });
+            }
         }
     });
+
+    // 「立即安装」按钮的 move 闭包会拿走 tx 的所有权，quiet 模式的那份须提前复制
+    let quiet_tx = tx.clone();
 
     // ============================================================
     //  PAGE 0：配置页
@@ -110,6 +238,9 @@ pub fn run_install_wizard() {
         .padding_xy(40, 0)
         .spacing(8)
         .visible_when(move || current_page.get() == PAGE_CONFIG)
+        // quiet 模式整页置灰不可交互：升级必须原地进行，路径与模式都不允许改动。
+        // enabled_when 作用于整个子树，故不必逐个控件禁用（且新增控件自动受控）。
+        .enabled_when(move || !quiet)
         // ── 品牌区（Logo + 应用名 + 版本）─────────────────────────
         .child(Element::leaf().weight(1.0))
         .child(
@@ -318,67 +449,13 @@ pub fn run_install_wizard() {
                         InstallMode::Portable
                     };
 
-                    let tx = tx.clone();
-                    std::thread::spawn(move || {
-                        let mut logger = crate::util::log::InstallLogger::new();
-                        logger.log(&format!("安装目录: {:?}", install_dir_val));
-                        logger.log(&format!("安装模式: {:?}", mode));
-                        let log_path = logger.path.to_string_lossy().to_string();
-
-                        let mut config = crate::installer::config::InstallConfig::default();
-                        config.install_dir = install_dir_val;
-                        // 数据目录始终取向导里的值（其默认值即 default_data_dir()），
-                        // config 是步骤读取数据目录的唯一入口
-                        config.custom_data_dir = Some(data_dir_val);
-                        config.use_custom_data_dir = true;
-
-                        let mut archive = match crate::archive::ArchiveReader::open_current_exe() {
-                            Ok(a) => a,
-                            Err(e) => {
-                                let msg = format!("无法打开安装数据: {}", e);
-                                logger.log_error(&msg);
-                                tx.send(ProgressMsg::Finished(false, msg)).ok();
-                                return;
-                            }
-                        };
-
-                        // 续写旧回执而非从空起（新清单删掉的能力其产物仍需可撤销）；
-                        // 且须先于 plan 声明（plan 类型带 InstallCtx 生命周期）
-                        let mut receipt =
-                            crate::installer::receipt::Receipt::load_or_default();
-
-                        // 与静默路径共用同一份计划，仅 Reporter 不同
-                        let plan = crate::installer::plan::plan_install(crate::meta::manifest(), mode);
-                        let mut reporter = GuiReporter {
-                            tx: tx.clone(),
-                            logger,
-                            index: 0,
-                            total: plan.len(),
-                        };
-
-                        let mut ctx = crate::installer::step::InstallCtx {
-                            config: &config,
-                            mode,
-                            is_fresh_install,
-                            archive: &mut archive,
-                            receipt: &mut receipt,
-                        };
-
-                        let result = crate::installer::step::run_plan(&plan, &mut ctx, &mut reporter);
-
-                        match result {
-                            Ok(_) => {
-                                reporter.log("=== 安装完成 ===");
-                                tx.send(ProgressMsg::Finished(true, log_path)).ok();
-                            }
-                            Err(e) => {
-                                // 致命失败：清除标志，否则宿主进程将永久停摆
-                                let _ = crate::installer::registry::clear_installer_running();
-                                reporter.log(&format!("=== 安装失败: {} ===", e));
-                                tx.send(ProgressMsg::Finished(false, e)).ok();
-                            }
-                        }
-                    });
+                    spawn_install(
+                        tx.clone(),
+                        install_dir_val,
+                        data_dir_val,
+                        mode,
+                        is_fresh_install,
+                    );
                 })
         )
         .child(Element::leaf().weight(1.0));
@@ -537,6 +614,29 @@ pub fn run_install_wizard() {
 
     #[cfg(feature = "frameless")]
     let app = app.frameless();
+
+    // quiet 模式无人点「立即安装」，这里代为发起：先让置灰的配置页停留片刻，
+    // 用户得以看清应用名、版本与安装目录，再自动转入进度页开始安装。
+    //
+    // 放在 run() 之前：channel 的 pump 已注册，线程此刻发来的消息不会丢失。
+    // 模式固定 Standard —— 便携安装由调用方（wind-setting）拦下走完整向导，
+    // 不会走到这里（无人值守升级会把便携改造成标准安装）。
+    if quiet {
+        let dir = expand_env_path(&install_dir.get());
+        let data = expand_env_path(&data_dir.get());
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(QUIET_PREVIEW_MS));
+            // 先切页再装：消息按序处理，进度页必定先于第一条进度就位
+            quiet_tx.send(ProgressMsg::BeginInstall).ok();
+            run_install_plan(
+                quiet_tx,
+                dir,
+                data,
+                InstallMode::Standard,
+                is_fresh_install,
+            );
+        });
+    }
 
     app.run();
 }
