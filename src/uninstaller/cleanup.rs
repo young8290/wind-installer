@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::meta;
+use crate::util::reboot;
 
 /// 清理选项
 #[derive(Debug, Clone)]
@@ -97,14 +98,17 @@ pub fn delete_install_files(install_dir: &PathBuf) -> Result<(), String> {
     for binary in &binaries {
         let binary = binary.as_str();
         let path = install_dir.join(binary);
-        if path.exists() {
-            if let Err(_) = std::fs::remove_file(&path) {
-                // 文件被锁定，尝试重命名
-                let random_suffix = rand::random::<u32>();
-                let old_name = format!("{}.old_{:08x}", binary, random_suffix);
-                let old_path = install_dir.join(&old_name);
-                let _ = std::fs::rename(&path, &old_path);
-            }
+        if path.exists() && std::fs::remove_file(&path).is_err() {
+            // 被锁定删不掉：改名让路 + 排重启删。改名成功就删改名后的，失败就直接排原路径。
+            let random_suffix = rand::random::<u32>();
+            let old_name = format!("{}.old_{:08x}", binary, random_suffix);
+            let old_path = install_dir.join(&old_name);
+            let target = if std::fs::rename(&path, &old_path).is_ok() {
+                old_path
+            } else {
+                path
+            };
+            let _ = reboot::schedule_delete_on_reboot(&target);
         }
     }
 
@@ -122,18 +126,25 @@ pub fn delete_install_files(install_dir: &PathBuf) -> Result<(), String> {
         let _ = std::fs::remove_file(&uninstall_exe);
     }
 
-    // 清理备份文件
+    // 清理备份文件（含本次改名让路产生的 .old_）：仍锁定删不掉的排重启删。
     if let Ok(entries) = std::fs::read_dir(install_dir) {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
-            if name.contains(".old_") || name.ends_with(".bak") {
-                let _ = std::fs::remove_file(entry.path());
+            if !(name.contains(".old_") || name.ends_with(".bak")) {
+                continue;
+            }
+            let p = entry.path();
+            if std::fs::remove_file(&p).is_err() {
+                let _ = reboot::schedule_delete_on_reboot(&p);
             }
         }
     }
 
-    // 尝试删除安装目录
-    if let Err(_) = std::fs::remove_dir_all(install_dir) {
+    // 尝试删除安装目录：删不掉（尚有锁定文件）就排重启删——上面各文件已单独排队，
+    // 目录会在它们清空后于重启时删除。
+    if std::fs::remove_dir_all(install_dir).is_err()
+        && reboot::schedule_delete_on_reboot(install_dir).is_err()
+    {
         eprintln!("Warning: Could not delete install directory");
     }
 

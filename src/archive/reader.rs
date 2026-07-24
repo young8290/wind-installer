@@ -188,6 +188,11 @@ fn create_or_backup(path: &Path) -> Result<File, String> {
             let old_path = path.parent().unwrap_or(Path::new(".")).join(old_name);
             std::fs::rename(path, &old_path)
                 .map_err(|e| format!("Failed to rename locked file: {}", e))?;
+            // 改名只是让路：那份旧文件仍被进程占用、当前删不掉，排进重启删除队列兜底，
+            // 否则 .old_ 会随每次带锁升级永久累积。best-effort——失败不影响新文件写入。
+            if let Err(e) = crate::util::reboot::schedule_delete_on_reboot(&old_path) {
+                eprintln!("Warning: {}", e);
+            }
         }
         Err(e) => return Err(format!("Failed to create output file: {}", e)),
     }

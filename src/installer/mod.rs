@@ -1,6 +1,4 @@
 pub mod config;
-#[allow(dead_code)]
-pub mod extract;
 pub mod legacy;
 pub mod plan;
 pub mod receipt;
