@@ -221,6 +221,13 @@ pub struct ImeInfo {
     /// 32 位 TSF DLL 文件名（相对安装目录），可空。
     #[serde(default)]
     pub dll_x86: String,
+    /// 安装前是否清扫「指向已消失 DLL 的悬空注册」（本产品旧版/同 CLSID 前身卸载不净的
+    /// COM CLSID、CTF TIP、旧 NSIS 的 RunOnce 重注册触发器）。
+    ///
+    /// 缺省 `false`——通用安装器不擅自改注册表。仅当打包器在 `app.toml` 显式置 `true`
+    /// 时才启用。清扫严格按本段 clsid/profile 变体隔离，且只删悬空项，不碰健康注册。
+    #[serde(default)]
+    pub sweep_residue: bool,
 }
 
 /// 字体安装信息。

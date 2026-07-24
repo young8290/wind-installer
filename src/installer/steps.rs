@@ -10,7 +10,7 @@ use crate::meta;
 
 use super::receipt::ReceiptEntry;
 use super::step::{InstallCtx, Reporter, Step};
-use super::{acl, font, ime, is_uninstaller_entry, legacy, process, registry, shortcut, userdata};
+use super::{acl, font, ime, is_uninstaller_entry, legacy, process, registry, residue, shortcut, userdata};
 use super::{InstallMode, UNINSTALLER_NAME};
 
 // ── 安装环境标志 ────────────────────────────────────────────────────────────
@@ -94,6 +94,29 @@ impl Step<InstallCtx<'_>> for UnregisterOldCom {
     }
     fn run(&self, ctx: &mut InstallCtx, _r: &mut dyn Reporter) -> Result<(), String> {
         ime::unregister_old_com(&ctx.config.install_dir)
+    }
+}
+
+/// 清扫上一版/旧产品遗留、指向已消失 DLL 的悬空 TSF 注册（COM CLSID、CTF TIP、
+/// 旧 NSIS 的 RunOnce 重注册触发器）。变体隔离：只清当前清单 clsid/profile 那一套键。
+///
+/// 非致命：清扫失败绝不能阻断安装。放在注册之前——清完由 `RegisterCom`/
+/// `RegisterInputMethod` 重建为指向新 DLL 的正确注册。
+pub struct SweepImeResidue;
+
+impl Step<InstallCtx<'_>> for SweepImeResidue {
+    fn name(&self) -> String {
+        "正在清理输入法残留...".into()
+    }
+    fn run(&self, _ctx: &mut InstallCtx, r: &mut dyn Reporter) -> Result<(), String> {
+        let Some(ime) = meta::manifest().ime.as_ref() else {
+            return Ok(());
+        };
+        let report = residue::sweep_dangling_ime(ime, meta::app_id());
+        for item in &report.removed {
+            r.log(&format!("已清除残留：{}", item));
+        }
+        Ok(())
     }
 }
 

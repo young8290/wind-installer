@@ -31,6 +31,12 @@ pub fn plan_install<'a>(m: &AppManifest, mode: InstallMode) -> Vec<Box<dyn Step<
     if m.ime.is_some() {
         plan.push(Box::new(UnregisterOldCom));
     }
+    // 清扫是打包器显式声明的能力（[ime].sweep_residue = true），缺省不入计划。
+    // 反注册处理「旧 DLL 仍在」的升级；清扫补上「旧 DLL 已消失」的悬空残留——
+    // 正是 UnregisterOldCom 因 dll.exists()==false 跳过的那个缺口。
+    if m.ime.as_ref().is_some_and(|i| i.sweep_residue) {
+        plan.push(Box::new(SweepImeResidue));
+    }
     if !m.app.legacy_files.is_empty() || !m.app.legacy_dirs.is_empty() {
         plan.push(Box::new(CleanupLegacy));
     }

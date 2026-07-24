@@ -119,6 +119,24 @@ fn datadir_conf_is_opt_in() {
 }
 
 #[test]
+fn ime_residue_sweep_is_opt_in() {
+    // 清扫是打包器显式声明的能力：仅有 [ime] 段不会自动挂上清扫步骤——
+    // 通用安装器不擅自改注册表。只有 [ime].sweep_residue = true 才入计划。
+    assert!(!plan_names(FULL, InstallMode::Standard)
+        .iter()
+        .any(|n| n.contains("清理输入法残留")));
+
+    // 注入到 [ime] 段内（FULL 末尾是 [datadir]，直接追加会落错段）。
+    let toml = FULL.replace(
+        "dll_x64      = \"demo_tsf.dll\"",
+        "dll_x64      = \"demo_tsf.dll\"\nsweep_residue = true",
+    );
+    assert!(plan_names(&toml, InstallMode::Standard)
+        .iter()
+        .any(|n| n.contains("清理输入法残留")));
+}
+
+#[test]
 fn full_manifest_plans_every_capability_in_order() {
     let names = plan_names(FULL, InstallMode::Standard);
     assert_eq!(

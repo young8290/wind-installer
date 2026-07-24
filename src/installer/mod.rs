@@ -13,6 +13,7 @@ pub mod font;
 pub mod acl;
 pub mod process;
 pub mod ime;
+pub mod residue;
 
 use config::InstallConfig;
 use crate::archive::ArchiveReader;

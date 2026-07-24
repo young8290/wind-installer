@@ -66,6 +66,10 @@ profile_guid = "{99C2EE31-5C57-45A2-9C63-FB54B34FD90A}"
 lang_id      = "0804"                     # 简体中文
 dll_x64      = "wind_tsf.dll"
 dll_x86      = "wind_tsf_x86.dll"         # 留空则跳过 32 位注册
+# 安装前清扫「指向已消失 DLL 的悬空注册」：本产品旧版（含同 CLSID 的 Go 版）卸载不净时，
+# HKCR\CLSID、CTF\TIP、旧 NSIS 的 RunOnce 会残留并指向已删 DLL，导致部分应用无法开启输入法。
+# 缺省 false（通用安装器不擅自改注册表）；输入法产品显式置 true。只删悬空项，按本段 GUID 变体隔离。
+sweep_residue = true
 
 # ── 字体安装：可多条，缺省即跳过。普通应用通常删除本段 ─────────────────────
 [[font]]
