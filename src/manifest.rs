@@ -333,6 +333,13 @@ pub struct DataDirInfo {
     /// 配置文件名。
     #[serde(default = "default_conf_file")]
     pub conf_file: String,
+    /// 数据目录的「确属本产品」标志物（文件或子目录名，相对数据目录）。
+    ///
+    /// 卸载删除用户数据前，若目录非空则要求至少命中其一，否则跳过删除。缺省为空
+    /// = 不做内容检查（通用应用不必声明）。存在的意义：`conf_file` 是用户可编辑的
+    /// 明文路径，而下游动作是 `remove_dir_all` + 桌面备份，判错一次不可逆。
+    #[serde(default)]
+    pub markers: Vec<String>,
 }
 
 /// 安装完成后的启动行为。

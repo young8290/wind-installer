@@ -82,6 +82,93 @@ impl CleanupOptions {
     }
 }
 
+// ── 用户数据目录删除守卫 ─────────────────────────────────────────────────────
+//
+// 数据目录路径来自 `datadir.conf`——一个**用户可编辑的明文文件**，而下游动作是
+// `remove_dir_all` + 拷贝到桌面。判错一次就是不可逆的数据损失，故删除前两层校验：
+// 路径形状（通用）与内容标志（清单声明 `markers` 才启用）。
+
+/// 不得整体删除的著名目录。取当前用户/系统环境实际值，空值自动跳过。
+///
+/// 只禁止**等于**，不禁止其子目录——默认数据目录 `%APPDATA%\{id}` 正是 `%APPDATA%`
+/// 的子目录，一并禁掉会把正常卸载也拦下。
+fn forbidden_roots() -> Vec<PathBuf> {
+    let mut v: Vec<PathBuf> = ["SystemRoot", "ProgramFiles", "ProgramFiles(x86)", "ProgramW6432",
+        "USERPROFILE", "APPDATA", "LOCALAPPDATA", "PUBLIC", "TEMP"]
+        .iter()
+        .filter_map(|k| std::env::var_os(k).map(PathBuf::from))
+        .collect();
+    if let Some(profile) = std::env::var_os("USERPROFILE").map(PathBuf::from) {
+        for sub in ["Desktop", "Documents", "Downloads", "Pictures", "Music", "Videos"] {
+            v.push(profile.join(sub));
+        }
+    }
+    v
+}
+
+/// 路径大小写不敏感相等（去尾分隔符）。
+fn path_eq_ignore_case(a: &Path, b: &Path) -> bool {
+    let norm = |p: &Path| {
+        p.to_string_lossy()
+            .replace('/', "\\")
+            .trim_end_matches('\\')
+            .to_lowercase()
+    };
+    norm(a) == norm(b)
+}
+
+/// 第一层：路径形状。纯函数（`forbidden` 由调用方注入），便于单测。
+fn guard_shape(dir: &Path, forbidden: &[PathBuf]) -> Result<(), String> {
+    // 绝对路径。这一条同时挡住 Windows 驱动器相对路径 `X:name`——它看着像绝对路径，
+    // `is_absolute()` 却为 false，会解析到该盘当前目录上。
+    if !dir.is_absolute() {
+        return Err(format!("不是绝对路径: {}", dir.display()));
+    }
+    if dir
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return Err(format!("路径含 `..`: {}", dir.display()));
+    }
+    // `D:\` 的组件是 [Prefix, RootDir] = 2；`D:\Foo` 才是 3。据此排除驱动器/共享根。
+    if dir.components().count() < 3 {
+        return Err(format!("过于靠近驱动器根: {}", dir.display()));
+    }
+    if let Some(hit) = forbidden.iter().find(|f| path_eq_ignore_case(dir, f)) {
+        return Err(format!("命中受保护目录: {}", hit.display()));
+    }
+    Ok(())
+}
+
+/// 第二层：内容标志。`markers` 为空即不检查；空目录一律放行（没东西可丢）。
+fn guard_markers(dir: &Path, markers: &[String]) -> Result<(), String> {
+    if markers.is_empty() {
+        return Ok(());
+    }
+    let mut entries = match std::fs::read_dir(dir) {
+        Ok(it) => it,
+        // 读不出来就别删——宁可留下也不盲删。
+        Err(e) => return Err(format!("无法读取目录（{}）: {}", e, dir.display())),
+    };
+    if entries.next().is_none() {
+        return Ok(());
+    }
+    if markers.iter().any(|m| dir.join(m).exists()) {
+        return Ok(());
+    }
+    Err(format!(
+        "目录非空且不含本产品标志物（{}）: {}",
+        markers.join(" / "),
+        dir.display()
+    ))
+}
+
+/// 用户数据目录是否可安全删除。两层守卫都通过才放行。
+pub fn guard_user_data_dir(dir: &Path, markers: &[String]) -> Result<(), String> {
+    guard_shape(dir, &forbidden_roots())?;
+    guard_markers(dir, markers)
+}
+
 /// 删除安装文件
 pub fn delete_install_files(install_dir: &PathBuf) -> Result<(), String> {
     // 从 meta 动态构建二进制文件列表：进程名→.exe + ACL DLL 列表
@@ -167,16 +254,33 @@ pub fn cleanup_user_data(options: &CleanupOptions, user_data_dir: &Path) -> Resu
 
     // 清除用户配置（删除前可选备份到桌面）
     if options.clean_roaming && user_data_dir.exists() {
-        if options.backup_to_desktop {
-            // 目录名带本地时间戳，每次卸载生成唯一目录，避免覆盖历史备份
-            let backup_dir = desktop_dir()
-                .join(format!("{}_Backup_{}", meta::app_id(), local_timestamp()));
-            if let Err(e) = copy_dir_all(user_data_dir, &backup_dir) {
-                eprintln!("Warning: Failed to backup user data to desktop: {}", e);
+        // 守卫在**备份之前**：路径可疑时连拷贝都不做——把一个非本产品的目录整份复制到
+        // 桌面同样是伤害（体积、隐私），而且随后就要 remove_dir_all 它。
+        let markers = meta::manifest()
+            .datadir
+            .as_ref()
+            .map(|d| d.markers.as_slice())
+            .unwrap_or(&[]);
+        match guard_user_data_dir(user_data_dir, markers) {
+            // 守卫失败只跳过这一块，**不中断整个清理**——本地缓存与 WebView2 缓存
+            // 位置由我们自己算出、与这个可疑路径无关，照常清理。
+            Err(reason) => eprintln!(
+                "Refusing to delete user data directory: {} — 已跳过，请手动确认后自行删除",
+                reason
+            ),
+            Ok(()) => {
+                if options.backup_to_desktop {
+                    // 目录名带本地时间戳，每次卸载生成唯一目录，避免覆盖历史备份
+                    let backup_dir = desktop_dir()
+                        .join(format!("{}_Backup_{}", meta::app_id(), local_timestamp()));
+                    if let Err(e) = copy_dir_all(user_data_dir, &backup_dir) {
+                        eprintln!("Warning: Failed to backup user data to desktop: {}", e);
+                    }
+                }
+                if let Err(e) = std::fs::remove_dir_all(user_data_dir) {
+                    eprintln!("Warning: Failed to remove user data: {}", e);
+                }
             }
-        }
-        if let Err(e) = std::fs::remove_dir_all(user_data_dir) {
-            eprintln!("Warning: Failed to remove user data: {}", e);
         }
     }
 
@@ -211,6 +315,106 @@ fn local_timestamp() -> String {
         "{:04}{:02}{:02}_{:02}{:02}{:02}",
         st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond
     )
+}
+
+#[cfg(test)]
+mod guard_tests {
+    use super::*;
+
+    fn forbidden() -> Vec<PathBuf> {
+        vec![
+            PathBuf::from(r"C:\Windows"),
+            PathBuf::from(r"C:\Users\Someone"),
+            PathBuf::from(r"C:\Users\Someone\Desktop"),
+        ]
+    }
+
+    /// 正常数据目录必须放行——守卫拦错了等于卸载删不干净。
+    #[test]
+    fn normal_data_dirs_pass() {
+        for ok in [
+            r"C:\Users\Someone\AppData\Roaming\WindInput",
+            r"D:\MyData\WindInput",
+        ] {
+            assert!(
+                guard_shape(Path::new(ok), &forbidden()).is_ok(),
+                "应放行: {ok}"
+            );
+        }
+    }
+
+    /// 驱动器根、UNC 共享根：一旦删下去就是整盘。
+    #[test]
+    fn drive_and_share_roots_rejected() {
+        for bad in [r"D:\", r"C:\", r"\\server\share"] {
+            assert!(
+                guard_shape(Path::new(bad), &forbidden()).is_err(),
+                "应拒绝: {bad}"
+            );
+        }
+    }
+
+    /// 驱动器相对路径 `X:name` 看着像绝对路径，实则落到该盘当前目录。
+    #[test]
+    fn drive_relative_and_traversal_rejected() {
+        assert!(guard_shape(Path::new("C:data"), &forbidden()).is_err());
+        assert!(guard_shape(Path::new(r"data\WindInput"), &forbidden()).is_err());
+        assert!(guard_shape(Path::new(r"D:\a\..\..\Windows"), &forbidden()).is_err());
+    }
+
+    /// 著名目录本身不可整体删；大小写与尾分隔符不应绕过。
+    #[test]
+    fn forbidden_roots_rejected_case_insensitively() {
+        for bad in [r"C:\Windows", r"c:\windows\", r"C:\Users\Someone\Desktop"] {
+            assert!(
+                guard_shape(Path::new(bad), &forbidden()).is_err(),
+                "应拒绝: {bad}"
+            );
+        }
+    }
+
+    /// 但受保护目录的**子目录**必须放行——默认数据目录正是 `%APPDATA%` 的子目录。
+    #[test]
+    fn children_of_forbidden_roots_pass() {
+        assert!(guard_shape(Path::new(r"C:\Users\Someone\AppData"), &forbidden()).is_ok());
+    }
+
+    #[test]
+    fn markers_empty_means_no_content_check() {
+        let dir = tmpdir("markers_off");
+        std::fs::write(dir.join("random.txt"), b"x").unwrap();
+        assert!(guard_markers(&dir, &[]).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 非空但不含标志物 = 大概率不是我们的目录（用户把 conf 改成了 D:\Documents 之类）。
+    #[test]
+    fn non_empty_without_markers_rejected() {
+        let dir = tmpdir("markers_miss");
+        std::fs::write(dir.join("holiday.jpg"), b"x").unwrap();
+        let markers = vec!["config.toml".to_string(), "schemas".to_string()];
+        assert!(guard_markers(&dir, &markers).is_err());
+
+        // 命中任一标志物即放行（子目录形式也算）。
+        std::fs::create_dir_all(dir.join("schemas")).unwrap();
+        assert!(guard_markers(&dir, &markers).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 空目录放行：没东西可丢，拦下来只会留垃圾。全新装未启动过就是这种状态。
+    #[test]
+    fn empty_dir_passes_marker_check() {
+        let dir = tmpdir("markers_empty");
+        assert!(guard_markers(&dir, &["config.toml".to_string()]).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn tmpdir(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("wind_guard_{}_{}", std::process::id(), tag));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
 }
 
 /// 递归复制目录（用于卸载前备份用户数据到桌面）
