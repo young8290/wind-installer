@@ -23,6 +23,7 @@ main_exe     = "demo.exe"
 accent       = "#112233"
 text_primary = "AABBCC"
 accent_hover = "不是颜色"
+warning      = "#C0FFEE"
 
 [paths]
 install  = 'D:\Apps\{id}'
@@ -74,6 +75,7 @@ fn theme_accepts_both_hash_and_bare_hex() {
     init();
     assert_eq!(theme::accent(), 0x112233);
     assert_eq!(theme::text_primary(), 0xAABBCC);
+    assert_eq!(theme::warning(), 0xC0FFEE);
 }
 
 #[test]

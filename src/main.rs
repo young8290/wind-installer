@@ -58,6 +58,15 @@ enum Mode {
     Uninstall,
 }
 
+/// 操作成功，但有文件被占用、需重启系统才能清理干净。
+///
+/// 取值沿用 Windows 的 `ERROR_SUCCESS_REBOOT_REQUIRED`——MSI 与 NSIS 都用它表达
+/// 「装成功了，但请重启」。仅用于完全无界面的 `--silent`：那条路径没有窗口可以
+/// 留给用户看提示，退出码是唯一能把这个事实交给调用方的通道。
+///
+/// **调用方须知**：把 `3010` 当作成功而非失败处理，再自行提示用户重启。
+const EXIT_REBOOT_REQUIRED: i32 = 3010;
+
 #[cfg(test)]
 mod arg_tests {
     use super::*;
@@ -139,6 +148,23 @@ fn log_startup(tag: &str, args: &Args) {
         .and_then(|mut f| f.write_all(line.as_bytes()));
 }
 
+/// 记录「以 3010 退出」的原因。
+///
+/// 静默模式退出码非 0 时，调用方唯一能查的就是这个文件；不落盘的话，
+/// 用户只会看到「安装器返回了 3010」而无从知道是哪些文件卡住了。
+fn log_reboot_required(tag: &str) {
+    use std::io::Write;
+    let line = format!(
+        "{tag}: exit={EXIT_REBOOT_REQUIRED} reboot_required {}\n",
+        util::reboot::pending_summary()
+    );
+    let _ = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(std::env::temp_dir().join("wind_installer_args.log"))
+        .and_then(|mut f| f.write_all(line.as_bytes()));
+}
+
 /// 运行安装
 fn run_install(args: Args) {
     log_startup("install", &args);
@@ -178,6 +204,12 @@ fn run_install(args: Args) {
         let result = installer::perform_install(&config, installer::InstallMode::Standard);
         if !result.success {
             std::process::exit(1);
+        }
+        if result.need_reboot {
+            // 无界面模式没有「让用户看到提示再关闭」的余地，只能靠退出码传信。
+            log_reboot_required("install");
+            util::single::release_lock();
+            std::process::exit(EXIT_REBOOT_REQUIRED);
         }
     } else {
         ui::install_wizard::run_install_wizard(ui::install_wizard::WizardOptions {
@@ -220,6 +252,11 @@ fn run_uninstall(args: Args) {
         let result = uninstaller::perform_uninstall(&options);
         if !result.success {
             std::process::exit(1);
+        }
+        if result.need_reboot {
+            log_reboot_required("uninstall");
+            util::single::release_lock();
+            std::process::exit(EXIT_REBOOT_REQUIRED);
         }
     } else {
         ui::uninstall_wizard::run_uninstall_wizard();

@@ -34,6 +34,26 @@ wind-packer build --config <app.toml> --stub wind-installer.exe
 
 `plan::plan_install` 是"装什么、按什么顺序装"的唯一真相；GUI 与静默路径共用它，仅 Reporter 不同。不要在步骤内部再按模式/产品分支。
 
+## 锁定文件与「需要重启」
+
+升级时旧文件常被占用（典型是仍被 `ctfmon` 加载的 TSF DLL）。安装器不会因此失败：解压走「改名 `.old_xxxxxxxx` 让路 + `MoveFileEx(DELAY_UNTIL_REBOOT)` 排队」，新版照常就位。但**这个事实必须一路传到用户面前**。
+
+- **记账入口**：`util::reboot::schedule_delete_on_reboot` / `record_pending`。任何「当前删不掉」的路径都要经它们过一遍——它维护一本进程级账本。底层 IO 处没有 `Step` 上下文也没有 `Reporter`，逐层改签名会污染 `extract_entry` 等无关 API，故用账本承接。
+- **汇总点**：`step::run_plan` 收尾时读账本，与「步骤失败 + `needs_reboot_on_failure()`」合并成 `RunOutcome::need_reboot`。步骤自身不要去读账本。
+- **新增删除逻辑的义务**：凡是可能删不掉文件的新代码，失败分支必须记账，否则「需要重启」的结论会漏判。**不要**只 `eprintln!`——安装器是 `windows_subsystem = "windows"` 的无控制台 GUI 进程，那等于丢弃。
+
+`need_reboot` 的三种去向，一处都不能少：
+
+| 路径 | 行为 |
+|---|---|
+| 交互式向导 / `--quiet` | 完成页显示 warning 色提示；**quiet 模式放弃自动退出**，窗口留给用户亲手关闭 |
+| `--silent`（无界面） | 以 **3010**（`ERROR_SUCCESS_REBOOT_REQUIRED`）退出，并写 `%TEMP%\wind_installer_args.log` |
+| 卸载（两条路径同上） | 同上 |
+
+> **调用方契约**：`--silent` 的 `3010` 是**成功**，不是失败。宿主（wind-setting）若只判 `exit == 0` 会把「装好了但请重启」误报成安装失败。
+
+安装器**只提示、不代劳重启**：它无从判断用户手头有没有没保存的工作。提示用 `theme::warning()` 而非 `error()`——红色会让用户以为装失败而去重装，而重装解决不了任何问题。
+
 ## 变体隔离（dev / release）
 
 输入法有 dev（CLSID `{99C2DEB0-…}`）与 release（CLSID `{99C2EE30-…}`）两套 GUID，设计上要能共存。凡是按 CLSID/profile 操作系统的逻辑（注册、反注册、残留清扫），**只用清单里的 GUID 推导目标键**——这样正式版包只碰 EE 系列、dev 包只碰 DEB 系列，隔离性来自"配置即身份"，代码里**不写任何变体判断分支**。

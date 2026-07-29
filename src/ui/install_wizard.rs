@@ -29,7 +29,14 @@ enum ProgressMsg {
     Status(String),
     /// 总体进度 ∈ [0,1]，由 [`GuiReporter`] 按「已完成步骤 + 步内比例」折算。
     Progress(f32),
-    Finished(bool, String),
+    Finished {
+        ok: bool,
+        /// 成功时为日志路径，失败时为错误信息。
+        detail: String,
+        /// 有文件被占用、清不掉，需重启系统才能彻底清理。
+        /// 这不是失败——新版已就位可正常使用，只是旧文件还赖在盘上。
+        need_reboot: bool,
+    },
     /// quiet 模式停留片刻后开始安装 —— 由后台线程发出，UI 线程据此切到进度页。
     /// 切页必须回到 UI 线程做（Signal 非 Send），故不能在延迟线程里直接写。
     BeginInstall,
@@ -131,7 +138,12 @@ fn run_install_plan(
             Err(e) => {
                 let msg = format!("无法打开安装数据: {}", e);
                 logger.log_error(&msg);
-                tx.send(ProgressMsg::Finished(false, msg)).ok();
+                tx.send(ProgressMsg::Finished {
+                    ok: false,
+                    detail: msg,
+                    need_reboot: false,
+                })
+                .ok();
                 return;
             }
         };
@@ -158,15 +170,29 @@ fn run_install_plan(
         };
 
         match crate::installer::step::run_plan(&plan, &mut ctx, &mut reporter) {
-            Ok(_) => {
-                reporter.log("=== 安装完成 ===");
-                tx.send(ProgressMsg::Finished(true, log_path)).ok();
+            Ok(outcome) => {
+                if outcome.need_reboot {
+                    reporter.log("=== 安装完成（有文件待重启后清理）===");
+                } else {
+                    reporter.log("=== 安装完成 ===");
+                }
+                tx.send(ProgressMsg::Finished {
+                    ok: true,
+                    detail: log_path,
+                    need_reboot: outcome.need_reboot,
+                })
+                .ok();
             }
             Err(e) => {
                 // 致命失败：清除标志，否则宿主进程将永久停摆
                 let _ = crate::installer::registry::clear_installer_running();
                 reporter.log(&format!("=== 安装失败: {} ===", e));
-                tx.send(ProgressMsg::Finished(false, e)).ok();
+                tx.send(ProgressMsg::Finished {
+                    ok: false,
+                    detail: e,
+                    need_reboot: false,
+                })
+                .ok();
             }
         }
     }
@@ -195,6 +221,9 @@ pub fn run_install_wizard(opts: WizardOptions) {
     let progress_value    = signal(0.0f32);
     let finish_success    = signal(false);
     let finish_error      = signal(String::new());
+    // 装完了但有文件被占用清不掉 —— 完成页据此显示重启提示，
+    // 且 quiet 模式据此放弃自动退出（见下方 channel 处理）。
+    let finish_reboot     = signal(false);
     let config_error      = signal(String::new());
     let agreed            = signal(false);
 
@@ -208,16 +237,26 @@ pub fn run_install_wizard(opts: WizardOptions) {
         ProgressMsg::Progress(f) => progress_value.set(f),
         // 延迟结束，切到进度页；安装已在发出此消息的那个线程里继续进行
         ProgressMsg::BeginInstall => current_page.set(PAGE_PROGRESS),
-        ProgressMsg::Finished(ok, detail) => {
+        ProgressMsg::Finished {
+            ok,
+            detail,
+            need_reboot,
+        } => {
             progress_value.set(1.0);
             finish_success.set(ok);
+            finish_reboot.set(need_reboot);
             if !ok {
                 finish_error.set(detail);
             }
             current_page.set(PAGE_FINISH);
             // quiet 模式装完自动退出：先切到完成页停留片刻再关，用户能看到"装完了"
-            // 而不是窗口凭空消失。失败时**不**自动关，否则错误信息一闪而过无从排查。
-            if quiet && ok {
+            // 而不是窗口凭空消失。
+            //
+            // 两种情况**不**自动关，都要求用户亲手关闭：
+            // - 失败：否则错误信息一闪而过无从排查；
+            // - 需重启：这是唯一告知用户「还有一步要做」的时机。自动升级本就发生在
+            //   用户没盯着屏幕的时候，2 秒后自弹自灭等于把提示扔了。
+            if quiet && ok && !need_reboot {
                 std::thread::spawn(|| {
                     std::thread::sleep(std::time::Duration::from_millis(QUIET_FINISH_MS));
                     std::process::exit(0);
@@ -525,6 +564,35 @@ pub fn run_install_wizard(opts: WizardOptions) {
                     Element::label(format!("{} 已准备就绪，可以开始使用", meta::app_display_name()))
                         .font_size(13.0)
                         .fg(Color::hex(theme::text_secondary()))
+                        .width_match()
+                        .text_align(Align::Center)
+                )
+        )
+        // 装成功了，但有旧文件被占用清不掉。
+        //
+        // 用 warning 而非 error 色：新版文件已全部就位、注册也完成了，程序现在就能用，
+        // 只是旧版残留（多半是仍被 ctfmon 加载的 DLL）要等重启才能从盘上抹掉。
+        // 用红色会让用户以为装失败了而去重装——重装解决不了任何问题。
+        //
+        // 只提示、不代劳重启：安装器无从判断用户手头有没有没保存的工作。
+        .child(
+            Element::col()
+                .width_match()
+                .spacing(4)
+                .cross(Align::Center)
+                .visible_when(move || finish_success.get() && finish_reboot.get())
+                .child(Element::leaf().height(10))
+                .child(
+                    Element::label("部分旧版文件仍被占用，建议重启电脑完成清理")
+                        .font_size(12.0)
+                        .fg(Color::hex(theme::warning()))
+                        .width_match()
+                        .text_align(Align::Center)
+                )
+                .child(
+                    Element::label("不影响现在使用；重启后系统会自动清除这些残留")
+                        .font_size(11.0)
+                        .fg(Color::hex(theme::text_muted()))
                         .width_match()
                         .text_align(Align::Center)
                 )

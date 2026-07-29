@@ -148,6 +148,10 @@ pub struct ThemeInfo {
     pub success: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub error: String,
+    /// 警示色：用于「装完了但有事项待处理」（如需重启清理锁定文件）——
+    /// 这类结果既不是成功也不是失败，用 error 色会让用户误以为装失败了。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub warning: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub border: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]

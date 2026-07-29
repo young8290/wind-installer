@@ -19,7 +19,12 @@ const PAGE_FINISH: usize = 2;
 
 enum UninstallMsg {
     Status(String),
-    Finished(bool, String),
+    Finished {
+        ok: bool,
+        detail: String,
+        /// 有文件被占用删不掉，已排进重启删除队列。
+        need_reboot: bool,
+    },
 }
 
 /// 把 [`Reporter`] 事件转成 UI 通道消息。卸载页只有状态文字、无进度条，
@@ -55,6 +60,8 @@ pub fn run_uninstall_wizard() {
     let confirmed         = signal(false);
     let finish_success    = signal(false);
     let finish_error      = signal(String::new());
+    // 卸载完了但有文件删不掉（已排重启删除队列）——完成页据此提示重启。
+    let finish_reboot     = signal(false);
     let status_text       = signal(String::from("正在准备卸载..."));
     let install_dir       = signal(detect_install_dir());
     let show_delete_confirm = signal(false);
@@ -63,8 +70,13 @@ pub fn run_uninstall_wizard() {
     let mut app = App::new(title.clone(), win_w, win_h);
     let tx = app.channel::<UninstallMsg>(move |msg| match msg {
         UninstallMsg::Status(s) => status_text.set(s),
-        UninstallMsg::Finished(ok, detail) => {
+        UninstallMsg::Finished {
+            ok,
+            detail,
+            need_reboot,
+        } => {
             finish_success.set(ok);
+            finish_reboot.set(need_reboot);
             if !ok {
                 finish_error.set(detail);
             }
@@ -180,15 +192,25 @@ pub fn run_uninstall_wizard() {
                                 let mut ctx =
                                     crate::uninstaller::steps::UninstallCtx::new(&options);
 
-                                let _ = crate::installer::step::run_plan(
+                                let outcome = crate::installer::step::run_plan(
                                     &plan,
                                     &mut ctx,
                                     &mut reporter,
                                 );
 
+                                // 卸载计划无致命步骤，一路尽力而为；删不掉的东西
+                                // 转化为「需要重启」（与 perform_uninstall 同一口径）。
+                                let need_reboot = ctx.need_reboot
+                                    || outcome.map(|o| o.need_reboot).unwrap_or(false);
+
                                 let _ = crate::installer::registry::clear_installer_running();
 
-                                tx.send(UninstallMsg::Finished(true, String::new())).ok();
+                                tx.send(UninstallMsg::Finished {
+                                    ok: true,
+                                    detail: String::new(),
+                                    need_reboot,
+                                })
+                                .ok();
                             });
                         }),
                 )
@@ -263,6 +285,30 @@ pub fn run_uninstall_wizard() {
                     Element::label(format!("{} 已从您的电脑中移除", meta::app_display_name()))
                         .font_size(13.0)
                         .fg(Color::hex(theme::text_secondary())),
+                ),
+        )
+        // 卸载完成，但有文件正被占用删不掉（已排入系统的重启删除队列）。
+        // 卸载场景下这条比安装场景更要紧：残留会让用户以为"没卸干净"而反复手动删。
+        .child(
+            Element::col()
+                .width_match()
+                .spacing(4)
+                .cross(Align::Center)
+                .visible_when(move || finish_success.get() && finish_reboot.get())
+                .child(Element::leaf().height(10))
+                .child(
+                    Element::label("部分文件正被占用，需重启电脑才能彻底清除")
+                        .font_size(12.0)
+                        .fg(Color::hex(theme::warning()))
+                        .width_match()
+                        .text_align(Align::Center),
+                )
+                .child(
+                    Element::label("已排入系统清理队列，重启后将自动删除")
+                        .font_size(11.0)
+                        .fg(Color::hex(theme::text_muted()))
+                        .width_match()
+                        .text_align(Align::Center),
                 ),
         )
         // 失败

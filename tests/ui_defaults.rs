@@ -70,4 +70,8 @@ fn theme_falls_back_to_builtin_palette() {
     assert_eq!(theme::accent(), 0x4C8BF5);
     assert_eq!(theme::text_primary(), 0x191919);
     assert_eq!(theme::error(), 0xFA5151);
+    // 「装完了但需重启清理」用的警示色，必须与 error 区分开——
+    // 同色会让用户把「有残留」误读成「装失败」而去重装。
+    assert_eq!(theme::warning(), 0xFA9D3B);
+    assert_ne!(theme::warning(), theme::error());
 }

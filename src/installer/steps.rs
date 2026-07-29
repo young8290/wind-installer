@@ -127,8 +127,8 @@ impl Step<InstallCtx<'_>> for CleanupLegacy {
     fn name(&self) -> String {
         "正在清理旧版遗留文件...".into()
     }
-    fn run(&self, ctx: &mut InstallCtx, _r: &mut dyn Reporter) -> Result<(), String> {
-        legacy::cleanup_legacy(&ctx.config.install_dir);
+    fn run(&self, ctx: &mut InstallCtx, r: &mut dyn Reporter) -> Result<(), String> {
+        legacy::cleanup_legacy(&ctx.config.install_dir, r);
         Ok(())
     }
 }

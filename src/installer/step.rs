@@ -10,6 +10,7 @@
 //! 两者的执行语义（失败是否致命、进度如何汇报）完全一致，故 [`run_plan`] 只需一份。
 
 use crate::archive::ArchiveReader;
+use crate::util::reboot;
 
 use super::config::InstallConfig;
 use super::receipt::Receipt;
@@ -66,6 +67,13 @@ pub struct RunOutcome {
 }
 
 /// 按序执行步骤计划。致命步骤失败立即返回 Err，非致命失败记警告后继续。
+///
+/// `need_reboot` 由两个来源合并而成：
+/// 1. **步骤失败**且 [`Step::needs_reboot_on_failure`]（如 COM 注册失败）；
+/// 2. **步骤成功但留下了锁定文件**——升级时旧 DLL 被占用，解压走「改名让路 +
+///    排重启删除」后步骤是成功返回的，这条信息只存在于 [`reboot`] 账本里。
+///
+/// 第 2 条是主路径：带锁升级几乎总是走它，而它此前完全没有回传通道。
 pub fn run_plan<C>(
     plan: &[Box<dyn Step<C>>],
     ctx: &mut C,
@@ -86,6 +94,19 @@ pub fn run_plan<C>(
                 need_reboot = true;
             }
             reporter.warn(&format!("{}: {}", name, e));
+        }
+    }
+
+    // 收尾处一次性读账本：各步骤无需（也无从）自行汇报锁定文件。
+    if reboot::is_reboot_pending() {
+        need_reboot = true;
+        reporter.log(&format!("待重启清理：{}", reboot::pending_summary()));
+        for item in reboot::pending_items() {
+            reporter.log(&format!(
+                "  {} {:?}",
+                if item.scheduled { "已排队" } else { "未排队" },
+                item.path
+            ));
         }
     }
 
