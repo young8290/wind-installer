@@ -113,7 +113,9 @@ jobs:
           mkdir -p dist
           find artifacts -type f -exec cp {} dist/ \;
           cd dist
-          sha256sum * > SHA256SUMS
+          # 显式 glob 而非 `*`：后者是否把正在创建的 SHA256SUMS 算进自己，
+          # 取决于 shell 展开与重定向的先后顺序——不值得依赖这种隐晦规则。
+          sha256sum wind-* > SHA256SUMS
           cat SHA256SUMS
 
       - name: 创建 Release
