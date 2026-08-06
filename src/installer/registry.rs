@@ -222,7 +222,8 @@ fn get_dir_size(path: &Path) -> Result<u64, String> {
     Ok(total)
 }
 
-/// 设置安装器运行标记（防止 wind_tsf.dll 在安装期间重拉服务）
+/// 设置安装器运行标记：供应用自身的常驻组件（如被系统重新加载的 TSF DLL）识别
+/// 「正在安装」，避免它在安装期间把主程序重新拉起来。读端在应用侧，不在本仓。
 pub fn set_installer_running() -> Result<(), String> {
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
     let (key, _) = hklm

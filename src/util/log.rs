@@ -2,7 +2,7 @@ use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
 
-/// 安装过程日志，写入 %TEMP%\WindInput-install.log
+/// 安装过程日志，写入 `%TEMP%\{app.id}-install.log`（文件名跟随清单，不同应用互不覆盖）
 pub struct InstallLogger {
     file: Option<File>,
     pub path: PathBuf,

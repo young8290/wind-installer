@@ -3,10 +3,10 @@
   <assemblyIdentity
     version="1.0.0.0"
     processorArchitecture="amd64"
-    name="WindInput.Installer"
+    name="Wind.Installer"
     type="win32"
   />
-  <description>WindInput Installer</description>
+  <description>Wind Installer</description>
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
     <security>
       <requestedPrivileges>

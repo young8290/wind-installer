@@ -12,7 +12,7 @@ pub struct InstallConfig {
     pub app_version: String,
     /// 安装目录
     pub install_dir: PathBuf,
-    /// 数据目录（用户词库、配置等）
+    /// 数据目录（用户配置等应用自有数据）
     pub data_dir: PathBuf,
     /// 是否使用自定义数据目录
     pub use_custom_data_dir: bool,

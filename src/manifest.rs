@@ -214,9 +214,9 @@ pub struct StringsInfo {
 /// 输入法（TSF）注册信息。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImeInfo {
-    /// TSF CLSID，如 "{99C2EE30-...}"。
+    /// TSF CLSID，如 "{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}"。
     pub clsid: String,
-    /// TSF Profile GUID，如 "{99C2EE31-...}"。
+    /// TSF Profile GUID，格式同 `clsid`，取另一个 GUID。
     pub profile_guid: String,
     /// 语言 ID，如 "0804"（简体中文）。
     pub lang_id: String,
@@ -237,11 +237,11 @@ pub struct ImeInfo {
 /// 字体安装信息。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FontInfo {
-    /// 字体文件名（如 "HeiTiZiGen.ttf"），同时是写入 %WINDIR%\Fonts 的目标名。
+    /// 字体文件名（如 "MyFont.ttf"），同时是写入 %WINDIR%\Fonts 的目标名。
     pub file: String,
-    /// 注册表中的字体显示名（如 "黑体字根 (TrueType)"）。
+    /// 注册表中的字体显示名（如 "My Font (TrueType)"）。
     pub display_name: String,
-    /// 字体源路径，相对安装目录（如 "data/schemas/wubi86/HeiTiZiGen.ttf"）。
+    /// 字体源路径，相对安装目录（如 "data/fonts/MyFont.ttf"）。
     pub source_rel: String,
 }
 

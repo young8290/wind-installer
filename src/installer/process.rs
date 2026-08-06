@@ -56,7 +56,7 @@ pub fn terminate_app_processes() -> Vec<String> {
 
 /// 单次 PowerShell Stop-Process 杀掉多个进程名（只启动一次 PowerShell，开销小）
 fn stop_process_all(names: &[&str]) {
-    // 格式: 'wind_input','wind_setting'
+    // 格式: 'foo','bar'
     let name_list = names
         .iter()
         .map(|n| format!("'{}'", n))

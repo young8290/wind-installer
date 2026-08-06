@@ -4,41 +4,41 @@ use wind_installer::manifest::{AppManifest, ProjectConfig};
 
 const SAMPLE: &str = r#"
 [app]
-id              = "WindInput"
-display_name    = "清风输入法"
+id              = "DemoApp"
+display_name    = "示例应用"
 version         = "0.1.0"
-publisher       = "清风输入法 项目"
-main_exe        = "wind_input.exe"
-setting_exe     = "wind_setting.exe"
-start_menu_folder = "清风输入法"
-window_title    = "清风输入法 安装向导"
-url_protocol    = "windinput"
+publisher       = "Demo Inc."
+main_exe        = "demo_app.exe"
+setting_exe     = "demo_settings.exe"
+start_menu_folder = "示例应用"
+window_title    = "示例应用 安装向导"
+url_protocol    = "demoapp"
 agreement_url   = "https://example.com/eula"
-backup_dir      = "WindInput_Backup"
-process_names   = ["wind_setting", "wind_portable", "wind_input"]
-acl_dlls        = ["wind_tsf.dll", "wind_tsf_x86.dll"]
-legacy_files    = ["wind_dwrite.dll"]
+backup_dir      = "DemoApp_Backup"
+process_names   = ["demo_app", "demo_helper"]
+acl_dlls        = ["demo_tsf.dll", "demo_tsf_x86.dll"]
+legacy_files    = ["demo_old.dll"]
 
 [ui]
 install_win   = { w = 520, h = 490 }
 uninstall_win = { w = 480, h = 440 }
 
 [ime]
-clsid        = "{99C2EE30-5C57-45A2-9C63-FB54B34FD90A}"
-profile_guid = "{99C2EE31-5C57-45A2-9C63-FB54B34FD90A}"
+clsid        = "{A1B2C3D4-E5F6-4789-A0B1-C2D3E4F5A6B7}"
+profile_guid = "{A1B2C3D4-E5F6-4789-A0B1-C2D3E4F5A6B8}"
 lang_id      = "0804"
-dll_x64      = "wind_tsf.dll"
-dll_x86      = "wind_tsf_x86.dll"
+dll_x64      = "demo_tsf.dll"
+dll_x86      = "demo_tsf_x86.dll"
 
 [[font]]
-file         = "HeiTiZiGen.ttf"
-display_name = "黑体字根 (TrueType)"
-source_rel   = "data/schemas/wubi86/HeiTiZiGen.ttf"
+file         = "DemoFont.ttf"
+display_name = "Demo Font (TrueType)"
+source_rel   = "data/fonts/DemoFont.ttf"
 
 [package]
 compression = "lzma"
-source_dir  = "../WindInput/build"
-output_name = "WindInput-Setup"
+source_dir  = "../DemoApp/build"
+output_name = "DemoApp-Setup"
 output_dir  = "./dist"
 logo        = "assets/logo.png"
 icon        = "assets/installer.ico"
@@ -48,11 +48,11 @@ icon        = "assets/installer.ico"
 fn project_config_parses_all_sections() {
     let cfg = ProjectConfig::from_toml_str(SAMPLE).expect("解析 app.toml 失败");
 
-    assert_eq!(cfg.manifest.app.id, "WindInput");
-    assert_eq!(cfg.manifest.app.display_name, "清风输入法");
-    assert_eq!(cfg.manifest.app.process_names, ["wind_setting", "wind_portable", "wind_input"]);
-    assert_eq!(cfg.manifest.app.acl_dlls, ["wind_tsf.dll", "wind_tsf_x86.dll"]);
-    assert_eq!(cfg.manifest.app.legacy_files, ["wind_dwrite.dll"]);
+    assert_eq!(cfg.manifest.app.id, "DemoApp");
+    assert_eq!(cfg.manifest.app.display_name, "示例应用");
+    assert_eq!(cfg.manifest.app.process_names, ["demo_app", "demo_helper"]);
+    assert_eq!(cfg.manifest.app.acl_dlls, ["demo_tsf.dll", "demo_tsf_x86.dll"]);
+    assert_eq!(cfg.manifest.app.legacy_files, ["demo_old.dll"]);
     assert!(cfg.manifest.app.legacy_dirs.is_empty());
 
     assert_eq!(cfg.manifest.ui.install_win.w, 520);
@@ -60,14 +60,14 @@ fn project_config_parses_all_sections() {
 
     let ime = cfg.manifest.ime.as_ref().expect("应有 ime 段");
     assert_eq!(ime.lang_id, "0804");
-    assert_eq!(ime.dll_x64, "wind_tsf.dll");
+    assert_eq!(ime.dll_x64, "demo_tsf.dll");
 
     assert_eq!(cfg.manifest.font.len(), 1);
-    assert_eq!(cfg.manifest.font[0].file, "HeiTiZiGen.ttf");
-    assert_eq!(cfg.manifest.font[0].display_name, "黑体字根 (TrueType)");
+    assert_eq!(cfg.manifest.font[0].file, "DemoFont.ttf");
+    assert_eq!(cfg.manifest.font[0].display_name, "Demo Font (TrueType)");
 
     assert_eq!(cfg.package.compression, "lzma");
-    assert_eq!(cfg.package.source_dir, "../WindInput/build");
+    assert_eq!(cfg.package.source_dir, "../DemoApp/build");
     assert_eq!(cfg.package.logo, "assets/logo.png");
     assert_eq!(cfg.package.icon, "assets/installer.ico");
 }
@@ -81,10 +81,10 @@ fn repo_app_toml_parses_with_all_capability_sections() {
 
     let autostart = cfg.manifest.autostart.as_ref().expect("应有 autostart 段");
     assert!(autostart.enabled);
-    assert_eq!(autostart.exe_or("fallback.exe"), "wind_input.exe");
+    assert_eq!(autostart.exe_or("fallback.exe"), "demo_app.exe");
 
     assert_eq!(cfg.manifest.shortcut.len(), 2);
-    assert_eq!(cfg.manifest.shortcut[0].effective_name(), "清风输入法 设置");
+    assert_eq!(cfg.manifest.shortcut[0].effective_name(), "示例应用 设置");
 
     assert!(cfg.manifest.startup.as_ref().expect("应有 startup 段").prestart);
     assert_eq!(
@@ -92,36 +92,36 @@ fn repo_app_toml_parses_with_all_capability_sections() {
         "datadir.conf"
     );
 
-    // UI 段：仓库自带清单显式声明了输入法专用文案，内置默认保持中性
+    // UI 段：仓库自带清单显式覆盖了领域相关文案，内置默认则保持中性
     assert_eq!(cfg.manifest.theme.accent, "#4C8BF5");
     assert_eq!(cfg.manifest.paths.install, r"%ProgramFiles%\{id}");
-    assert_eq!(cfg.manifest.strings.data_dir_hint, "词库、配置路径");
+    assert_eq!(cfg.manifest.strings.data_dir_hint, "项目文件、配置路径");
 }
 
 /// 占位符使一份快捷方式配置对 dev/release 变体通用：同一段 config，按各变体的
-/// [app] 字段展开出不同的 target/name。这是消除「dev.ps1 双真相」的关键机制。
+/// [app] 字段展开出不同的 target/name，打包脚本无需为每个变体各维护一份配置。
 #[test]
 fn shortcut_placeholders_expand_per_variant() {
     use wind_installer::manifest::expand_placeholders;
 
     // release 变体
     assert_eq!(
-        expand_placeholders("{setting_exe}", "wind_input.exe", "wind_setting.exe", "清风输入法", "WindInput"),
-        "wind_setting.exe"
+        expand_placeholders("{setting_exe}", "demo_app.exe", "demo_settings.exe", "示例应用", "DemoApp"),
+        "demo_settings.exe"
     );
     assert_eq!(
-        expand_placeholders("{display_name} 设置", "wind_input.exe", "wind_setting.exe", "清风输入法", "WindInput"),
-        "清风输入法 设置"
+        expand_placeholders("{display_name} 设置", "demo_app.exe", "demo_settings.exe", "示例应用", "DemoApp"),
+        "示例应用 设置"
     );
 
     // dev 变体：同一份 config 文本，展开出 dev 的 exe 名与显示名
     assert_eq!(
-        expand_placeholders("{setting_exe}", "wind_input_dev.exe", "wind_setting_dev.exe", "清风输入法 (开发版)", "WindInputDev"),
-        "wind_setting_dev.exe"
+        expand_placeholders("{setting_exe}", "demo_app_dev.exe", "demo_settings_dev.exe", "示例应用 (开发版)", "DemoAppDev"),
+        "demo_settings_dev.exe"
     );
     assert_eq!(
-        expand_placeholders("卸载 {display_name}", "wind_input_dev.exe", "wind_setting_dev.exe", "清风输入法 (开发版)", "WindInputDev"),
-        "卸载 清风输入法 (开发版)"
+        expand_placeholders("卸载 {display_name}", "demo_app_dev.exe", "demo_settings_dev.exe", "示例应用 (开发版)", "DemoAppDev"),
+        "卸载 示例应用 (开发版)"
     );
 }
 

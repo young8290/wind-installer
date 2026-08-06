@@ -257,7 +257,8 @@ fn bundle_exe_fixes_offsets_so_content_readable_after_prepending_stub() {
 #[test]
 fn manifest_and_logo_survive_pack_and_bundle() {
     let dir = TempDir::new("manifest_bundle");
-    let manifest = b"[app]\nid = \"WindInput\"\ndisplay_name = \"\xe6\xb8\x85\xe9\xa3\x8e\"\n".to_vec();
+    // display_name 特意用非 ASCII：清单以字节原样往返，UTF-8 不应在任何一环被改写
+    let manifest = b"[app]\nid = \"DemoApp\"\ndisplay_name = \"\xe7\xa4\xba\xe4\xbe\x8b\"\n".to_vec();
     let logo = vec![0x89u8, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x11, 0x22]; // 伪 PNG
 
     // pack：写入归档并设置清单/logo
@@ -297,7 +298,7 @@ fn append_manifest_overlay_makes_exe_self_describing() {
     let exe_bytes: Vec<u8> = (0u8..=255).cycle().take(7000).collect();
     let exe = dir.write_file("uninstall.exe", &exe_bytes);
 
-    let manifest = b"[app]\nid = \"WindInput\"\nmain_exe = \"wind_input.exe\"\n".to_vec();
+    let manifest = b"[app]\nid = \"DemoApp\"\nmain_exe = \"demo_app.exe\"\n".to_vec();
     let logo = vec![0x89u8, 0x50, 0x4E, 0x47, 0xAB, 0xCD];
 
     archive::append_manifest_overlay(&exe, &manifest, &logo).expect("追加 overlay 失败");

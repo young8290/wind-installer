@@ -15,7 +15,7 @@ mod util;
 /// Wind Installer - 轻量级 Windows 安装管理器
 #[derive(Parser, Debug)]
 #[command(name = "wind-installer")]
-#[command(about = "Lightweight Windows installer for WindInput")]
+#[command(about = "Lightweight manifest-driven Windows installer")]
 // 容忍未知参数：未来版本的安装器可能向已安装的旧版（卸载器）传入新 flag，
 // 旧版不应因不认识的参数而报错退出，只解析自己认识的、忽略其余。
 #[command(ignore_errors = true)]
@@ -79,12 +79,12 @@ mod arg_tests {
             "wind-installer",
             "--silent",
             "--dir",
-            r"C:\Program Files\WindInputDev",
+            r"C:\Program Files\Demo App",
         ]);
         assert!(args.silent, "--silent 未被识别");
         assert_eq!(
             args.dir,
-            Some(PathBuf::from(r"C:\Program Files\WindInputDev"))
+            Some(PathBuf::from(r"C:\Program Files\Demo App"))
         );
     }
 

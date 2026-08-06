@@ -30,9 +30,9 @@ install  = 'D:\Apps\{id}'
 portable = 'E:\Portable\{id}\bin'
 
 [strings]
-data_dir_hint       = "词库、配置路径"
-user_data_label     = "删除用户词库和配置数据"
-delete_data_confirm = "将永久删除 {path} 下的所有词库，无法恢复。"
+data_dir_hint       = "素材库、配置路径"
+user_data_label     = "删除用户素材和配置数据"
+delete_data_confirm = "将永久删除 {path} 下的所有素材，无法恢复。"
 "##;
 
 fn init() {
@@ -42,8 +42,8 @@ fn init() {
 #[test]
 fn declared_strings_win_over_defaults() {
     init();
-    assert_eq!(meta::s_data_dir_hint(), "词库、配置路径");
-    assert_eq!(meta::s_user_data_label(), "删除用户词库和配置数据");
+    assert_eq!(meta::s_data_dir_hint(), "素材库、配置路径");
+    assert_eq!(meta::s_user_data_label(), "删除用户素材和配置数据");
 }
 
 #[test]
@@ -58,7 +58,7 @@ fn undeclared_strings_still_fall_back() {
 fn declared_confirm_text_substitutes_path() {
     init();
     let text = meta::s_delete_data_confirm(r"D:\Data");
-    assert_eq!(text, r"将永久删除 D:\Data 下的所有词库，无法恢复。");
+    assert_eq!(text, r"将永久删除 D:\Data 下的所有素材，无法恢复。");
 }
 
 #[test]

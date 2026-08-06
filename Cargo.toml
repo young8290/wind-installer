@@ -2,13 +2,13 @@
 name = "wind-installer"
 version = "0.1.0"
 edition = "2021"
-description = "清风输入法 Windows 安装程序"
+description = "清单驱动的通用 Windows 安装器生成器"
 license = "MIT"
 
 # 应用身份配置已迁移到 app.toml（运行期清单），不再使用 Cargo.toml 元数据。
 
 [features]
-# 输入法/字体注册已改为运行期清单驱动（见 app.toml 的 [ime]/[[font]] 段），不再是编译期开关。
+# TSF/字体注册已改为运行期清单驱动（见 app.toml 的 [ime]/[[font]] 段），不再是编译期开关。
 default = ["frameless"]
 frameless = []          # 无边框自定义标题栏（主题色标题栏代替系统标题栏）
 packer    = ["dep:editpe"]  # wind-packer 所需（写 EXE 图标）
