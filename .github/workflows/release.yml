@@ -35,29 +35,12 @@ jobs:
           cargo build --locked --release --bin wind-packer --features packer
 
       # ── 发布门禁:自包含校验 ──────────────────────────────────────────────
-      # stub 与 uninstaller 都在**用户机器**上运行，且安装器往往是用户在这台机器上
-      # 跑的第一个程序。动态链接 CRT 的话，没装 VC++ 运行库的干净机器会直接报
-      # 「找不到 VCRUNTIME140.dll」/ 0xc000007b，用户完全无从自救。
-      #
-      # +crt-static 由 .cargo/config.toml 提供，但 RUSTFLAGS 环境变量会覆盖那一节——
-      # 也就是说这个保证可能被外部因素静默掀翻。故在发布前实测产物本身，而不是
-      # 相信构建配置。packer 只跑在构建机上，不在此列。
+      # 逻辑在 scripts/verify-static-crt.ps1（含为何必须校验、为何不信构建配置的说明）。
+      # 刻意不内联在这里:内联的校验没法在本地跑，只能靠照抄一份来验证，而照抄的副本
+      # 会连 bug 一起抄走。packer 只跑在构建机上，不在校验之列。
       - name: 校验 Windows 产物静态链接 CRT
         shell: pwsh
-        run: |
-          $bad = $false
-          foreach ($exe in @('wind-installer.exe', 'wind-uninstaller.exe')) {
-            $path = "target/release/$exe"
-            $text = [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes($path))
-            foreach ($dep in @('VCRUNTIME140', 'api-ms-win-crt-runtime')) {
-              if ($text -match $dep) {
-                Write-Host "::error::$exe 动态链接了 $dep —— 干净机器上无法启动。检查 .cargo/config.toml 与 RUSTFLAGS。"
-                $bad = $true
-              }
-            }
-            if (-not $bad) { Write-Host "  OK $exe 自包含" }
-          }
-          if ($bad) { exit 1 }
+        run: ./scripts/verify-static-crt.ps1 -Path target/release/wind-installer.exe, target/release/wind-uninstaller.exe
 
       - name: 整理产物
         shell: pwsh
