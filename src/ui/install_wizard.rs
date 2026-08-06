@@ -731,7 +731,20 @@ fn default_portable_dir() -> String {
     crate::meta::default_portable_path()
 }
 
-fn default_data_dir() -> String {
+/// 数据目录初值：优先显示 `datadir.conf` 里**本机实际生效**的路径。
+///
+/// 这是「二次安装不允许改数据目录」的另一半——控件禁用只保证改不了，值仍来自清单
+/// 模板；不读回真实路径，界面就会把一个装在 D 盘的数据目录显示成 `%APPDATA%\{id}`。
+///
+/// conf 缺失时回退到清单默认：此时本次安装若非首装也不会写 conf（见 `WriteDataDirConf`），
+/// 主程序读端同样回退到这个默认位置，二者一致。
+///
+/// `pub` 是为了让集成测试直接钉住「界面显示什么」——控件禁用与初值取值是两件事，
+/// 只测底层读函数漏得掉「读了但没接到界面上」这类回归。
+pub fn default_data_dir() -> String {
+    if let Some(dir) = crate::installer::userdata::read_datadir_conf() {
+        return dir.to_string_lossy().to_string();
+    }
     crate::meta::default_data_path()
 }
 

@@ -113,11 +113,13 @@ pub fn run_uninstall_wizard() {
         );
 
     // 删除用户数据：危险勾选行（受控 on_toggle：未勾时弹应用内确认对话框，已勾时直接取消）
+    // 括号内是本机实际生效的数据目录（自定义过就显示自定义路径），与确认对话框、
+    // 与真正删除的目录同出一次解析；缓存那一行不走这个解析，它的位置由我们自己算。
     let delete_data_row = Element::checkbox(
         format!(
-            "{}（%APPDATA%\\{}）",
+            "{}（{}）",
             meta::s_user_data_label(),
-            meta::app_id()
+            crate::uninstaller::cleanup::resolve_user_data_dir().display()
         ),
         clean_roaming,
     )
@@ -397,10 +399,12 @@ pub fn run_uninstall_wizard() {
                         .width_match(),
                 )
                 .child(
-                    Element::label(meta::s_delete_data_confirm(&format!(
-                        "%APPDATA%\\{}",
-                        meta::app_id()
-                    )))
+                    // 路径必须取本机实际生效的数据目录，而非默认位置模板：自定义过
+                    // 数据目录的用户看到 `%APPDATA%\{id}` 会以为删的是别处，而下游
+                    // 动作是 remove_dir_all —— 提示与实际删除必须是同一个路径。
+                    Element::label(meta::s_delete_data_confirm(
+                        &crate::uninstaller::cleanup::resolve_user_data_dir().to_string_lossy(),
+                    ))
                     .font_size(13.0)
                     .fg(Color::hex(theme::text_secondary()))
                     .width_match(),

@@ -33,41 +33,36 @@ impl Default for CleanupOptions {
     }
 }
 
+/// 解析本机实际生效的用户数据目录：优先读清单 `[datadir]` 声明的配置文件，其次默认位置。
+///
+/// 卸载确认对话框显示的路径与卸载真正删除的路径必须出自这里同一次解析——用户看到
+/// 「将永久删除 X」时勾的是同意删 X，下游动作却是 `remove_dir_all`，两者一旦不同就是
+/// 在骗用户按下不可逆的按钮。
+///
+/// **必须在 `UndoReceipt` 之前调用**——撤销会把这个配置文件删掉。卸载流程应在开始时
+/// 解析一次并带着结果走（见 `steps::UninstallCtx::new`）。
+pub fn resolve_user_data_dir() -> PathBuf {
+    // 读 conf 的实现只此一份（安装向导显示的也是它），避免「界面显示 A、实际动 B」
+    if let Some(dir) = crate::installer::userdata::read_datadir_conf() {
+        return dir;
+    }
+
+    // 清单未声明 [datadir] 段、或配置文件缺失/为空 —— 用默认位置
+    let app_data = std::env::var("APPDATA").unwrap_or_else(|_| {
+        let mut p = PathBuf::from(std::env::var("USERPROFILE").unwrap_or_default());
+        p.push("AppData\\Roaming");
+        p.to_string_lossy().to_string()
+    });
+    PathBuf::from(app_data).join(meta::app_id())
+}
+
 impl CleanupOptions {
-    /// 解析用户数据目录：优先读清单 `[datadir]` 声明的配置文件，其次用默认位置。
+    /// 解析用户数据目录：见 [`resolve_user_data_dir`]。
     ///
     /// **必须在 `UndoReceipt` 之前调用**——撤销会把这个配置文件删掉。调用方应在
     /// 卸载开始时解析一次并带着结果走（见 `steps::UninstallCtx::new`）。
     pub fn user_data_dir(&self) -> PathBuf {
-        let local_app_data = std::env::var("LOCALAPPDATA")
-            .unwrap_or_else(|_| {
-                let mut p = PathBuf::from(std::env::var("USERPROFILE").unwrap_or_default());
-                p.push("AppData\\Local");
-                p.to_string_lossy().to_string()
-            });
-
-        // 清单未声明 [datadir] 段则没有配置文件可读，直接用默认位置
-        if let Some(datadir) = meta::manifest().datadir.as_ref() {
-            let conf = PathBuf::from(&local_app_data)
-                .join(meta::app_id())
-                .join(&datadir.conf_file);
-
-            if let Ok(content) = std::fs::read_to_string(&conf) {
-                let content = content.trim();
-                if !content.is_empty() {
-                    return PathBuf::from(content);
-                }
-            }
-        }
-
-        // 默认位置
-        let app_data = std::env::var("APPDATA")
-            .unwrap_or_else(|_| {
-                let mut p = PathBuf::from(std::env::var("USERPROFILE").unwrap_or_default());
-                p.push("AppData\\Roaming");
-                p.to_string_lossy().to_string()
-            });
-        PathBuf::from(app_data).join(meta::app_id())
+        resolve_user_data_dir()
     }
 
     /// 获取本地缓存目录
@@ -333,8 +328,8 @@ mod guard_tests {
     #[test]
     fn normal_data_dirs_pass() {
         for ok in [
-            r"C:\Users\Someone\AppData\Roaming\WindInput",
-            r"D:\MyData\WindInput",
+            r"C:\Users\Someone\AppData\Roaming\Demo",
+            r"D:\MyData\Demo",
         ] {
             assert!(
                 guard_shape(Path::new(ok), &forbidden()).is_ok(),
@@ -358,7 +353,7 @@ mod guard_tests {
     #[test]
     fn drive_relative_and_traversal_rejected() {
         assert!(guard_shape(Path::new("C:data"), &forbidden()).is_err());
-        assert!(guard_shape(Path::new(r"data\WindInput"), &forbidden()).is_err());
+        assert!(guard_shape(Path::new(r"data\Demo"), &forbidden()).is_err());
         assert!(guard_shape(Path::new(r"D:\a\..\..\Windows"), &forbidden()).is_err());
     }
 
