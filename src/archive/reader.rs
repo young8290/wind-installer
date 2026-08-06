@@ -190,6 +190,12 @@ fn create_or_backup(path: &Path) -> Result<File, String> {
                 .map_err(|e| format!("Failed to rename locked file: {}", e))?;
             // 改名只是让路：那份旧文件仍被进程占用、当前删不掉，排进重启删除队列兜底，
             // 否则 .old_ 会随每次带锁升级永久累积。best-effort——失败不影响新文件写入。
+            //
+            // 门控到 Windows：`util` 是 cfg(windows) 模块，而 archive 必须保持跨平台
+            // ——wind-packer 要在 Linux 原生构建（见 lib.rs 与 ci.yml 的 linux-packer job）。
+            // 非 Windows 上这个分支本就走不到：进入它的条件是 os error 5/32，即 Windows 的
+            // ACCESS_DENIED / SHARING_VIOLATION，类 Unix 系统允许 unlink 仍被打开的文件。
+            #[cfg(windows)]
             if let Err(e) = crate::util::reboot::schedule_delete_on_reboot(&old_path) {
                 eprintln!("Warning: {}", e);
             }
