@@ -63,6 +63,27 @@ cargo clippy --lib
 `cargo test` 含 doctest 时会因 `src/archive/format.rs` 文档注释里的 ASCII 结构图报一个
 既有失败，与业务逻辑无关，用 `--tests` 规避。
 
+## 发布产物
+
+打 `v*` tag 触发 CI 出 Release，包含：
+
+| 资产 | 用途 |
+|---|---|
+| `wind-installer-windows-x64.exe` | stub —— 打包时由 packer 追加归档 overlay |
+| `wind-uninstaller-windows-x64.exe` | 卸载器 —— 打包前注入到源目录，随安装包解压到安装目录 |
+| `wind-packer-windows-x64.exe` | 打包工具（Windows） |
+| `wind-packer-linux-x64` | 打包工具（Linux，供全 Linux 流水线用） |
+| `SHA256SUMS` | 上述文件的校验和 |
+
+资产名不带版本号——版本由 tag 表达，下载方写死文件名即可：
+
+```
+gh release download v0.1.0 -p 'wind-installer-windows-x64.exe'
+```
+
+两个跑在**用户机器**上的二进制（stub 与卸载器）静态链接 MSVC CRT，目标机无需安装
+VC++ 运行库；发布前 CI 会实测产物确认这一点。packer 只跑在构建机上，不作此要求。
+
 ## 依赖与许可
 
 本项目以 MIT 许可发布，见 [LICENSE](LICENSE)。

@@ -1,0 +1,63 @@
+name: CI
+
+# push/PR 门禁。
+#
+# 主校验必须在 Windows runner 上：installer/uninstaller/ui/util 全是 cfg(windows)，
+# 在 Linux 上根本不参与编译，ubuntu 跑绿了也证明不了什么。
+#
+# 另有一个 ubuntu job 专门守着「wind-packer 能在 Linux 原生构建」这条能力——
+# WindInput 仓的 pack-installer.sh 依赖它做全 Linux 打包流水线。谁往 archive /
+# manifest / meta 里引入 Windows-only 依赖，这个 job 会立刻红，而 Windows job 不会。
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['**.md', 'docs/**']
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    # 与 release.yml 同一 runner。CI 和发布用不同 runner 会出现「CI 过了、发布挂了」，
+    # 而发布失败的代价远高于 CI 慢一点。
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      # 三个二进制都要编：packer 走 packer feature（editpe 是可选依赖），
+      # 只编 stub 不会暴露 packer 侧的编译错误。
+      - name: 构建三个二进制
+        run: |
+          cargo build --locked --bin wind-installer --bin wind-uninstaller
+          cargo build --locked --bin wind-packer --features packer
+
+      # --tests 跳过 doctest：src/archive/format.rs 的文档注释里有一张 ASCII 结构图，
+      # rustdoc 会把它当代码块编译并报错。既有问题，与业务逻辑无关（见 AGENTS.md）。
+      - name: 测试
+        run: cargo test --locked --tests
+
+      # 不加 -D warnings：既有代码有 11 处 clippy 警告未清理，开门禁第一次就红，
+      # 红着的门禁没人会认真看。清理干净后把这行换成 `cargo clippy --lib -- -D warnings`。
+      # 同理未加 `cargo fmt --check`——现有代码未按 rustfmt 格式化。
+      - name: Clippy
+        run: cargo clippy --locked --lib
+
+  linux-packer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # 纯 IO，不碰 Windows API，故可原生构建、无需 wine 或交叉工具链。
+      - name: 构建 wind-packer (Linux 原生)
+        run: cargo build --locked --bin wind-packer --features packer

@@ -76,3 +76,18 @@ cargo clippy --lib
 ```
 
 注：`cargo test`（含 doctest）目前会因 `src/archive/format.rs` 文档注释里的 ASCII 图而报一个既有 doctest 失败，与业务逻辑无关，用 `--tests` 规避。
+
+## Windows 产物必须静态链接 CRT（不可删）
+
+`.cargo/config.toml` 给 MSVC 目标注入 `-C target-feature=+crt-static`。**删掉它，产出的安装器在没装 VC++ 运行库的干净机器上直接起不来**——`VCRUNTIME140.dll` 不是 Windows 内置组件，缺它会报「找不到 VCRUNTIME140.dll」或 `0xc000007b`。而安装器往往是用户在那台机器上运行的第一个程序，它起不来，用户无从自救、也不会知道为什么。
+
+这条约束原先只写在调用方（WindInput 仓的 `dev.ps1` / `pack-installer.sh`）的 `RUSTFLAGS` 注入里，本仓直接 `cargo build --release` 出来的 stub 其实**不能发布**。约束属于产物本身，故已固化到本仓。
+
+注意 `RUSTFLAGS` 环境变量会**覆盖**而非合并 `.cargo/config.toml` 的 target 小节——调用方注入的恰好是同一个 flag 故结果一致，但这也意味着这个保证可能被外部环境静默掀翻。因此 `release.yml` 不信任构建配置，而是**在发布前实测产物本身**有无动态 CRT 引用，命中即失败。改动构建配置或发布流程时不要摘掉这个校验。
+
+## CI
+
+- `ci.yml`（push/PR）：Windows 上 build + `test --tests` + `clippy --lib`；另有一个 ubuntu job 只构建 `wind-packer`，守着「packer 能在 Linux 原生构建」这条能力（`pack-installer.sh` 的全 Linux 流水线依赖它）。往 `archive`/`manifest`/`meta` 里引入 Windows-only 依赖时，只有这个 job 会红。
+- `release.yml`（push tag `v*`）：产出 `wind-installer-windows-x64.exe`、`wind-uninstaller-windows-x64.exe`、`wind-packer-windows-x64.exe`、`wind-packer-linux-x64` 与 `SHA256SUMS`。`workflow_dispatch` 触发时只产 artifact 不发 Release。资产名不带版本号——版本由 tag 表达，下载方写死文件名即可。
+
+门禁强度是**按代码库现状**定的：未启用 `-D warnings`（既有 11 处 clippy 警告）、未加 `cargo fmt --check`（现有代码未按 rustfmt 格式化）。红着的门禁没人会认真看，所以先让它保持绿。清理干净后再收紧，两处都在 `ci.yml` 里留了注释说明怎么改。

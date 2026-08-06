@@ -1,0 +1,127 @@
+name: Release
+
+# 触发:
+#   - push tag v*        → 构建全部产物 + SHA256SUMS，创建 Release
+#   - workflow_dispatch  → 只产出 artifact 供人工核对，不创建 Release
+#
+# 产出的二进制供 WindInput 仓的打包流水线消费:
+#   dev.ps1（Windows 本机/CI）  需要 stub + uninstaller + packer(.exe)
+#   pack-installer.sh（Linux）  需要 stub + uninstaller + packer(Linux 原生)
+# 故 stub/uninstaller 只有 Windows 版，packer 两个平台都出。
+#
+# 资产命名不带版本号——版本由 Release tag 表达，下载方写死文件名即可:
+#   gh release download v0.1.0 -p 'wind-installer-windows-x64.exe'
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write     # 创建 Release
+
+jobs:
+  windows:
+    # 与 ci.yml 同一 runner。这里刻意钉死 windows-2022 而非 latest:
+    # 发布产物的工具链应当是明确、稳定、可回溯的，不该被 runner 镜像的静默升级带走。
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: 构建 (release)
+        run: |
+          cargo build --locked --release --bin wind-installer --bin wind-uninstaller
+          cargo build --locked --release --bin wind-packer --features packer
+
+      # ── 发布门禁:自包含校验 ──────────────────────────────────────────────
+      # stub 与 uninstaller 都在**用户机器**上运行，且安装器往往是用户在这台机器上
+      # 跑的第一个程序。动态链接 CRT 的话，没装 VC++ 运行库的干净机器会直接报
+      # 「找不到 VCRUNTIME140.dll」/ 0xc000007b，用户完全无从自救。
+      #
+      # +crt-static 由 .cargo/config.toml 提供，但 RUSTFLAGS 环境变量会覆盖那一节——
+      # 也就是说这个保证可能被外部因素静默掀翻。故在发布前实测产物本身，而不是
+      # 相信构建配置。packer 只跑在构建机上，不在此列。
+      - name: 校验 Windows 产物静态链接 CRT
+        shell: pwsh
+        run: |
+          $bad = $false
+          foreach ($exe in @('wind-installer.exe', 'wind-uninstaller.exe')) {
+            $path = "target/release/$exe"
+            $text = [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes($path))
+            foreach ($dep in @('VCRUNTIME140', 'api-ms-win-crt-runtime')) {
+              if ($text -match $dep) {
+                Write-Host "::error::$exe 动态链接了 $dep —— 干净机器上无法启动。检查 .cargo/config.toml 与 RUSTFLAGS。"
+                $bad = $true
+              }
+            }
+            if (-not $bad) { Write-Host "  OK $exe 自包含" }
+          }
+          if ($bad) { exit 1 }
+
+      - name: 整理产物
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target/release/wind-installer.exe   dist/wind-installer-windows-x64.exe
+          Copy-Item target/release/wind-uninstaller.exe dist/wind-uninstaller-windows-x64.exe
+          Copy-Item target/release/wind-packer.exe      dist/wind-packer-windows-x64.exe
+          Get-ChildItem dist | Select-Object Name, Length
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64
+          path: dist/*
+          if-no-files-found: error
+
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # 只出 packer:stub/uninstaller 是 cfg(windows) 代码，Linux 上不存在。
+      # Linux 侧打包流水线用交叉编译的 stub，那是消费方的事，不由本仓发布。
+      - name: 构建 wind-packer (release)
+        run: cargo build --locked --release --bin wind-packer --features packer
+
+      - name: 整理产物
+        run: |
+          mkdir -p dist
+          cp target/release/wind-packer dist/wind-packer-linux-x64
+          ls -l dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-x64
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    needs: [windows, linux]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      # 校验和与产物同目录发布:消费方下载后可离线核对，不必信任传输过程。
+      - name: 汇总并生成 SHA256SUMS
+        run: |
+          mkdir -p dist
+          find artifacts -type f -exec cp {} dist/ \;
+          cd dist
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: 创建 Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes \
+            dist/*
