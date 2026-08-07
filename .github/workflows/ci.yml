@@ -29,9 +29,15 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy
+          # 该 action 用 profile=minimal，rustfmt/clippy 都得显式声明，不会自带。
+          components: clippy, rustfmt
 
       - uses: Swatinem/rust-cache@v2
+
+      # 放在编译之前：格式问题几秒就能判定，没必要等完整构建跑完才红。
+      # 本地有对应的 .githooks/pre-commit 跑同一条命令，激活方式见 CONTRIBUTING。
+      - name: 格式检查
+        run: cargo fmt --all -- --check
 
       # 三个二进制都要编：packer 走 packer feature（editpe 是可选依赖），
       # 只编 stub 不会暴露 packer 侧的编译错误。
@@ -45,11 +51,12 @@ jobs:
       - name: 测试
         run: cargo test --locked --tests
 
-      # 不加 -D warnings：既有代码有 11 处 clippy 警告未清理，开门禁第一次就红，
-      # 红着的门禁没人会认真看。清理干净后把这行换成 `cargo clippy --lib -- -D warnings`。
-      # 同理未加 `cargo fmt --check`——现有代码未按 rustfmt 格式化。
+      # lib 的既有警告已清零，故这里加了 -D warnings。范围仍限于 --lib：
+      # --all-targets 下 bin 与 tests 尚有 4 处（`items after a test module` 等）未清，
+      # 那需要挪动代码块，留待单独收拾。清完后把 --lib 换成
+      # `--all-targets --features packer`，届时 packer 侧的警告也会一并纳入门禁。
       - name: Clippy
-        run: cargo clippy --locked --lib
+        run: cargo clippy --locked --lib -- -D warnings
 
   linux-packer:
     runs-on: ubuntu-latest
