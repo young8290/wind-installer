@@ -88,8 +88,8 @@ impl ArchiveWriter {
             let crc32 = crc32fast::hash(data);
             entries.push(ArchiveEntry {
                 path: path.clone(),
-                offset: decompressed_offset,   // 解压后流中的字节起点
-                compressed_size: 0,            // solid 模式无意义
+                offset: decompressed_offset, // 解压后流中的字节起点
+                compressed_size: 0,          // solid 模式无意义
                 original_size,
                 crc32,
             });
@@ -102,7 +102,8 @@ impl ArchiveWriter {
         let solid_compressed_size = compressed.len() as u64;
 
         // 3. 写入压缩块
-        self.output.write_all(&compressed)
+        self.output
+            .write_all(&compressed)
             .map_err(|e| format!("Failed to write compressed block: {}", e))?;
 
         // 4. 构建并写入 Header
@@ -116,12 +117,14 @@ impl ArchiveWriter {
 
         let header_bytes = header.to_bytes();
         let header_offset = solid_compressed_size; // .bin 中 Header 从此处开始
-        self.output.write_all(&header_bytes)
+        self.output
+            .write_all(&header_bytes)
             .map_err(|e| format!("Failed to write header: {}", e))?;
 
         // 5. 写入 Footer
         let footer = ArchiveFooter::new(header_offset);
-        self.output.write_all(&footer.to_bytes())
+        self.output
+            .write_all(&footer.to_bytes())
             .map_err(|e| format!("Failed to write footer: {}", e))?;
 
         Ok(header_offset)
@@ -135,14 +138,15 @@ impl ArchiveWriter {
 fn compress_solid(data: &[u8], compression: CompressionType) -> Result<Vec<u8>, String> {
     match compression {
         CompressionType::Zstd => {
-            zstd::encode_all(data, 19)
-                .map_err(|e| format!("Zstd compression failed: {}", e))
+            zstd::encode_all(data, 19).map_err(|e| format!("Zstd compression failed: {}", e))
         }
         CompressionType::Lzma => {
             let mut encoder = xz2::write::XzEncoder::new(Vec::new(), 9);
-            encoder.write_all(data)
+            encoder
+                .write_all(data)
                 .map_err(|e| format!("LZMA write failed: {}", e))?;
-            encoder.finish()
+            encoder
+                .finish()
                 .map_err(|e| format!("LZMA finish failed: {}", e))
         }
     }

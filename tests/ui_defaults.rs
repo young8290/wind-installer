@@ -51,7 +51,11 @@ fn defaults_are_domain_neutral() {
 fn delete_confirm_substitutes_path_placeholder() {
     init();
     let text = meta::s_delete_data_confirm(r"%APPDATA%\Demo");
-    assert!(text.contains(r"%APPDATA%\Demo"), "未替换 {{path}}: {}", text);
+    assert!(
+        text.contains(r"%APPDATA%\Demo"),
+        "未替换 {{path}}: {}",
+        text
+    );
     assert!(!text.contains("{path}"), "占位符残留: {}", text);
     assert!(!text.contains("词库"));
 }

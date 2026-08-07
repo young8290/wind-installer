@@ -72,7 +72,11 @@ fn portable_plan_only_extracts_and_marks() {
     let names = plan_names(MINIMAL, InstallMode::Portable);
     assert_eq!(
         names,
-        ["正在解压数据...", "正在释放文件...", "正在写入便携模式标记..."]
+        [
+            "正在解压数据...",
+            "正在释放文件...",
+            "正在写入便携模式标记..."
+        ]
     );
 }
 
@@ -82,7 +86,11 @@ fn portable_plan_never_touches_system_even_with_all_capabilities() {
     let names = plan_names(FULL, InstallMode::Portable);
     assert_eq!(
         names,
-        ["正在解压数据...", "正在释放文件...", "正在写入便携模式标记..."]
+        [
+            "正在解压数据...",
+            "正在释放文件...",
+            "正在写入便携模式标记..."
+        ]
     );
 }
 
@@ -172,13 +180,24 @@ fn receipt_persists_after_every_side_effecting_step() {
     let receipt_at = names.iter().position(|n| n.contains("安装回执")).unwrap();
 
     for effect in [
-        "字体", "COM", "输入法", "自启动", "协议", "快捷方式", "卸载信息", "数据目录",
+        "字体",
+        "COM",
+        "输入法",
+        "自启动",
+        "协议",
+        "快捷方式",
+        "卸载信息",
+        "数据目录",
     ] {
         let at = names
             .iter()
             .position(|n| n.contains(effect))
             .unwrap_or_else(|| panic!("计划里找不到步骤: {}", effect));
-        assert!(at < receipt_at, "{} 在回执落盘之后执行，其产物会漏记", effect);
+        assert!(
+            at < receipt_at,
+            "{} 在回执落盘之后执行，其产物会漏记",
+            effect
+        );
     }
 }
 

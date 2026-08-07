@@ -51,7 +51,10 @@ fn project_config_parses_all_sections() {
     assert_eq!(cfg.manifest.app.id, "DemoApp");
     assert_eq!(cfg.manifest.app.display_name, "示例应用");
     assert_eq!(cfg.manifest.app.process_names, ["demo_app", "demo_helper"]);
-    assert_eq!(cfg.manifest.app.acl_dlls, ["demo_tsf.dll", "demo_tsf_x86.dll"]);
+    assert_eq!(
+        cfg.manifest.app.acl_dlls,
+        ["demo_tsf.dll", "demo_tsf_x86.dll"]
+    );
     assert_eq!(cfg.manifest.app.legacy_files, ["demo_old.dll"]);
     assert!(cfg.manifest.app.legacy_dirs.is_empty());
 
@@ -86,9 +89,19 @@ fn repo_app_toml_parses_with_all_capability_sections() {
     assert_eq!(cfg.manifest.shortcut.len(), 2);
     assert_eq!(cfg.manifest.shortcut[0].effective_name(), "示例应用 设置");
 
-    assert!(cfg.manifest.startup.as_ref().expect("应有 startup 段").prestart);
+    assert!(
+        cfg.manifest
+            .startup
+            .as_ref()
+            .expect("应有 startup 段")
+            .prestart
+    );
     assert_eq!(
-        cfg.manifest.datadir.as_ref().expect("应有 datadir 段").conf_file,
+        cfg.manifest
+            .datadir
+            .as_ref()
+            .expect("应有 datadir 段")
+            .conf_file,
         "datadir.conf"
     );
 
@@ -106,21 +119,45 @@ fn shortcut_placeholders_expand_per_variant() {
 
     // release 变体
     assert_eq!(
-        expand_placeholders("{setting_exe}", "demo_app.exe", "demo_settings.exe", "示例应用", "DemoApp"),
+        expand_placeholders(
+            "{setting_exe}",
+            "demo_app.exe",
+            "demo_settings.exe",
+            "示例应用",
+            "DemoApp"
+        ),
         "demo_settings.exe"
     );
     assert_eq!(
-        expand_placeholders("{display_name} 设置", "demo_app.exe", "demo_settings.exe", "示例应用", "DemoApp"),
+        expand_placeholders(
+            "{display_name} 设置",
+            "demo_app.exe",
+            "demo_settings.exe",
+            "示例应用",
+            "DemoApp"
+        ),
         "示例应用 设置"
     );
 
     // dev 变体：同一份 config 文本，展开出 dev 的 exe 名与显示名
     assert_eq!(
-        expand_placeholders("{setting_exe}", "demo_app_dev.exe", "demo_settings_dev.exe", "示例应用 (开发版)", "DemoAppDev"),
+        expand_placeholders(
+            "{setting_exe}",
+            "demo_app_dev.exe",
+            "demo_settings_dev.exe",
+            "示例应用 (开发版)",
+            "DemoAppDev"
+        ),
         "demo_settings_dev.exe"
     );
     assert_eq!(
-        expand_placeholders("卸载 {display_name}", "demo_app_dev.exe", "demo_settings_dev.exe", "示例应用 (开发版)", "DemoAppDev"),
+        expand_placeholders(
+            "卸载 {display_name}",
+            "demo_app_dev.exe",
+            "demo_settings_dev.exe",
+            "示例应用 (开发版)",
+            "DemoAppDev"
+        ),
         "卸载 示例应用 (开发版)"
     );
 }
@@ -173,7 +210,10 @@ prestart = true
     assert_eq!(m.shortcut[0].effective_name(), "tool");
     assert_eq!(m.shortcut[0].effective_description(), "tool");
 
-    assert_eq!(m.startup.as_ref().unwrap().exe_or(&m.app.main_exe), "app.exe");
+    assert_eq!(
+        m.startup.as_ref().unwrap().exe_or(&m.app.main_exe),
+        "app.exe"
+    );
 }
 
 #[test]
@@ -189,7 +229,10 @@ fn manifest_toml_byte_roundtrip_preserves_all_fields() {
     assert_eq!(parsed.app.process_names, original.app.process_names);
     assert_eq!(parsed.app.url_protocol, original.app.url_protocol);
     assert_eq!(parsed.ui.install_win.w, original.ui.install_win.w);
-    assert_eq!(parsed.ime.as_ref().unwrap().clsid, original.ime.as_ref().unwrap().clsid);
+    assert_eq!(
+        parsed.ime.as_ref().unwrap().clsid,
+        original.ime.as_ref().unwrap().clsid
+    );
     assert_eq!(parsed.font.len(), 1);
     assert_eq!(parsed.font[0].source_rel, original.font[0].source_rel);
 }
@@ -243,13 +286,23 @@ copyright         = "Copyright (c) 2026"
 original_filename = "myapp.exe"
 "#;
     let cfg = ProjectConfig::from_toml_str(toml_str).expect("解析包含 version_info 的配置失败");
-    let version_info = cfg.package.version_info.as_ref().expect("应当解析出 version_info");
+    let version_info = cfg
+        .package
+        .version_info
+        .as_ref()
+        .expect("应当解析出 version_info");
     assert_eq!(version_info.company_name.as_deref(), Some("My Company"));
-    assert_eq!(version_info.file_description.as_deref(), Some("My File Description"));
+    assert_eq!(
+        version_info.file_description.as_deref(),
+        Some("My File Description")
+    );
     assert_eq!(version_info.file_version.as_deref(), Some("1.0.0.0"));
     assert_eq!(version_info.product_name.as_deref(), Some("My Product"));
     assert_eq!(version_info.product_version.as_deref(), Some("1.0.0.0"));
-    assert_eq!(version_info.copyright.as_deref(), Some("Copyright (c) 2026"));
+    assert_eq!(
+        version_info.copyright.as_deref(),
+        Some("Copyright (c) 2026")
+    );
     assert_eq!(version_info.original_filename.as_deref(), Some("myapp.exe"));
 
     // 验证缺省情况
@@ -265,8 +318,13 @@ main_exe     = "myapp.exe"
 source_dir = "./build"
 [package.version_info]
 "#;
-    let cfg_empty = ProjectConfig::from_toml_str(toml_str_empty_info).expect("解析空 version_info 失败");
-    let info_empty = cfg_empty.package.version_info.as_ref().expect("空 version_info 块也应解析出 Option");
+    let cfg_empty =
+        ProjectConfig::from_toml_str(toml_str_empty_info).expect("解析空 version_info 失败");
+    let info_empty = cfg_empty
+        .package
+        .version_info
+        .as_ref()
+        .expect("空 version_info 块也应解析出 Option");
     assert!(info_empty.company_name.is_none());
     assert!(info_empty.file_description.is_none());
 
@@ -282,7 +340,7 @@ main_exe     = "myapp.exe"
 [package]
 source_dir = "./build"
 "#;
-    let cfg_no_info = ProjectConfig::from_toml_str(toml_str_no_info).expect("不包含 version_info 应解析成功");
+    let cfg_no_info =
+        ProjectConfig::from_toml_str(toml_str_no_info).expect("不包含 version_info 应解析成功");
     assert!(cfg_no_info.package.version_info.is_none());
 }
-

@@ -39,8 +39,7 @@ pub fn write_datadir_conf(data_dir: &Path, conf_file: &str) -> Result<PathBuf, S
     let path = datadir_conf_path(conf_file);
     let conf_dir = path.parent().ok_or("配置路径无父目录")?;
 
-    std::fs::create_dir_all(conf_dir)
-        .map_err(|e| format!("Failed to create conf dir: {}", e))?;
+    std::fs::create_dir_all(conf_dir).map_err(|e| format!("Failed to create conf dir: {}", e))?;
     std::fs::write(&path, data_dir.to_string_lossy().as_bytes())
         .map_err(|e| format!("Failed to write {}: {}", conf_file, e))?;
 

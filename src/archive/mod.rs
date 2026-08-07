@@ -3,7 +3,10 @@ pub mod reader;
 pub mod writer;
 
 #[allow(unused_imports)]
-pub use format::{ArchiveEntry, ArchiveFooter, ArchiveHeader, CompressionType, FORMAT_VERSION, MAGIC_FOOTER, MAGIC_HEADER};
+pub use format::{
+    ArchiveEntry, ArchiveFooter, ArchiveHeader, CompressionType, FORMAT_VERSION, MAGIC_FOOTER,
+    MAGIC_HEADER,
+};
 pub use reader::ArchiveReader;
 #[allow(unused_imports)]
 pub use writer::ArchiveWriter;
@@ -19,7 +22,11 @@ use std::path::Path;
 ///
 /// 追加结构：`[原 exe][Header(manifest, logo, 0 条目, 块大小 0)][Footer]`。
 /// 无压缩块（0 个文件），运行期只读头部、不解压。
-pub fn append_manifest_overlay(exe_path: &Path, manifest: &[u8], logo: &[u8]) -> Result<(), String> {
+pub fn append_manifest_overlay(
+    exe_path: &Path,
+    manifest: &[u8],
+    logo: &[u8],
+) -> Result<(), String> {
     use format::{ArchiveFooter, ArchiveHeader, CompressionType};
 
     let stub_size = std::fs::metadata(exe_path)
@@ -60,34 +67,33 @@ pub fn append_manifest_overlay(exe_path: &Path, manifest: &[u8], logo: &[u8]) ->
 #[allow(dead_code)]
 pub fn bundle_exe(stub_path: &Path, archive_path: &Path, output_path: &Path) -> Result<(), String> {
     let stub_size = std::fs::metadata(stub_path)
-        .map_err(|e| format!("Failed to stat stub: {}", e))?.len();
+        .map_err(|e| format!("Failed to stat stub: {}", e))?
+        .len();
 
     let arc_reader = ArchiveReader::open(archive_path)?;
     let solid_size = arc_reader.header().solid_compressed_size;
 
     let archive_size = std::fs::metadata(archive_path)
-        .map_err(|e| format!("Failed to stat archive: {}", e))?.len();
+        .map_err(|e| format!("Failed to stat archive: {}", e))?
+        .len();
 
     // header_bytes 在 .bin 中占的字节数（compressed_block 与 footer 之间）
     let header_bytes_size = archive_size - solid_size - 16;
 
     let mut out = BufWriter::new(
         std::fs::File::create(output_path)
-            .map_err(|e| format!("Failed to create output: {}", e))?
+            .map_err(|e| format!("Failed to create output: {}", e))?,
     );
 
     let mut arc_src = BufReader::new(
-        std::fs::File::open(archive_path)
-            .map_err(|e| format!("Failed to open archive: {}", e))?
+        std::fs::File::open(archive_path).map_err(|e| format!("Failed to open archive: {}", e))?,
     );
 
     // 1. stub
     let mut stub_src = BufReader::new(
-        std::fs::File::open(stub_path)
-            .map_err(|e| format!("Failed to open stub: {}", e))?
+        std::fs::File::open(stub_path).map_err(|e| format!("Failed to open stub: {}", e))?,
     );
-    std::io::copy(&mut stub_src, &mut out)
-        .map_err(|e| format!("Failed to write stub: {}", e))?;
+    std::io::copy(&mut stub_src, &mut out).map_err(|e| format!("Failed to write stub: {}", e))?;
 
     // 2. 压缩块（原样复制，无需任何修改）
     let mut block_src = (&mut arc_src).take(solid_size);

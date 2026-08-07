@@ -10,7 +10,9 @@ use crate::meta;
 
 use super::receipt::ReceiptEntry;
 use super::step::{InstallCtx, Reporter, Step};
-use super::{acl, font, ime, is_uninstaller_entry, legacy, process, registry, residue, shortcut, userdata};
+use super::{
+    acl, font, ime, is_uninstaller_entry, legacy, process, registry, residue, shortcut, userdata,
+};
 use super::{InstallMode, UNINSTALLER_NAME};
 
 // ── 安装环境标志 ────────────────────────────────────────────────────────────
@@ -44,7 +46,10 @@ impl Step<InstallCtx<'_>> for PersistReceipt {
         true
     }
     fn run(&self, ctx: &mut InstallCtx, r: &mut dyn Reporter) -> Result<(), String> {
-        r.log(&format!("回执含 {} 条可撤销产物", ctx.receipt.entries.len()));
+        r.log(&format!(
+            "回执含 {} 条可撤销产物",
+            ctx.receipt.entries.len()
+        ));
         ctx.receipt.save()
     }
 }

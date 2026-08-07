@@ -131,7 +131,10 @@ impl ArchiveHeader {
 
         let version = u32::from_le_bytes(data[8..12].try_into().unwrap());
         if version != FORMAT_VERSION {
-            return Err(format!("Unsupported format version: {} (expected {})", version, FORMAT_VERSION));
+            return Err(format!(
+                "Unsupported format version: {} (expected {})",
+                version, FORMAT_VERSION
+            ));
         }
 
         let compression = CompressionType::from_u8(data[12])
@@ -242,6 +245,9 @@ impl ArchiveFooter {
             return Err("Invalid footer magic".into());
         }
 
-        Ok(Self { header_offset, magic })
+        Ok(Self {
+            header_offset,
+            magic,
+        })
     }
 }

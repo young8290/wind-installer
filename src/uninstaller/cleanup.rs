@@ -20,8 +20,8 @@ pub struct CleanupOptions {
 
 impl Default for CleanupOptions {
     fn default() -> Self {
-        let program_files = std::env::var("ProgramFiles")
-            .unwrap_or_else(|_| r"C:\Program Files".to_string());
+        let program_files =
+            std::env::var("ProgramFiles").unwrap_or_else(|_| r"C:\Program Files".to_string());
 
         Self {
             install_dir: PathBuf::from(program_files).join(meta::app_id()),
@@ -67,13 +67,14 @@ impl CleanupOptions {
 
     /// 获取本地缓存目录
     pub fn local_cache_dir(&self) -> PathBuf {
-        let local_app_data = std::env::var("LOCALAPPDATA")
-            .unwrap_or_else(|_| {
-                let mut p = PathBuf::from(std::env::var("USERPROFILE").unwrap_or_default());
-                p.push("AppData\\Local");
-                p.to_string_lossy().to_string()
-            });
-        PathBuf::from(local_app_data).join(meta::app_id()).join("cache")
+        let local_app_data = std::env::var("LOCALAPPDATA").unwrap_or_else(|_| {
+            let mut p = PathBuf::from(std::env::var("USERPROFILE").unwrap_or_default());
+            p.push("AppData\\Local");
+            p.to_string_lossy().to_string()
+        });
+        PathBuf::from(local_app_data)
+            .join(meta::app_id())
+            .join("cache")
     }
 }
 
@@ -88,13 +89,29 @@ impl CleanupOptions {
 /// 只禁止**等于**，不禁止其子目录——默认数据目录 `%APPDATA%\{id}` 正是 `%APPDATA%`
 /// 的子目录，一并禁掉会把正常卸载也拦下。
 fn forbidden_roots() -> Vec<PathBuf> {
-    let mut v: Vec<PathBuf> = ["SystemRoot", "ProgramFiles", "ProgramFiles(x86)", "ProgramW6432",
-        "USERPROFILE", "APPDATA", "LOCALAPPDATA", "PUBLIC", "TEMP"]
-        .iter()
-        .filter_map(|k| std::env::var_os(k).map(PathBuf::from))
-        .collect();
+    let mut v: Vec<PathBuf> = [
+        "SystemRoot",
+        "ProgramFiles",
+        "ProgramFiles(x86)",
+        "ProgramW6432",
+        "USERPROFILE",
+        "APPDATA",
+        "LOCALAPPDATA",
+        "PUBLIC",
+        "TEMP",
+    ]
+    .iter()
+    .filter_map(|k| std::env::var_os(k).map(PathBuf::from))
+    .collect();
     if let Some(profile) = std::env::var_os("USERPROFILE").map(PathBuf::from) {
-        for sub in ["Desktop", "Documents", "Downloads", "Pictures", "Music", "Videos"] {
+        for sub in [
+            "Desktop",
+            "Documents",
+            "Downloads",
+            "Pictures",
+            "Music",
+            "Videos",
+        ] {
             v.push(profile.join(sub));
         }
     }
@@ -266,8 +283,11 @@ pub fn cleanup_user_data(options: &CleanupOptions, user_data_dir: &Path) -> Resu
             Ok(()) => {
                 if options.backup_to_desktop {
                     // 目录名带本地时间戳，每次卸载生成唯一目录，避免覆盖历史备份
-                    let backup_dir = desktop_dir()
-                        .join(format!("{}_Backup_{}", meta::app_id(), local_timestamp()));
+                    let backup_dir = desktop_dir().join(format!(
+                        "{}_Backup_{}",
+                        meta::app_id(),
+                        local_timestamp()
+                    ));
                     if let Err(e) = copy_dir_all(user_data_dir, &backup_dir) {
                         eprintln!("Warning: Failed to backup user data to desktop: {}", e);
                     }
@@ -327,10 +347,7 @@ mod guard_tests {
     /// 正常数据目录必须放行——守卫拦错了等于卸载删不干净。
     #[test]
     fn normal_data_dirs_pass() {
-        for ok in [
-            r"C:\Users\Someone\AppData\Roaming\Demo",
-            r"D:\MyData\Demo",
-        ] {
+        for ok in [r"C:\Users\Someone\AppData\Roaming\Demo", r"D:\MyData\Demo"] {
             assert!(
                 guard_shape(Path::new(ok), &forbidden()).is_ok(),
                 "应放行: {ok}"
@@ -426,4 +443,3 @@ fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
     }
     Ok(())
 }
-

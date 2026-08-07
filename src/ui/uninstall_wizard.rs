@@ -9,9 +9,9 @@ use windui::ui::{Element, WindowButtonKind};
 
 use windui::prelude::Sender;
 
+use super::theme;
 use crate::installer::step::Reporter;
 use crate::meta;
-use super::theme;
 
 const PAGE_CONFIRM: usize = 0;
 const PAGE_PROGRESS: usize = 1;
@@ -49,21 +49,25 @@ impl Reporter for GuiReporter {
 pub fn run_uninstall_wizard() {
     // ---- 运行期窗口尺寸（来自清单；非无边框模式高度 -40 补偿系统标题栏）----
     let (win_w, base_h) = meta::uninstall_win();
-    let win_h = if cfg!(feature = "frameless") { base_h } else { base_h - 40 };
+    let win_h = if cfg!(feature = "frameless") {
+        base_h
+    } else {
+        base_h - 40
+    };
     let title = format!("{} 卸载程序", meta::app_display_name());
 
     // ---- 状态（Signal<T> 是 Copy 句柄，move 闭包自动复制，无需 clone 样板）----
-    let current_page      = signal(PAGE_CONFIRM);
-    let clean_roaming     = signal(false);
-    let clean_cache       = signal(true);
+    let current_page = signal(PAGE_CONFIRM);
+    let clean_roaming = signal(false);
+    let clean_cache = signal(true);
     let backup_to_desktop = signal(true);
-    let confirmed         = signal(false);
-    let finish_success    = signal(false);
-    let finish_error      = signal(String::new());
+    let confirmed = signal(false);
+    let finish_success = signal(false);
+    let finish_error = signal(String::new());
     // 卸载完了但有文件删不掉（已排重启删除队列）——完成页据此提示重启。
-    let finish_reboot     = signal(false);
-    let status_text       = signal(String::from("正在准备卸载..."));
-    let install_dir       = signal(detect_install_dir());
+    let finish_reboot = signal(false);
+    let status_text = signal(String::from("正在准备卸载..."));
+    let install_dir = signal(detect_install_dir());
     let show_delete_confirm = signal(false);
 
     // ---- 跨线程进度通道（on_message 在 UI 线程调用，可直接写 Signal）----
@@ -92,11 +96,7 @@ pub fn run_uninstall_wizard() {
         .padding_xy(0, 18)
         .spacing(8)
         .cross(Align::Center)
-        .child(
-            Element::image_bytes(meta::logo())
-                .size(52, 52)
-                .corner(13.0)
-        )
+        .child(Element::image_bytes(meta::logo()).size(52, 52).corner(13.0))
         .child(
             Element::label(meta::app_display_name())
                 .width_match()
@@ -142,10 +142,13 @@ pub fn run_uninstall_wizard() {
         .spacing(12)
         .visible_when(move || current_page.get() == PAGE_CONFIRM)
         .child(
-            Element::label(format!("即将从您的电脑中卸载 {}，请确认：", meta::app_display_name()))
-                .font_size(13.0)
-                .fg(Color::hex(theme::text_secondary()))
-                .width_match(),
+            Element::label(format!(
+                "即将从您的电脑中卸载 {}，请确认：",
+                meta::app_display_name()
+            ))
+            .font_size(13.0)
+            .fg(Color::hex(theme::text_secondary()))
+            .width_match(),
         )
         .child(delete_data_row)
         .child(
@@ -179,11 +182,11 @@ pub fn run_uninstall_wizard() {
                             current_page.set(PAGE_PROGRESS);
 
                             let options = crate::uninstaller::cleanup::CleanupOptions {
-                                install_dir:      install_dir.get(),
-                                clean_roaming:    clean_roaming.get(),
+                                install_dir: install_dir.get(),
+                                clean_roaming: clean_roaming.get(),
                                 clean_local_cache: clean_cache.get(),
                                 backup_to_desktop: backup_to_desktop.get(),
-                                keep_user_data:   false,
+                                keep_user_data: false,
                             };
 
                             let tx = tx.clone();
@@ -375,8 +378,14 @@ pub fn run_uninstall_wizard() {
                     .fg(Color::hex(theme::text_muted())),
             )
             .child(Element::leaf().weight(1.0))
-            .child(Element::window_button(WindowButtonKind::Minimize).fg(Color::hex(theme::text_secondary())))
-            .child(Element::window_button(WindowButtonKind::Close).fg(Color::hex(theme::text_secondary())))
+            .child(
+                Element::window_button(WindowButtonKind::Minimize)
+                    .fg(Color::hex(theme::text_secondary())),
+            )
+            .child(
+                Element::window_button(WindowButtonKind::Close)
+                    .fg(Color::hex(theme::text_secondary())),
+            )
     };
 
     // ============================================================

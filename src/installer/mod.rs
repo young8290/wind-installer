@@ -1,21 +1,21 @@
+pub mod acl;
 pub mod config;
+pub mod font;
+pub mod ime;
 pub mod legacy;
 pub mod plan;
+pub mod process;
 pub mod receipt;
 pub mod registry;
+pub mod residue;
+pub mod shortcut;
 pub mod step;
 pub mod steps;
 pub mod userdata;
-pub mod shortcut;
-pub mod font;
-pub mod acl;
-pub mod process;
-pub mod ime;
-pub mod residue;
 
-use config::InstallConfig;
 use crate::archive::ArchiveReader;
 use crate::meta;
+use config::InstallConfig;
 use receipt::Receipt;
 use step::{run_plan, CliReporter, InstallCtx};
 

@@ -94,7 +94,9 @@ fn run_regsvr32(dll: &Path, wow64: bool, unregister: bool) -> Result<(), String>
 
 /// 反注册旧 COM 组件（无窗口）
 pub fn unregister_old_com(install_dir: &Path) -> Result<(), String> {
-    let Some(ime) = ime_cfg() else { return Ok(()); };
+    let Some(ime) = ime_cfg() else {
+        return Ok(());
+    };
 
     let dll_path = install_dir.join(&ime.dll_x64);
     if dll_path.exists() {
@@ -149,7 +151,9 @@ pub fn unregister_profile(profile: &str) -> Result<(), String> {
 
 /// 注册系统输入法 — 直接调用 input.dll!InstallLayoutOrTip，无 PowerShell 窗口
 pub fn register_input_method() -> Result<(), String> {
-    let Some(ime) = ime_cfg() else { return Ok(()); };
+    let Some(ime) = ime_cfg() else {
+        return Ok(());
+    };
     call_install_layout_or_tip(&profile_string(ime), 0)
 }
 
@@ -172,7 +176,10 @@ fn call_install_layout_or_tip(profile: &str, flags: u32) -> Result<(), String> {
                 let f: Fn = std::mem::transmute(f);
                 let wide: Vec<u16> = profile.encode_utf16().chain(std::iter::once(0)).collect();
                 if !f(wide.as_ptr(), flags) {
-                    eprintln!("Warning: InstallLayoutOrTip returned false for flags={:#010x}", flags);
+                    eprintln!(
+                        "Warning: InstallLayoutOrTip returned false for flags={:#010x}",
+                        flags
+                    );
                 }
             }
             None => {

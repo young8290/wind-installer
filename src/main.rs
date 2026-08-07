@@ -8,8 +8,8 @@ mod archive;
 mod installer;
 mod manifest;
 mod meta;
-mod uninstaller;
 mod ui;
+mod uninstaller;
 mod util;
 
 /// Wind Installer - 轻量级 Windows 安装管理器
@@ -82,10 +82,7 @@ mod arg_tests {
             r"C:\Program Files\Demo App",
         ]);
         assert!(args.silent, "--silent 未被识别");
-        assert_eq!(
-            args.dir,
-            Some(PathBuf::from(r"C:\Program Files\Demo App"))
-        );
+        assert_eq!(args.dir, Some(PathBuf::from(r"C:\Program Files\Demo App")));
     }
 
     #[test]

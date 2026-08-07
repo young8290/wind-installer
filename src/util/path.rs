@@ -42,8 +42,8 @@ pub fn get_desktop() -> PathBuf {
 
 /// 获取开始菜单程序路径
 pub fn get_start_menu_programs() -> PathBuf {
-    let program_data = std::env::var("ProgramData")
-        .unwrap_or_else(|_| r"C:\ProgramData".to_string());
+    let program_data =
+        std::env::var("ProgramData").unwrap_or_else(|_| r"C:\ProgramData".to_string());
     PathBuf::from(program_data)
         .join("Microsoft")
         .join("Windows")
@@ -53,8 +53,7 @@ pub fn get_start_menu_programs() -> PathBuf {
 
 /// 获取 Windows 字体目录
 pub fn get_fonts_dir() -> PathBuf {
-    let windir = std::env::var("WINDIR")
-        .unwrap_or_else(|_| r"C:\Windows".to_string());
+    let windir = std::env::var("WINDIR").unwrap_or_else(|_| r"C:\Windows".to_string());
     PathBuf::from(windir).join("Fonts")
 }
 

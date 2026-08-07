@@ -11,7 +11,10 @@ const APP_PACKAGES_SID: &str = "*S-1-15-2-1";
 
 /// 设置 DLL 权限（ALL APPLICATION PACKAGES 读取执行）
 pub fn set_dll_permissions(install_dir: &Path) -> Result<(), String> {
-    let dlls: Vec<_> = meta::acl_dlls().iter().map(|n| install_dir.join(n)).collect();
+    let dlls: Vec<_> = meta::acl_dlls()
+        .iter()
+        .map(|n| install_dir.join(n))
+        .collect();
 
     for dll_path in &dlls {
         if dll_path.exists() {

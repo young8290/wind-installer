@@ -10,10 +10,10 @@ use windui::ui::{Element, WindowButtonKind};
 
 use windui::prelude::Sender;
 
+use super::theme;
 use crate::installer::step::Reporter;
 use crate::installer::InstallMode;
 use crate::meta;
-use super::theme;
 
 const PAGE_CONFIG: usize = 0;
 const PAGE_PROGRESS: usize = 1;
@@ -56,7 +56,9 @@ struct GuiReporter {
 impl GuiReporter {
     fn emit(&self, fraction_within_step: f32) {
         let overall = (self.index as f32 + fraction_within_step) / self.total.max(1) as f32;
-        let _ = self.tx.send(ProgressMsg::Progress(overall.clamp(0.0, 0.99)));
+        let _ = self
+            .tx
+            .send(ProgressMsg::Progress(overall.clamp(0.0, 0.99)));
     }
 }
 
@@ -105,9 +107,7 @@ fn spawn_install(
     mode: InstallMode,
     is_fresh_install: bool,
 ) {
-    std::thread::spawn(move || {
-        run_install_plan(tx, install_dir, data_dir, mode, is_fresh_install)
-    });
+    std::thread::spawn(move || run_install_plan(tx, install_dir, data_dir, mode, is_fresh_install));
 }
 
 /// 同步执行安装计划（调用方负责放到后台线程）。
@@ -208,7 +208,7 @@ pub fn run_install_wizard(opts: WizardOptions) {
     // quiet 模式同样从配置页开始（只是整页置灰不可改），停留片刻再自动进入安装。
     // 直接跳到进度页会让用户来不及看清"在装什么、装到哪"，观感上像是窗口闪了一下。
     let current_page = signal(PAGE_CONFIG);
-    let install_mode      = signal(0usize);
+    let install_mode = signal(0usize);
     let install_dir = signal(
         opts.install_dir
             .as_ref()
@@ -216,16 +216,16 @@ pub fn run_install_wizard(opts: WizardOptions) {
             .unwrap_or_else(default_install_dir),
     );
     let install_dir_portable = signal(default_portable_dir());
-    let data_dir          = signal(default_data_dir());
-    let progress_text     = signal(String::from("正在准备安装..."));
-    let progress_value    = signal(0.0f32);
-    let finish_success    = signal(false);
-    let finish_error      = signal(String::new());
+    let data_dir = signal(default_data_dir());
+    let progress_text = signal(String::from("正在准备安装..."));
+    let progress_value = signal(0.0f32);
+    let finish_success = signal(false);
+    let finish_error = signal(String::new());
     // 装完了但有文件被占用清不掉 —— 完成页据此显示重启提示，
     // 且 quiet 模式据此放弃自动退出（见下方 channel 处理）。
-    let finish_reboot     = signal(false);
-    let config_error      = signal(String::new());
-    let agreed            = signal(false);
+    let finish_reboot = signal(false);
+    let config_error = signal(String::new());
+    let agreed = signal(false);
 
     // bool 是 Copy，可被下面的 channel 闭包直接捕获
     let quiet = opts.quiet;
@@ -233,7 +233,7 @@ pub fn run_install_wizard(opts: WizardOptions) {
     // ---- 跨线程进度通道（on_message 在 UI 线程调用，可直接写 Signal）----
     let mut app = App::new(title.as_str(), win_w, win_h);
     let tx = app.channel::<ProgressMsg>(move |msg| match msg {
-        ProgressMsg::Status(s)   => progress_text.set(s),
+        ProgressMsg::Status(s) => progress_text.set(s),
         ProgressMsg::Progress(f) => progress_value.set(f),
         // 延迟结束，切到进度页；安装已在发出此消息的那个线程里继续进行
         ProgressMsg::BeginInstall => current_page.set(PAGE_PROGRESS),
@@ -287,11 +287,7 @@ pub fn run_install_wizard(opts: WizardOptions) {
                 .width_match()
                 .spacing(6)
                 .cross(Align::Center)
-                .child(
-                    Element::image_bytes(meta::logo())
-                        .size(72, 72)
-                        .corner(18.0),
-                )
+                .child(Element::image_bytes(meta::logo()).size(72, 72).corner(18.0))
                 .child(
                     Element::label(meta::app_display_name())
                         .width_match()
@@ -319,13 +315,13 @@ pub fn run_install_wizard(opts: WizardOptions) {
                     Element::label("安装目录")
                         .width(64)
                         .font_size(12.0)
-                        .fg(Color::hex(theme::text_secondary()))
+                        .fg(Color::hex(theme::text_secondary())),
                 )
                 .child(
                     Element::text_input(install_dir, "安装路径")
                         .weight(1.0)
                         .height(34)
-                        .visible_when(move || install_mode.get() == 0)
+                        .visible_when(move || install_mode.get() == 0),
                 )
                 .child(
                     Element::button("更改")
@@ -344,13 +340,13 @@ pub fn run_install_wizard(opts: WizardOptions) {
                                     }
                                 },
                             );
-                        })
+                        }),
                 )
                 .child(
                     Element::text_input(install_dir_portable, "安装路径")
                         .weight(1.0)
                         .height(34)
-                        .visible_when(move || install_mode.get() == 1)
+                        .visible_when(move || install_mode.get() == 1),
                 )
                 .child(
                     Element::button("更改")
@@ -369,8 +365,8 @@ pub fn run_install_wizard(opts: WizardOptions) {
                                     }
                                 },
                             );
-                        })
-                )
+                        }),
+                ),
         )
         // 数据目录（行高固定 34；便捷模式显示说明文字）
         .child(
@@ -383,14 +379,14 @@ pub fn run_install_wizard(opts: WizardOptions) {
                     Element::label("数据目录")
                         .width(64)
                         .font_size(12.0)
-                        .fg(Color::hex(theme::text_secondary()))
+                        .fg(Color::hex(theme::text_secondary())),
                 )
                 .child(
                     Element::text_input(data_dir, meta::s_data_dir_hint())
                         .weight(1.0)
                         .height(34)
                         .enabled(signal(is_fresh_install))
-                        .visible_when(move || install_mode.get() == 0)
+                        .visible_when(move || install_mode.get() == 0),
                 )
                 .child(
                     Element::button("更改")
@@ -410,15 +406,15 @@ pub fn run_install_wizard(opts: WizardOptions) {
                                     }
                                 },
                             );
-                        })
+                        }),
                 )
                 .child(
                     Element::label("便捷模式不配置数据目录")
                         .weight(1.0)
                         .font_size(12.0)
                         .fg(Color::hex(theme::text_muted()))
-                        .visible_when(move || install_mode.get() == 1)
-                )
+                        .visible_when(move || install_mode.get() == 1),
+                ),
         )
         // 安装模式
         .child(
@@ -430,14 +426,14 @@ pub fn run_install_wizard(opts: WizardOptions) {
                         .width_match()
                         .spacing(16)
                         .child(Element::radio("标准安装（推荐）", install_mode, 0))
-                        .child(Element::radio("便捷模式", install_mode, 1))
+                        .child(Element::radio("便捷模式", install_mode, 1)),
                 )
                 .child(
                     Element::label(meta::s_mode_hint())
                         .font_size(11.0)
                         .fg(Color::hex(theme::text_muted()))
-                        .width_match()
-                )
+                        .width_match(),
+                ),
         )
         // 用户协议
         .child(
@@ -450,16 +446,15 @@ pub fn run_install_wizard(opts: WizardOptions) {
                         .font_size(13.0)
                         .fg(Color::hex(theme::text_secondary()))
                 } else {
-                    Element::link(meta::s_agreement_text())
-                        .url(meta::agreement_url())
-                })
+                    Element::link(meta::s_agreement_text()).url(meta::agreement_url())
+                }),
         )
         // 校验错误提示（仅未勾协议时可见）
         .child(
             Element::label_rc(config_error)
                 .font_size(11.0)
                 .fg(Color::hex(theme::error()))
-                .align(Align::Center)
+                .align(Align::Center),
         )
         // 安装按钮（align=Center 使其在父 col 中水平居中）
         .child(
@@ -481,8 +476,8 @@ pub fn run_install_wizard(opts: WizardOptions) {
                     } else {
                         expand_env_path(&install_dir_portable.get())
                     };
-                    let data_dir_val   = expand_env_path(&data_dir.get());
-                    let mode           = if install_mode.get() == 0 {
+                    let data_dir_val = expand_env_path(&data_dir.get());
+                    let mode = if install_mode.get() == 0 {
                         InstallMode::Standard
                     } else {
                         InstallMode::Portable
@@ -495,7 +490,7 @@ pub fn run_install_wizard(opts: WizardOptions) {
                         mode,
                         is_fresh_install,
                     );
-                })
+                }),
         )
         .child(Element::leaf().weight(1.0));
 
@@ -516,21 +511,21 @@ pub fn run_install_wizard(opts: WizardOptions) {
                 .child(
                     Element::label("正在安装中，请稍候...")
                         .font_size(14.0)
-                        .fg(Color::hex(theme::text_primary()))
+                        .fg(Color::hex(theme::text_primary())),
                 )
                 .child(
                     Element::progress(progress_value)
                         .width_match()
                         .height(6)
-                        .corner(3.0)
+                        .corner(3.0),
                 )
                 .child(
                     Element::label_rc(progress_text)
                         .font_size(12.0)
                         .fg(Color::hex(theme::text_secondary()))
                         .width_match()
-                        .text_align(Align::Center)
-                )
+                        .text_align(Align::Center),
+                ),
         )
         .child(Element::leaf().weight(1.0));
 
@@ -553,20 +548,23 @@ pub fn run_install_wizard(opts: WizardOptions) {
                 .child(
                     Element::label("✓")
                         .font_size(44.0)
-                        .fg(Color::hex(theme::success()))
+                        .fg(Color::hex(theme::success())),
                 )
                 .child(
                     Element::label("安装完成")
                         .font_size(18.0)
-                        .fg(Color::hex(theme::text_primary()))
+                        .fg(Color::hex(theme::text_primary())),
                 )
                 .child(
-                    Element::label(format!("{} 已准备就绪，可以开始使用", meta::app_display_name()))
-                        .font_size(13.0)
-                        .fg(Color::hex(theme::text_secondary()))
-                        .width_match()
-                        .text_align(Align::Center)
-                )
+                    Element::label(format!(
+                        "{} 已准备就绪，可以开始使用",
+                        meta::app_display_name()
+                    ))
+                    .font_size(13.0)
+                    .fg(Color::hex(theme::text_secondary()))
+                    .width_match()
+                    .text_align(Align::Center),
+                ),
         )
         // 装成功了，但有旧文件被占用清不掉。
         //
@@ -587,15 +585,15 @@ pub fn run_install_wizard(opts: WizardOptions) {
                         .font_size(12.0)
                         .fg(Color::hex(theme::warning()))
                         .width_match()
-                        .text_align(Align::Center)
+                        .text_align(Align::Center),
                 )
                 .child(
                     Element::label("不影响现在使用；重启后系统会自动清除这些残留")
                         .font_size(11.0)
                         .fg(Color::hex(theme::text_muted()))
                         .width_match()
-                        .text_align(Align::Center)
-                )
+                        .text_align(Align::Center),
+                ),
         )
         // 安装失败
         .child(
@@ -607,20 +605,20 @@ pub fn run_install_wizard(opts: WizardOptions) {
                 .child(
                     Element::label("✗")
                         .font_size(44.0)
-                        .fg(Color::hex(theme::error()))
+                        .fg(Color::hex(theme::error())),
                 )
                 .child(
                     Element::label("安装失败")
                         .font_size(18.0)
-                        .fg(Color::hex(theme::text_primary()))
+                        .fg(Color::hex(theme::text_primary())),
                 )
                 .child(
                     Element::label_rc(finish_error)
                         .font_size(12.0)
                         .fg(Color::hex(theme::error()))
                         .width_match()
-                        .text_align(Align::Center)
-                )
+                        .text_align(Align::Center),
+                ),
         )
         .child(Element::leaf().weight(1.0))
         // 完成按钮
@@ -634,7 +632,7 @@ pub fn run_install_wizard(opts: WizardOptions) {
                 .align(Align::Center)
                 .on_click(move |_ctx: &mut EventCtx| {
                     std::process::exit(0);
-                })
+                }),
         )
         .child(Element::leaf().height(20));
 
@@ -655,8 +653,13 @@ pub fn run_install_wizard(opts: WizardOptions) {
                 .fg(Color::hex(theme::text_secondary())),
         )
         .child(Element::leaf().weight(1.0))
-        .child(Element::window_button(WindowButtonKind::Minimize).fg(Color::hex(theme::text_secondary())))
-        .child(Element::window_button(WindowButtonKind::Close).fg(Color::hex(theme::text_secondary())));
+        .child(
+            Element::window_button(WindowButtonKind::Minimize)
+                .fg(Color::hex(theme::text_secondary())),
+        )
+        .child(
+            Element::window_button(WindowButtonKind::Close).fg(Color::hex(theme::text_secondary())),
+        );
 
     // ============================================================
     //  组装根节点
@@ -696,13 +699,7 @@ pub fn run_install_wizard(opts: WizardOptions) {
             std::thread::sleep(std::time::Duration::from_millis(QUIET_PREVIEW_MS));
             // 先切页再装：消息按序处理，进度页必定先于第一条进度就位
             quiet_tx.send(ProgressMsg::BeginInstall).ok();
-            run_install_plan(
-                quiet_tx,
-                dir,
-                data,
-                InstallMode::Standard,
-                is_fresh_install,
-            );
+            run_install_plan(quiet_tx, dir, data, InstallMode::Standard, is_fresh_install);
         });
     }
 
@@ -753,9 +750,9 @@ fn expand_env_path(s: &str) -> std::path::PathBuf {
     let mut result = s.to_string();
     for (var, fallback) in &[
         ("ProgramFiles", r"C:\Program Files"),
-        ("APPDATA",      r"C:\Users\Default\AppData\Roaming"),
+        ("APPDATA", r"C:\Users\Default\AppData\Roaming"),
         ("LOCALAPPDATA", r"C:\Users\Default\AppData\Local"),
-        ("USERPROFILE",  r"C:\Users\Default"),
+        ("USERPROFILE", r"C:\Users\Default"),
     ] {
         let token = format!("%{}%", var);
         if result.contains(&token) {
@@ -786,7 +783,11 @@ fn folder_pick_dialog(title: &str, current_path: &str) -> PickDialog {
 
 /// 用户选完目录后的收尾：若选的目录名不是 APP_ID，自动追加子目录。
 fn finalize_picked_folder(path: PathBuf) -> PathBuf {
-    if path.file_name().map(|n| n != crate::meta::app_id()).unwrap_or(true) {
+    if path
+        .file_name()
+        .map(|n| n != crate::meta::app_id())
+        .unwrap_or(true)
+    {
         path.join(crate::meta::app_id())
     } else {
         path

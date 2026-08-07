@@ -79,8 +79,8 @@ fn create_shortcut(
     working_dir: &str,
     description: &str,
 ) -> Result<(), String> {
-    let mut link = mslnk::ShellLink::new(target)
-        .map_err(|e| format!("无法创建快捷方式对象: {}", e))?;
+    let mut link =
+        mslnk::ShellLink::new(target).map_err(|e| format!("无法创建快捷方式对象: {}", e))?;
 
     link.set_working_dir(Some(working_dir.to_string()));
     link.set_name(Some(description.to_string()));

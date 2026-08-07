@@ -58,7 +58,10 @@ pub fn sweep_dangling_ime(ime: &ImeInfo, app_id: &str) -> SweepReport {
     // 2) x86 COM 插槽：HKLM\Software\Classes\WOW6432Node\CLSID\{clsid}（独立判定）
     let clsid_x86 = format!(r"Software\Classes\WOW6432Node\CLSID\{}", ime.clsid);
     if clsid_dangling(&clsid_x86) == Some(true) && delete_hklm_tree(&clsid_x86) {
-        report.note(format!("悬空 COM 注册 (x86) WOW6432Node\\CLSID\\{}", ime.clsid));
+        report.note(format!(
+            "悬空 COM 注册 (x86) WOW6432Node\\CLSID\\{}",
+            ime.clsid
+        ));
     }
 
     // 3) & 4) CTF TIP 登记：仅当主服务（x64）判为悬空时清理。健康或原地升级不动，

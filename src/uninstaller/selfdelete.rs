@@ -21,15 +21,17 @@ pub fn self_delete_target() -> Option<PathBuf> {
 /// 卸载完成后调用：将自身复制到 %TEMP%，以 `--self-delete <install_dir>` 启动副本，
 /// 然后立即退出当前进程（不返回）。副本负责删除安装目录并自我清除。
 pub fn trigger_self_delete(install_dir: &Path) -> Result<(), String> {
-    let current_exe = std::env::current_exe()
-        .map_err(|e| format!("获取自身路径失败: {}", e))?;
+    let current_exe = std::env::current_exe().map_err(|e| format!("获取自身路径失败: {}", e))?;
 
     let temp_dir = std::env::temp_dir();
     let suffix = std::process::id().wrapping_mul(2654435761);
-    let temp_exe = temp_dir.join(format!("{}_uninst_{:08x}.exe", meta::app_id().to_lowercase(), suffix));
+    let temp_exe = temp_dir.join(format!(
+        "{}_uninst_{:08x}.exe",
+        meta::app_id().to_lowercase(),
+        suffix
+    ));
 
-    std::fs::copy(&current_exe, &temp_exe)
-        .map_err(|e| format!("复制到临时目录失败: {}", e))?;
+    std::fs::copy(&current_exe, &temp_exe).map_err(|e| format!("复制到临时目录失败: {}", e))?;
 
     Command::new(&temp_exe)
         .arg("--self-delete")

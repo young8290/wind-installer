@@ -96,16 +96,47 @@ enum Command {
 fn main() {
     let args = Args::parse();
     let result = match args.command {
-        Command::Pack { config, version, source_dir, compression, output } => {
-            let ov = Overrides { version, source_dir, compression };
+        Command::Pack {
+            config,
+            version,
+            source_dir,
+            compression,
+            output,
+        } => {
+            let ov = Overrides {
+                version,
+                source_dir,
+                compression,
+            };
             cmd_pack(&config, ov, output).map(|_| ())
         }
-        Command::Bundle { config, version, stub, archive, output } => {
-            let ov = Overrides { version, source_dir: None, compression: None };
+        Command::Bundle {
+            config,
+            version,
+            stub,
+            archive,
+            output,
+        } => {
+            let ov = Overrides {
+                version,
+                source_dir: None,
+                compression: None,
+            };
             cmd_bundle(&config, ov, &stub, archive, output)
         }
-        Command::Build { config, version, source_dir, compression, stub, output } => {
-            let ov = Overrides { version, source_dir, compression };
+        Command::Build {
+            config,
+            version,
+            source_dir,
+            compression,
+            stub,
+            output,
+        } => {
+            let ov = Overrides {
+                version,
+                source_dir,
+                compression,
+            };
             cmd_build(&config, ov, &stub, output)
         }
         Command::Inspect { file } => cmd_inspect(&file),
@@ -239,14 +270,21 @@ fn cmd_pack_inner(l: &Loaded, output: Option<PathBuf>) -> Result<PathBuf, String
         match std::fs::read(&logo_path) {
             Ok(b) => b,
             Err(e) => {
-                eprintln!("警告: 无法读取 logo {:?}: {}（将使用空 logo）", logo_path, e);
+                eprintln!(
+                    "警告: 无法读取 logo {:?}: {}（将使用空 logo）",
+                    logo_path, e
+                );
                 Vec::new()
             }
         }
     };
 
     println!("Wind Packer · pack");
-    println!("  应用:   {} {}", l.cfg.manifest.app.display_name, l.version());
+    println!(
+        "  应用:   {} {}",
+        l.cfg.manifest.app.display_name,
+        l.version()
+    );
     println!("  源目录: {:?}", source);
     println!("  压缩:   {:?}", compression);
     println!("  清单:   {} 字节", manifest_bytes.len());
@@ -282,7 +320,12 @@ fn cmd_pack_inner(l: &Loaded, output: Option<PathBuf>) -> Result<PathBuf, String
     writer.finish()?;
 
     let size = std::fs::metadata(&output).map(|m| m.len()).unwrap_or(0);
-    println!("  → {:?}（{} 个文件, {:.2} MB）", output, entry_count, size as f64 / 1048576.0);
+    println!(
+        "  → {:?}（{} 个文件, {:.2} MB）",
+        output,
+        entry_count,
+        size as f64 / 1048576.0
+    );
     Ok(output)
 }
 
@@ -342,7 +385,9 @@ fn bundle_inner(l: &Loaded, stub: &Path, archive: &Path, output: &Path) -> Resul
     let effective_stub = tmp.clone();
     let iconned_stub = Some(tmp);
 
-    let stub_size = std::fs::metadata(&effective_stub).map(|m| m.len()).unwrap_or(0);
+    let stub_size = std::fs::metadata(&effective_stub)
+        .map(|m| m.len())
+        .unwrap_or(0);
     archive::bundle_exe(&effective_stub, archive, output)?;
 
     if let Some(tmp) = iconned_stub {
@@ -350,13 +395,23 @@ fn bundle_inner(l: &Loaded, stub: &Path, archive: &Path, output: &Path) -> Resul
     }
 
     let total = std::fs::metadata(output).map(|m| m.len()).unwrap_or(0);
-    println!("  → {:?}（stub={} 字节, 总计 {:.2} MB）", output, stub_size, total as f64 / 1048576.0);
+    println!(
+        "  → {:?}（stub={} 字节, 总计 {:.2} MB）",
+        output,
+        stub_size,
+        total as f64 / 1048576.0
+    );
     Ok(())
 }
 
 // ── build（pack + bundle）───────────────────────────────────────────────────
 
-fn cmd_build(config: &Path, ov: Overrides, stub: &Path, output: Option<PathBuf>) -> Result<(), String> {
+fn cmd_build(
+    config: &Path,
+    ov: Overrides,
+    stub: &Path,
+    output: Option<PathBuf>,
+) -> Result<(), String> {
     let mut l = load(config)?;
     l.apply_overrides(ov);
     let output = output.unwrap_or_else(|| l.default_exe());
@@ -392,7 +447,10 @@ fn cmd_inspect(file: &Path) -> Result<(), String> {
     // 一份漏写 [autostart] 的清单打出来的包不会自启，而这在打包期是静默的。
     println!("能力:");
     print_capability("输入法注册 [ime]", m.ime.is_some(), || {
-        m.ime.as_ref().map(|i| format!("lang_id={}", i.lang_id)).unwrap_or_default()
+        m.ime
+            .as_ref()
+            .map(|i| format!("lang_id={}", i.lang_id))
+            .unwrap_or_default()
     });
     print_capability("字体安装 [[font]]", !m.font.is_empty(), || {
         format!("{} 项", m.font.len())
@@ -434,7 +492,10 @@ fn cmd_inspect(file: &Path) -> Result<(), String> {
         },
     );
     print_capability("数据目录配置 [datadir]", m.datadir.is_some(), || {
-        m.datadir.as_ref().map(|d| d.conf_file.clone()).unwrap_or_default()
+        m.datadir
+            .as_ref()
+            .map(|d| d.conf_file.clone())
+            .unwrap_or_default()
     });
     print_capability("URL 协议", !m.app.url_protocol.trim().is_empty(), || {
         format!("{}://", m.app.url_protocol)
@@ -460,8 +521,8 @@ fn set_pe_version_info(
     res_info: &version_info::ResolvedVersionInfo,
     icon_path: Option<&Path>,
 ) -> Result<(), String> {
-    let mut image = editpe::Image::parse_file(exe_path)
-        .map_err(|e| format!("解析 PE 失败: {}", e))?;
+    let mut image =
+        editpe::Image::parse_file(exe_path).map_err(|e| format!("解析 PE 失败: {}", e))?;
     let mut resources = image.resource_directory().cloned().unwrap_or_default();
 
     // 1. 读取或创建 VersionInfo
@@ -472,26 +533,44 @@ fn set_pe_version_info(
 
     // 2. 设置 FixedFileInfo
     let (f_major, f_minor) = version_info::parse_version_string(&res_info.file_version);
-    version_info.info.file_version = editpe::types::VersionU32 { major: f_major, minor: f_minor };
+    version_info.info.file_version = editpe::types::VersionU32 {
+        major: f_major,
+        minor: f_minor,
+    };
 
     let (p_major, p_minor) = version_info::parse_version_string(&res_info.product_version);
-    version_info.info.product_version = editpe::types::VersionU32 { major: p_major, minor: p_minor };
+    version_info.info.product_version = editpe::types::VersionU32 {
+        major: p_major,
+        minor: p_minor,
+    };
 
     // 3. 设置语言和翻译段
     let lang_id = 0x0804u16; // 简体中文
     let code_page = 0x04b0u16; // Unicode
-    version_info.vars = vec![editpe::types::VersionU16 { major: lang_id, minor: code_page }];
+    version_info.vars = vec![editpe::types::VersionU16 {
+        major: lang_id,
+        minor: code_page,
+    }];
 
     let table_key = format!("{:04x}{:04x}", lang_id, code_page);
     let mut strings_map = indexmap::IndexMap::default();
     strings_map.insert("CompanyName".to_string(), res_info.company_name.clone());
-    strings_map.insert("FileDescription".to_string(), res_info.file_description.clone());
+    strings_map.insert(
+        "FileDescription".to_string(),
+        res_info.file_description.clone(),
+    );
     strings_map.insert("FileVersion".to_string(), res_info.file_version.clone());
     strings_map.insert("InternalName".to_string(), res_info.internal_name.clone());
     strings_map.insert("LegalCopyright".to_string(), res_info.copyright.clone());
-    strings_map.insert("OriginalFilename".to_string(), res_info.original_filename.clone());
+    strings_map.insert(
+        "OriginalFilename".to_string(),
+        res_info.original_filename.clone(),
+    );
     strings_map.insert("ProductName".to_string(), res_info.product_name.clone());
-    strings_map.insert("ProductVersion".to_string(), res_info.product_version.clone());
+    strings_map.insert(
+        "ProductVersion".to_string(),
+        res_info.product_version.clone(),
+    );
 
     version_info.strings = vec![editpe::VersionStringTable {
         key: table_key,

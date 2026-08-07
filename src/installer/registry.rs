@@ -3,16 +3,19 @@ use std::path::Path;
 use winreg::enums::*;
 use winreg::RegKey;
 
+use super::config::InstallConfig;
 use crate::manifest::AutoStartInfo;
 use crate::meta;
-use super::config::InstallConfig;
 
 /// 自启动所在的 Run 键（HKCU）
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 
 /// 卸载信息注册表路径（运行时由清单 display_name 构造）
 fn uninst_key() -> String {
-    format!(r"Software\Microsoft\Windows\CurrentVersion\Uninstall\{}", meta::app_display_name())
+    format!(
+        r"Software\Microsoft\Windows\CurrentVersion\Uninstall\{}",
+        meta::app_display_name()
+    )
 }
 
 /// 卸载信息键路径，供安装步骤写入回执。
@@ -50,10 +53,7 @@ pub fn set_auto_start(install_dir: &Path, info: &AutoStartInfo) -> Result<(), St
 
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let run_key = hkcu
-        .open_subkey_with_flags(
-            r"Software\Microsoft\Windows\CurrentVersion\Run",
-            KEY_WRITE,
-        )
+        .open_subkey_with_flags(r"Software\Microsoft\Windows\CurrentVersion\Run", KEY_WRITE)
         .map_err(|e| format!("Failed to open Run key: {}", e))?;
 
     run_key
@@ -150,10 +150,16 @@ pub fn write_uninstall_info(config: &InstallConfig) -> Result<(), String> {
         .set_value("InstallLocation", &install_dir_str)
         .map_err(|e| format!("Failed to set InstallLocation: {}", e))?;
     uninst_key
-        .set_value("UninstallString", &format!("\"{}\" --uninstall", uninstall_exe_str))
+        .set_value(
+            "UninstallString",
+            &format!("\"{}\" --uninstall", uninstall_exe_str),
+        )
         .map_err(|e| format!("Failed to set UninstallString: {}", e))?;
     uninst_key
-        .set_value("QuietUninstallString", &format!("\"{}\" --uninstall --silent", uninstall_exe_str))
+        .set_value(
+            "QuietUninstallString",
+            &format!("\"{}\" --uninstall --silent", uninstall_exe_str),
+        )
         .map_err(|e| format!("Failed to set QuietUninstallString: {}", e))?;
 
     // 图标（使用安装器主程序图标，第一个图标资源）
@@ -204,9 +210,7 @@ pub fn remove_app_key() -> Result<(), String> {
 fn get_dir_size(path: &Path) -> Result<u64, String> {
     let mut total = 0u64;
 
-    for entry in std::fs::read_dir(path)
-        .map_err(|e| format!("Failed to read directory: {}", e))?
-    {
+    for entry in std::fs::read_dir(path).map_err(|e| format!("Failed to read directory: {}", e))? {
         let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
         let metadata = entry
             .metadata()
@@ -239,7 +243,9 @@ pub fn set_installer_running() -> Result<(), String> {
 /// 清除安装器运行标记
 pub fn clear_installer_running() -> Result<(), String> {
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
-    if let Ok(key) = hklm.open_subkey_with_flags(&format!("Software\\{}", meta::app_id()), KEY_WRITE) {
+    if let Ok(key) =
+        hklm.open_subkey_with_flags(&format!("Software\\{}", meta::app_id()), KEY_WRITE)
+    {
         let _ = key.delete_value("InstallerRunning");
     }
     Ok(())

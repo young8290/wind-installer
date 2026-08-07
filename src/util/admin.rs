@@ -31,8 +31,8 @@ pub fn is_admin() -> bool {
 /// 用 ShellExecuteW "runas" 请求 UAC 提权并重新启动自身。
 /// 不产生任何子进程窗口（标准 UAC 对话框由系统弹出，不是控制台）。
 pub fn request_elevation() -> Result<(), String> {
-    let current_exe = std::env::current_exe()
-        .map_err(|e| format!("Failed to get current exe: {}", e))?;
+    let current_exe =
+        std::env::current_exe().map_err(|e| format!("Failed to get current exe: {}", e))?;
 
     // 转发原始命令行参数。不转发的话，提权重启后的实例拿不到 `--silent --dir ...`，
     // 应用内自动升级会静默退化成交互式向导（用户看到的是"升级时路径居然可以改"）。

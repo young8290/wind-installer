@@ -1,5 +1,5 @@
-pub mod theme;
 pub mod install_wizard;
+pub mod theme;
 pub mod uninstall_wizard;
 
 /// 是否使用 D2D 硬件加速渲染。

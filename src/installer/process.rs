@@ -7,8 +7,7 @@ use crate::meta;
 
 use windows::Win32::Foundation::CloseHandle;
 use windows::Win32::System::Diagnostics::ToolHelp::{
-    CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
-    TH32CS_SNAPPROCESS,
+    CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
 };
 use windows::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE};
 
@@ -30,7 +29,10 @@ pub fn terminate_app_processes() -> Vec<String> {
         .collect();
 
     for _ in 0..4 {
-        let alive: Vec<&String> = images.iter().filter(|img| !find_pids(img).is_empty()).collect();
+        let alive: Vec<&String> = images
+            .iter()
+            .filter(|img| !find_pids(img).is_empty())
+            .collect();
         if alive.is_empty() {
             return Vec::new();
         }

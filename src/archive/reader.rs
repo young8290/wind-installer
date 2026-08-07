@@ -33,11 +33,12 @@ impl ArchiveReader {
 
     /// 打开指定文件并解析归档元数据（不解压数据块）
     pub fn open(path: &Path) -> Result<Self, String> {
-        let mut file = File::open(path)
-            .map_err(|e| format!("Failed to open file: {}", e))?;
+        let mut file = File::open(path).map_err(|e| format!("Failed to open file: {}", e))?;
 
-        let file_len = file.metadata()
-            .map_err(|e| format!("Failed to get file size: {}", e))?.len();
+        let file_len = file
+            .metadata()
+            .map_err(|e| format!("Failed to get file size: {}", e))?
+            .len();
 
         if file_len < 16 {
             return Err("File too small to contain footer".into());
@@ -61,21 +62,37 @@ impl ArchiveReader {
         let header = ArchiveHeader::from_bytes(&header_bytes)?;
 
         // 压缩块起始 = footer.header_offset - solid_compressed_size
-        let block_start = footer.header_offset
+        let block_start = footer
+            .header_offset
             .checked_sub(header.solid_compressed_size)
             .ok_or("Invalid archive: block_start underflow")?;
 
-        Ok(Self { file, header, block_start, decompressed: None })
+        Ok(Self {
+            file,
+            header,
+            block_start,
+            decompressed: None,
+        })
     }
 
-    pub fn header(&self) -> &ArchiveHeader { &self.header }
-    pub fn entries(&self) -> &[ArchiveEntry] { &self.header.entries }
-    pub fn compression_type(&self) -> CompressionType { self.header.compression }
+    pub fn header(&self) -> &ArchiveHeader {
+        &self.header
+    }
+    pub fn entries(&self) -> &[ArchiveEntry] {
+        &self.header.entries
+    }
+    pub fn compression_type(&self) -> CompressionType {
+        self.header.compression
+    }
 
     /// 运行期清单字节（AppManifest 的 TOML 文本），无解压开销。
-    pub fn manifest_bytes(&self) -> &[u8] { &self.header.manifest }
+    pub fn manifest_bytes(&self) -> &[u8] {
+        &self.header.manifest
+    }
     /// UI logo 图片字节，无解压开销。
-    pub fn logo_bytes(&self) -> &[u8] { &self.header.logo }
+    pub fn logo_bytes(&self) -> &[u8] {
+        &self.header.logo
+    }
 
     /// 提前将压缩块整体解压到内存缓冲。
     /// 安装向导在进入逐文件循环前调用此方法，可在独立步骤中显示解压进度消息。
@@ -110,7 +127,10 @@ impl ArchiveReader {
             if end > dec.len() {
                 return Err(format!(
                     "Entry '{}' out of bounds in decompressed stream (offset={} size={} total={})",
-                    path_str, start, size, dec.len()
+                    path_str,
+                    start,
+                    size,
+                    dec.len()
                 ));
             }
             let slice = &dec[start..end];
@@ -126,7 +146,8 @@ impl ArchiveReader {
 
             // 写文件（被占用时先改名备份）
             let mut output = BufWriter::new(create_or_backup(dest)?);
-            output.write_all(slice)
+            output
+                .write_all(slice)
                 .map_err(|e| format!("Failed to write '{}': {}", path_str, e))?;
         }
 
@@ -146,23 +167,24 @@ impl ArchiveReader {
 
     /// 将整个压缩块读入内存并解压
     fn decompress_block(&mut self) -> Result<(), String> {
-        self.file.seek(SeekFrom::Start(self.block_start))
+        self.file
+            .seek(SeekFrom::Start(self.block_start))
             .map_err(|e| format!("Failed to seek to compressed block: {}", e))?;
 
         let compressed_size = self.header.solid_compressed_size as usize;
         let mut compressed = vec![0u8; compressed_size];
-        self.file.read_exact(&mut compressed)
+        self.file
+            .read_exact(&mut compressed)
             .map_err(|e| format!("Failed to read compressed block: {}", e))?;
 
         let decompressed = match self.header.compression {
-            CompressionType::Zstd => {
-                zstd::decode_all(&compressed[..])
-                    .map_err(|e| format!("Zstd decompression failed: {}", e))?
-            }
+            CompressionType::Zstd => zstd::decode_all(&compressed[..])
+                .map_err(|e| format!("Zstd decompression failed: {}", e))?,
             CompressionType::Lzma => {
                 let mut decoder = xz2::read::XzDecoder::new(&compressed[..]);
                 let mut out = Vec::new();
-                decoder.read_to_end(&mut out)
+                decoder
+                    .read_to_end(&mut out)
                     .map_err(|e| format!("LZMA decompression failed: {}", e))?;
                 out
             }

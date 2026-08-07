@@ -39,10 +39,7 @@ pub fn format_version_4_parts(v: &str) -> String {
 }
 
 /// 根据配置和推导规则解析版本信息属性
-pub fn derive_version_info(
-    cfg: &ProjectConfig,
-    is_uninstaller: bool,
-) -> ResolvedVersionInfo {
+pub fn derive_version_info(cfg: &ProjectConfig, is_uninstaller: bool) -> ResolvedVersionInfo {
     let v_cfg = cfg.package.version_info.as_ref();
     let app = &cfg.manifest.app;
 

@@ -104,7 +104,11 @@ pub fn run_plan<C>(
         for item in reboot::pending_items() {
             reporter.log(&format!(
                 "  {} {:?}",
-                if item.scheduled { "已排队" } else { "未排队" },
+                if item.scheduled {
+                    "已排队"
+                } else {
+                    "未排队"
+                },
                 item.path
             ));
         }

@@ -15,8 +15,8 @@ struct TempDir {
 
 impl TempDir {
     fn new(suffix: &str) -> Self {
-        let path = std::env::temp_dir()
-            .join(format!("wind_test_{}_{}", std::process::id(), suffix));
+        let path =
+            std::env::temp_dir().join(format!("wind_test_{}_{}", std::process::id(), suffix));
         std::fs::create_dir_all(&path).expect("创建临时目录失败");
         Self { path }
     }
@@ -41,9 +41,15 @@ impl Drop for TempDir {
     }
 }
 
-fn pack(dir: &TempDir, archive_name: &str, files: &[(&str, &[u8])], compression: CompressionType) -> PathBuf {
+fn pack(
+    dir: &TempDir,
+    archive_name: &str,
+    files: &[(&str, &[u8])],
+    compression: CompressionType,
+) -> PathBuf {
     let archive_path = dir.path().join(archive_name);
-    let mut writer = ArchiveWriter::new(&archive_path, compression).expect("创建 ArchiveWriter 失败");
+    let mut writer =
+        ArchiveWriter::new(&archive_path, compression).expect("创建 ArchiveWriter 失败");
     for (name, content) in files {
         let src = dir.write_file(name, content);
         writer.add_file(&src, name).expect("add_file 失败");
@@ -58,7 +64,9 @@ fn extract_all_to(archive_path: &Path, out_dir: &Path) {
     let entries = reader.entries().to_vec();
     for entry in &entries {
         let dest = out_dir.join(&entry.path);
-        reader.extract_entry(entry, &dest).expect("extract_entry 失败");
+        reader
+            .extract_entry(entry, &dest)
+            .expect("extract_entry 失败");
     }
 }
 
@@ -74,15 +82,22 @@ fn zstd_decompresses_full_content_when_compression_ratio_is_high() {
     let dir = TempDir::new("zstd_full");
     let original = vec![0xABu8; 10 * 1024];
 
-    let archive = pack(&dir, "test.pkg", &[("data.bin", &original)], CompressionType::Zstd);
+    let archive = pack(
+        &dir,
+        "test.pkg",
+        &[("data.bin", &original)],
+        CompressionType::Zstd,
+    );
     let out_dir = dir.path().join("out");
     extract_all_to(&archive, &out_dir);
 
     let extracted = std::fs::read(out_dir.join("data.bin")).expect("读取解压文件失败");
     assert_eq!(
-        extracted.len(), original.len(),
+        extracted.len(),
+        original.len(),
         "Zstd 解压后大小 {} 与原始 {} 不符（可能被截断为 compressed_size）",
-        extracted.len(), original.len()
+        extracted.len(),
+        original.len()
     );
     assert_eq!(extracted, original, "Zstd 解压内容应与原始完全一致");
 }
@@ -93,14 +108,22 @@ fn lzma_decompresses_full_content_when_compression_ratio_is_high() {
     let dir = TempDir::new("lzma_full");
     let original = vec![0xCDu8; 10 * 1024];
 
-    let archive = pack(&dir, "test.pkg", &[("data.bin", &original)], CompressionType::Lzma);
+    let archive = pack(
+        &dir,
+        "test.pkg",
+        &[("data.bin", &original)],
+        CompressionType::Lzma,
+    );
     let out_dir = dir.path().join("out");
     extract_all_to(&archive, &out_dir);
 
     let extracted = std::fs::read(out_dir.join("data.bin")).expect("读取解压文件失败");
     assert_eq!(
-        extracted.len(), original.len(),
-        "LZMA 解压后大小 {} 与原始 {} 不符", extracted.len(), original.len()
+        extracted.len(),
+        original.len(),
+        "LZMA 解压后大小 {} 与原始 {} 不符",
+        extracted.len(),
+        original.len()
     );
     assert_eq!(extracted, original, "LZMA 解压内容应与原始完全一致");
 }
@@ -122,8 +145,8 @@ fn multiple_entries_all_extracted_correctly() {
     extract_all_to(&archive, &out_dir);
 
     for (name, content) in files {
-        let extracted = std::fs::read(out_dir.join(name))
-            .unwrap_or_else(|_| panic!("读取 {} 失败", name));
+        let extracted =
+            std::fs::read(out_dir.join(name)).unwrap_or_else(|_| panic!("读取 {} 失败", name));
         assert_eq!(&extracted, content, "文件 {} 内容不一致", name);
     }
 }
@@ -138,16 +161,29 @@ fn sequential_entries_file_pointer_advances_correctly() {
     let file_c = vec![0x03u8; 8000];
 
     let archive = pack(
-        &dir, "seq.pkg",
+        &dir,
+        "seq.pkg",
         &[("a.bin", &file_a), ("b.bin", &file_b), ("c.bin", &file_c)],
         CompressionType::Zstd,
     );
     let out_dir = dir.path().join("out");
     extract_all_to(&archive, &out_dir);
 
-    assert_eq!(std::fs::read(out_dir.join("a.bin")).unwrap(), file_a, "a.bin 内容错误");
-    assert_eq!(std::fs::read(out_dir.join("b.bin")).unwrap(), file_b, "b.bin 内容错误");
-    assert_eq!(std::fs::read(out_dir.join("c.bin")).unwrap(), file_c, "c.bin 内容错误");
+    assert_eq!(
+        std::fs::read(out_dir.join("a.bin")).unwrap(),
+        file_a,
+        "a.bin 内容错误"
+    );
+    assert_eq!(
+        std::fs::read(out_dir.join("b.bin")).unwrap(),
+        file_b,
+        "b.bin 内容错误"
+    );
+    assert_eq!(
+        std::fs::read(out_dir.join("c.bin")).unwrap(),
+        file_c,
+        "c.bin 内容错误"
+    );
 }
 
 // ── 边界情况 ──────────────────────────────────────────────────────────────────
@@ -158,7 +194,12 @@ fn binary_content_all_byte_values_preserved() {
     let dir = TempDir::new("binary");
     let original: Vec<u8> = (0u8..=255).cycle().take(2048).collect();
 
-    let archive = pack(&dir, "bin.pkg", &[("all_bytes.bin", &original)], CompressionType::Zstd);
+    let archive = pack(
+        &dir,
+        "bin.pkg",
+        &[("all_bytes.bin", &original)],
+        CompressionType::Zstd,
+    );
     let out_dir = dir.path().join("out");
     extract_all_to(&archive, &out_dir);
 
@@ -171,7 +212,12 @@ fn binary_content_all_byte_values_preserved() {
 fn empty_file_roundtrip() {
     let dir = TempDir::new("empty");
 
-    let archive = pack(&dir, "empty.pkg", &[("empty.bin", b"")], CompressionType::Zstd);
+    let archive = pack(
+        &dir,
+        "empty.pkg",
+        &[("empty.bin", b"")],
+        CompressionType::Zstd,
+    );
     let out_dir = dir.path().join("out");
     extract_all_to(&archive, &out_dir);
 
@@ -187,7 +233,12 @@ fn crc_mismatch_or_decompress_error_when_archive_corrupted() {
     let dir = TempDir::new("crc");
     let original = vec![0xAAu8; 1024];
 
-    let archive_path = pack(&dir, "crc.pkg", &[("data.bin", &original)], CompressionType::Zstd);
+    let archive_path = pack(
+        &dir,
+        "crc.pkg",
+        &[("data.bin", &original)],
+        CompressionType::Zstd,
+    );
 
     // 篡改 offset=0 处的压缩块前 4 字节
     let mut raw = std::fs::read(&archive_path).unwrap();
@@ -221,7 +272,8 @@ fn bundle_exe_fixes_offsets_so_content_readable_after_prepending_stub() {
 
     // 1. Pack → .bin
     let archive = pack(
-        &dir, "data.bin",
+        &dir,
+        "data.bin",
         &[("a.dat", &content_a), ("b.txt", content_b)],
         CompressionType::Zstd,
     );
@@ -233,8 +285,7 @@ fn bundle_exe_fixes_offsets_so_content_readable_after_prepending_stub() {
 
     // 3. Bundle：stub + 修正偏移后的 archive
     let installer = dir.path().join("installer.exe");
-    archive::bundle_exe(&stub_path, &archive, &installer)
-        .expect("bundle_exe 应成功");
+    archive::bundle_exe(&stub_path, &archive, &installer).expect("bundle_exe 应成功");
 
     // 4. 从合并后的 installer.exe 中读取归档
     let out_dir = dir.path().join("out");
@@ -244,10 +295,11 @@ fn bundle_exe_fixes_offsets_so_content_readable_after_prepending_stub() {
     let extracted_a = std::fs::read(out_dir.join("a.dat")).expect("读取 a.dat 失败");
     let extracted_b = std::fs::read(out_dir.join("b.txt")).expect("读取 b.txt 失败");
 
-    assert_eq!(extracted_a, content_a,
-        "a.dat 内容不一致（高压缩率文件在偏移修正前会被截断）");
-    assert_eq!(extracted_b, content_b,
-        "b.txt 内容不一致");
+    assert_eq!(
+        extracted_a, content_a,
+        "a.dat 内容不一致（高压缩率文件在偏移修正前会被截断）"
+    );
+    assert_eq!(extracted_b, content_b, "b.txt 内容不一致");
 }
 
 /// 核心回归测试：清单 + logo 经 pack → bundle → read 全程保持完整。
@@ -258,7 +310,8 @@ fn bundle_exe_fixes_offsets_so_content_readable_after_prepending_stub() {
 fn manifest_and_logo_survive_pack_and_bundle() {
     let dir = TempDir::new("manifest_bundle");
     // display_name 特意用非 ASCII：清单以字节原样往返，UTF-8 不应在任何一环被改写
-    let manifest = b"[app]\nid = \"DemoApp\"\ndisplay_name = \"\xe7\xa4\xba\xe4\xbe\x8b\"\n".to_vec();
+    let manifest =
+        b"[app]\nid = \"DemoApp\"\ndisplay_name = \"\xe7\xa4\xba\xe4\xbe\x8b\"\n".to_vec();
     let logo = vec![0x89u8, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x11, 0x22]; // 伪 PNG
 
     // pack：写入归档并设置清单/logo
@@ -281,12 +334,19 @@ fn manifest_and_logo_survive_pack_and_bundle() {
     archive::bundle_exe(&stub_path, &archive_path, &installer).unwrap();
 
     let reader2 = ArchiveReader::open(&installer).unwrap();
-    assert_eq!(reader2.manifest_bytes(), &manifest[..], "bundle 后清单应一致");
+    assert_eq!(
+        reader2.manifest_bytes(),
+        &manifest[..],
+        "bundle 后清单应一致"
+    );
     assert_eq!(reader2.logo_bytes(), &logo[..], "bundle 后 logo 应一致");
     // 数据仍可正确解压
     let out_dir = dir.path().join("out");
     extract_all_to(&installer, &out_dir);
-    assert_eq!(std::fs::read(out_dir.join("payload.bin")).unwrap(), vec![0x5Au8; 3000]);
+    assert_eq!(
+        std::fs::read(out_dir.join("payload.bin")).unwrap(),
+        vec![0x5Au8; 3000]
+    );
 }
 
 /// 卸载器自包含：给裸 exe 追加「仅清单 overlay」后，可从该 exe 自身读回清单/logo，
@@ -311,7 +371,11 @@ fn append_manifest_overlay_makes_exe_self_describing() {
 
     // 原 exe 字节未被破坏（仍是文件前缀）
     let after = std::fs::read(&exe).unwrap();
-    assert_eq!(&after[..exe_bytes.len()], &exe_bytes[..], "原 exe 内容应保持不变");
+    assert_eq!(
+        &after[..exe_bytes.len()],
+        &exe_bytes[..],
+        "原 exe 内容应保持不变"
+    );
 }
 
 /// bundle_exe 对 stub_size=0（无前缀）应与直接读取 .bin 等价。
@@ -320,7 +384,12 @@ fn bundle_exe_with_empty_stub_reads_identically_to_plain_archive() {
     let dir = TempDir::new("bundle_empty_stub");
     let content = b"stub size zero test content";
 
-    let archive = pack(&dir, "data.bin", &[("f.txt", content)], CompressionType::Zstd);
+    let archive = pack(
+        &dir,
+        "data.bin",
+        &[("f.txt", content)],
+        CompressionType::Zstd,
+    );
 
     // 空 stub
     let stub_path = dir.write_file("empty.exe", b"");

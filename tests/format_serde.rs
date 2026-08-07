@@ -3,10 +3,18 @@
 //! 独立集成测试文件（编译为 format_serde-*.exe），
 //! 避免 wind_installer-*.exe 因含 "installer" 触发 Windows UAC 启发式检测。
 
-use wind_installer::archive::{ArchiveEntry, ArchiveFooter, ArchiveHeader, CompressionType, FORMAT_VERSION};
+use wind_installer::archive::{
+    ArchiveEntry, ArchiveFooter, ArchiveHeader, CompressionType, FORMAT_VERSION,
+};
 
 fn make_entry(path: &str, offset: u64, compressed: u64, original: u64, crc: u32) -> ArchiveEntry {
-    ArchiveEntry { path: path.to_string(), offset, compressed_size: compressed, original_size: original, crc32: crc }
+    ArchiveEntry {
+        path: path.to_string(),
+        offset,
+        compressed_size: compressed,
+        original_size: original,
+        crc32: crc,
+    }
 }
 
 // ── Header 序列化 ─────────────────────────────────────────────────────────────
@@ -14,8 +22,10 @@ fn make_entry(path: &str, offset: u64, compressed: u64, original: u64, crc: u32)
 #[test]
 fn header_roundtrip_preserves_all_fields() {
     let mut h = ArchiveHeader::new(CompressionType::Zstd);
-    h.entries.push(make_entry("foo/bar.txt", 0, 100, 200, 0xDEAD_BEEF));
-    h.entries.push(make_entry("baz.bin", 100, 50, 1000, 0x1234_5678));
+    h.entries
+        .push(make_entry("foo/bar.txt", 0, 100, 200, 0xDEAD_BEEF));
+    h.entries
+        .push(make_entry("baz.bin", 100, 50, 1000, 0x1234_5678));
     h.entry_count = 2;
 
     let parsed = ArchiveHeader::from_bytes(&h.to_bytes()).unwrap();
@@ -57,7 +67,8 @@ fn header_roundtrip_empty_entry_list() {
 #[test]
 fn header_roundtrip_unicode_path() {
     let mut h = ArchiveHeader::new(CompressionType::Zstd);
-    h.entries.push(make_entry("数据/字体/黑体字根.ttf", 0, 10, 20, 0));
+    h.entries
+        .push(make_entry("数据/字体/黑体字根.ttf", 0, 10, 20, 0));
     h.entry_count = 1;
     let parsed = ArchiveHeader::from_bytes(&h.to_bytes()).unwrap();
     assert_eq!(parsed.entries[0].path, "数据/字体/黑体字根.ttf");

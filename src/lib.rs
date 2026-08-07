@@ -7,9 +7,9 @@ pub mod meta;
 #[cfg(windows)]
 pub mod installer;
 #[cfg(windows)]
-pub mod uninstaller;
-#[cfg(windows)]
 pub mod ui;
+#[cfg(windows)]
+pub mod uninstaller;
 #[cfg(windows)]
 #[allow(dead_code)]
 pub mod util;

@@ -18,7 +18,10 @@ pub fn cleanup_legacy(install_dir: &Path, r: &mut dyn Reporter) {
             continue;
         }
         if let Err(e) = std::fs::remove_file(&path) {
-            r.warn(&format!("旧版文件 {} 删除失败（将于重启后清理）: {}", name, e));
+            r.warn(&format!(
+                "旧版文件 {} 删除失败（将于重启后清理）: {}",
+                name, e
+            ));
             let _ = reboot::schedule_delete_on_reboot(&path);
         }
     }
@@ -29,7 +32,10 @@ pub fn cleanup_legacy(install_dir: &Path, r: &mut dyn Reporter) {
             continue;
         }
         if let Err(e) = std::fs::remove_dir_all(&path) {
-            r.warn(&format!("旧版目录 {} 删除失败（将于重启后清理）: {}", rel, e));
+            r.warn(&format!(
+                "旧版目录 {} 删除失败（将于重启后清理）: {}",
+                rel, e
+            ));
             schedule_dir_on_reboot(&path);
         }
     }

@@ -5,8 +5,8 @@ mod archive;
 mod installer;
 mod manifest;
 mod meta;
-mod uninstaller;
 mod ui;
+mod uninstaller;
 mod util;
 
 fn main() {

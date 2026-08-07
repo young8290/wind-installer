@@ -26,20 +26,18 @@ pub struct InstallConfig {
 
 impl Default for InstallConfig {
     fn default() -> Self {
-        let program_files = std::env::var("ProgramFiles")
-            .unwrap_or_else(|_| r"C:\Program Files".to_string());
-        let app_data = std::env::var("APPDATA")
-            .unwrap_or_else(|_| {
-                let mut p = PathBuf::from(std::env::var("USERPROFILE").unwrap_or_default());
-                p.push("AppData\\Roaming");
-                p.to_string_lossy().to_string()
-            });
-        let _local_app_data = std::env::var("LOCALAPPDATA")
-            .unwrap_or_else(|_| {
-                let mut p = PathBuf::from(std::env::var("USERPROFILE").unwrap_or_default());
-                p.push("AppData\\Local");
-                p.to_string_lossy().to_string()
-            });
+        let program_files =
+            std::env::var("ProgramFiles").unwrap_or_else(|_| r"C:\Program Files".to_string());
+        let app_data = std::env::var("APPDATA").unwrap_or_else(|_| {
+            let mut p = PathBuf::from(std::env::var("USERPROFILE").unwrap_or_default());
+            p.push("AppData\\Roaming");
+            p.to_string_lossy().to_string()
+        });
+        let _local_app_data = std::env::var("LOCALAPPDATA").unwrap_or_else(|_| {
+            let mut p = PathBuf::from(std::env::var("USERPROFILE").unwrap_or_default());
+            p.push("AppData\\Local");
+            p.to_string_lossy().to_string()
+        });
 
         Self {
             app_name: meta::app_display_name().to_string(),
