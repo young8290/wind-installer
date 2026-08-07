@@ -1,0 +1,88 @@
+name: 功能建议
+description: 为安装器、卸载器或打包工具提出一个新功能或改进建议
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢你的建议！请描述你期望的功能，我们会认真评估。
+
+        本仓库是**通用** Windows 安装器生成器——一切与具体应用相关的信息都写在清单
+        (`app.toml`) 里，不硬编码进代码。因此新能力通常应当表现为**一个新的清单字段或段**，
+        且遵循"缺省即不执行"：不声明它的应用，行为完全不受影响。
+
+        只服务于单一应用的需求，一般更适合在调用方解决。
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: 问题或需求
+      description: 你希望解决什么问题？在什么场景下需要这个功能？
+      placeholder: 我的应用需要在安装时注册一个自定义 URL 协议，目前只能装完后由主程序自己写注册表……
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: 期望的解决方案
+      description: |
+        描述你理想中的功能表现。如果涉及新的清单字段，请给出你设想的 `app.toml` 写法。
+      placeholder: |
+        ```toml
+        [[url_protocol]]
+        scheme = "myapp"
+        ```
+    validations:
+      required: true
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: 功能类别
+      options:
+        - 清单能力段（注册表、快捷方式、字体、TSF 等系统副作用）
+        - 归档格式与压缩
+        - 安装/卸载流程与回执
+        - 向导界面与文案
+        - 命令行与退出码
+        - 打包工具 (wind-packer)
+        - 其他
+    validations:
+      required: true
+
+  - type: dropdown
+    id: side-effect
+    attributes:
+      label: 是否会改动系统状态（注册表、系统目录、服务等）
+      description: |
+        会改动系统的能力有两条硬性要求：**默认关闭、清单显式开启**，
+        且**必须写回执**以便卸载时逐条撤销。
+      options:
+        - 会
+        - 不会
+        - 不确定
+    validations:
+      required: true
+
+  - type: textarea
+    id: generality
+    attributes:
+      label: 通用性说明
+      description: |
+        这个功能对**非输入法类应用**同样成立吗？请说明它为什么属于通用安装器的职责，
+        而不是某个应用的特殊需求。
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 备选方案
+      description: 你是否考虑过其他替代方案？（例如在调用方的主程序里完成）
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: 其他信息
+      description: 其他补充说明、其他安装器（MSI / NSIS / Inno Setup）的对应做法或参考链接

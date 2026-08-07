@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 清风输入法本身的问题
+    url: https://github.com/huanfeng/WindInput/issues
+    about: 候选、编码、上屏、词库、主题等问题请到 WindInput 主仓库反馈；本仓库只负责安装与卸载过程
+  - name: 设计文档
+    url: https://github.com/huanfeng/wind-installer/blob/main/docs/DESIGN.md
+    about: 归档格式、安装/卸载流程、UI 设计与依赖选型，提问前可先查阅
+  - name: 清单写法
+    url: https://github.com/huanfeng/wind-installer/blob/main/app.toml
+    about: 仓库自带的示例清单列出了各字段的写法，配合 README 的「清单配置」一节阅读

@@ -1,0 +1,170 @@
+name: Bug 反馈
+description: 报告安装器、卸载器或打包工具的一个 Bug
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢你提交 Bug 反馈！
+
+        本仓库是**通用 Windows 安装器生成器**，负责安装器 stub、卸载器与打包工具 `wind-packer`。
+        如果你是在使用某个用它打包的应用时遇到问题，且问题**不在安装/卸载过程本身**，
+        请到该应用自己的仓库反馈（例如清风输入法请到
+        [WindInput](https://github.com/huanfeng/WindInput/issues)）。
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: 出问题的组件
+      options:
+        - 安装器 (wind-installer stub)
+        - 卸载器 (wind-uninstaller)
+        - 打包工具 (wind-packer)
+        - 不确定
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: 问题描述
+      description: 请清晰、简洁地描述你遇到的问题
+      placeholder: 升级安装后旧版本的快捷方式仍然存在，指向已被删除的路径……
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 复现步骤
+      description: 请提供能复现此问题的操作步骤
+      placeholder: |
+        1. 用 app.toml 打包（相关段落见下方）
+        2. 在干净的 Windows 11 虚拟机上运行 Setup.exe
+        3. 选择自定义安装目录 D:\Apps\Demo
+        4. 完成后开始菜单没有出现快捷方式
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望行为
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际行为
+      description: 实际发生了什么？如有错误对话框，请附上完整文字或截图
+    validations:
+      required: true
+
+  - type: textarea
+    id: manifest
+    attributes:
+      label: 相关的清单片段
+      description: |
+        `app.toml` 中与问题相关的段落（如 `[[shortcut]]`、`[ime]`、`[datadir]`）。
+        安装器的行为完全由清单驱动，**缺了这段几乎无法定位问题**。敏感信息可脱敏。
+
+        已有安装包但手边没有源清单时，可用 `wind-packer inspect <安装包.exe>` 读出嵌入的清单摘要。
+      render: toml
+    validations:
+      required: true
+
+  - type: dropdown
+    id: mode
+    attributes:
+      label: 运行模式
+      options:
+        - 交互式向导（默认）
+        - "--quiet（带界面静默）"
+        - "--silent（完全静默）"
+        - 打包阶段（不涉及运行安装器）
+    validations:
+      required: true
+
+  - type: input
+    id: cmdline
+    attributes:
+      label: 完整命令行
+      description: 包括所有参数
+      placeholder: "Setup.exe --silent --dir D:\\Apps\\Demo"
+
+  - type: input
+    id: exitcode
+    attributes:
+      label: 退出码
+      description: |
+        静默模式请务必填写。注意 **3010 表示"安装成功，但需重启以完成清理"**，不是失败——
+        如果你的调用方把它当成了失败，那是调用方需要修正。
+      placeholder: "1"
+
+  - type: dropdown
+    id: scenario
+    attributes:
+      label: 安装场景
+      options:
+        - 全新安装（此前从未装过）
+        - 升级覆盖（已装有旧版本）
+        - 卸载
+        - 卸载后重新安装
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: wind-installer 版本
+      description: Release tag，或源码构建时的 commit
+      placeholder: "v0.1.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: 操作系统
+      options:
+        - Windows 11
+        - Windows 10
+        - Windows Server
+        - 其他（请在描述中说明）
+    validations:
+      required: true
+
+  - type: input
+    id: os-version
+    attributes:
+      label: 系统版本
+      placeholder: "Windows 11 24H2"
+
+  - type: dropdown
+    id: elevated
+    attributes:
+      label: 是否以管理员身份运行
+      options:
+        - 是
+        - 否
+        - 不确定
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志
+      description: |
+        `--silent` 模式会写入 `%TEMP%\wind_installer_args.log`，请粘贴其内容。
+        如有截图请一并附上。
+      render: text
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: 其他信息
+      description: |
+        其他你认为有帮助的信息，例如：杀毒软件是否拦截、组策略限制、
+        目标目录是否被其他进程占用、是否装在受保护路径下。

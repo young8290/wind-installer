@@ -111,6 +111,18 @@ gh release download v0.1.0 -p 'wind-installer-windows-x64.exe'
 
 stub 与卸载器运行在用户机器上，静态链接 MSVC CRT，CI 在发布前会检查产物确认这一点。打包工具只在构建机运行，不作此要求。
 
+## 贡献
+
+欢迎 Bug 报告、功能建议与代码贡献，开发环境、自检命令与硬性约束见 [CONTRIBUTING.md](CONTRIBUTING.md)。首次提交 PR 前需签署 [CLA](CLA.md)。
+
+提功能建议前请留意本仓库的通用性定位：新能力应当表现为一个新的清单字段或段，且遵循「缺省即不执行」——不声明它的应用行为完全不受影响。只服务于单一应用的需求，通常更适合在调用方解决。
+
+使用清风输入法时遇到的问题（候选、编码、词库、界面）请到 [WindInput](https://github.com/huanfeng/WindInput/issues) 反馈，除非能确认问题出在安装或卸载过程本身。
+
+## 安全
+
+安装器以管理员权限运行并改动系统状态。发现安全问题请勿公开提 Issue，改用 GitHub 的私密漏洞报告渠道，详见 [SECURITY.md](SECURITY.md)。
+
 ## 许可
 
 MIT，见 [LICENSE](LICENSE)。
@@ -118,3 +130,5 @@ MIT，见 [LICENSE](LICENSE)。
 GUI 使用 [windui](https://github.com/huanfeng/wind-ui-rust)。
 
 `vendor/editpe` 是 [editpe](https://crates.io/crates/editpe) 0.2.3 的本地修补副本，BSD-2-Clause，许可证见 `vendor/editpe/LICENSE`。上游的 `VersionInfo::build()` 按 UTF-8 字节数计算版本资源头部长度，含中文时结构错乱导致 Windows 读不到版本信息，副本已改为 UTF-16 码元数。
+
+第三方组件的完整声明见 [NOTICE.md](NOTICE.md)。
