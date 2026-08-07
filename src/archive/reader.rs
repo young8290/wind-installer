@@ -201,7 +201,7 @@ fn create_or_backup(path: &Path) -> Result<File, String> {
         Ok(f) => return Ok(f),
         Err(ref e) if matches!(e.raw_os_error(), Some(5) | Some(32)) => {
             let seq = BACKUP_SEQ.fetch_add(1, Ordering::Relaxed);
-            let suffix = std::process::id().wrapping_add(seq as u32);
+            let suffix = std::process::id().wrapping_add(seq);
             let old_name = format!(
                 "{}.old_{:08x}",
                 path.file_name().unwrap_or_default().to_string_lossy(),

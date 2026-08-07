@@ -8,6 +8,12 @@ pub struct InstallLogger {
     pub path: PathBuf,
 }
 
+impl Default for InstallLogger {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl InstallLogger {
     pub fn new() -> Self {
         let path = std::env::temp_dir().join(format!("{}-install.log", crate::meta::app_id()));

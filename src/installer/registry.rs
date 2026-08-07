@@ -130,7 +130,7 @@ pub fn unregister_url_protocol_named(protocol: &str) -> Result<(), String> {
 pub fn write_uninstall_info(config: &InstallConfig) -> Result<(), String> {
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
     let (uninst_key, _) = hklm
-        .create_subkey(&uninst_key())
+        .create_subkey(uninst_key())
         .map_err(|e| format!("Failed to create uninstall key: {}", e))?;
 
     let install_dir_str = config.install_dir.to_string_lossy().to_string();
@@ -231,7 +231,7 @@ fn get_dir_size(path: &Path) -> Result<u64, String> {
 pub fn set_installer_running() -> Result<(), String> {
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
     let (key, _) = hklm
-        .create_subkey(&format!("Software\\{}", meta::app_id()))
+        .create_subkey(format!("Software\\{}", meta::app_id()))
         .map_err(|e| format!("Failed to create app key: {}", e))?;
 
     key.set_value("InstallerRunning", &"1")
@@ -243,8 +243,7 @@ pub fn set_installer_running() -> Result<(), String> {
 /// 清除安装器运行标记
 pub fn clear_installer_running() -> Result<(), String> {
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
-    if let Ok(key) =
-        hklm.open_subkey_with_flags(&format!("Software\\{}", meta::app_id()), KEY_WRITE)
+    if let Ok(key) = hklm.open_subkey_with_flags(format!("Software\\{}", meta::app_id()), KEY_WRITE)
     {
         let _ = key.delete_value("InstallerRunning");
     }
@@ -255,7 +254,7 @@ pub fn clear_installer_running() -> Result<(), String> {
 #[allow(dead_code)]
 pub fn detect_installed_version() -> Option<String> {
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
-    if let Ok(key) = hklm.open_subkey_with_flags(&uninst_key(), KEY_READ) {
+    if let Ok(key) = hklm.open_subkey_with_flags(uninst_key(), KEY_READ) {
         if let Ok(version) = key.get_value::<String, _>("DisplayVersion") {
             return Some(version);
         }
@@ -267,7 +266,7 @@ pub fn detect_installed_version() -> Option<String> {
 #[allow(dead_code)]
 pub fn get_uninstall_string() -> Option<String> {
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
-    if let Ok(key) = hklm.open_subkey_with_flags(&uninst_key(), KEY_READ) {
+    if let Ok(key) = hklm.open_subkey_with_flags(uninst_key(), KEY_READ) {
         if let Ok(cmd) = key.get_value::<String, _>("UninstallString") {
             return Some(cmd);
         }

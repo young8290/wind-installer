@@ -127,11 +127,13 @@ fn run_install_plan(
         logger.log(&format!("安装模式: {:?}", mode));
         let log_path = logger.path.to_string_lossy().to_string();
 
-        let mut config = crate::installer::config::InstallConfig::default();
-        config.install_dir = install_dir;
-        // 数据目录始终显式传入，config 是步骤读取数据目录的唯一入口
-        config.custom_data_dir = Some(data_dir);
-        config.use_custom_data_dir = true;
+        let config = crate::installer::config::InstallConfig {
+            install_dir,
+            // 数据目录始终显式传入，config 是步骤读取数据目录的唯一入口
+            custom_data_dir: Some(data_dir),
+            use_custom_data_dir: true,
+            ..Default::default()
+        };
 
         let mut archive = match crate::archive::ArchiveReader::open_current_exe() {
             Ok(a) => a,

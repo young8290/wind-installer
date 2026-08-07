@@ -156,7 +156,7 @@ pub fn run_uninstall_wizard() {
                 .enabled(clean_roaming),
         )
         .child(Element::checkbox(
-            &format!(
+            format!(
                 "{}（%LOCALAPPDATA%\\{}\\cache）",
                 meta::s_cache_label(),
                 meta::app_id()

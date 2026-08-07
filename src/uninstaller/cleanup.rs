@@ -213,10 +213,8 @@ pub fn delete_install_files(install_dir: &PathBuf) -> Result<(), String> {
 
     // 删除数据目录
     let data_dir = install_dir.join("data");
-    if data_dir.exists() {
-        if let Err(_) = std::fs::remove_dir_all(&data_dir) {
-            eprintln!("Warning: Could not delete data directory");
-        }
+    if data_dir.exists() && std::fs::remove_dir_all(&data_dir).is_err() {
+        eprintln!("Warning: Could not delete data directory");
     }
 
     // 删除卸载程序

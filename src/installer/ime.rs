@@ -2,7 +2,7 @@ use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use windows::core::PCSTR;
+use windows::core::s;
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
 
 use crate::manifest::ImeInfo;
@@ -170,7 +170,7 @@ fn call_install_layout_or_tip(profile: &str, flags: u32) -> Result<(), String> {
         let hmod = LoadLibraryW(windows::core::PCWSTR(lib_name.as_ptr()))
             .map_err(|e| format!("Failed to load input.dll: {}", e))?;
 
-        let proc = GetProcAddress(hmod, PCSTR(b"InstallLayoutOrTip\0".as_ptr()));
+        let proc = GetProcAddress(hmod, s!("InstallLayoutOrTip"));
         match proc {
             Some(f) => {
                 let f: Fn = std::mem::transmute(f);
