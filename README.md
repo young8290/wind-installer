@@ -1,94 +1,120 @@
 # Wind Installer
 
-清单驱动的 Windows 安装器生成器：**一个 stub 二进制 + 一份 `app.toml`，不重新编译即可为任意应用打出安装包。**
+清单驱动的 Windows 安装器生成器。同一个预编译的 stub 二进制配上不同的 `app.toml`，即可为不同应用生成安装包，无需重新编译。
+
+清单在打包时嵌入归档头部，安装器与卸载器在运行期读取它。应用名称、界面文案、主题色、要注册的组件、要安装的字体等均来自清单，代码中不含具体应用的信息。
+
+## 快速开始
+
+编辑 `app.toml` 描述你的应用，然后运行打包脚本：
+
+```powershell
+.\scripts\pack.ps1
+```
+
+脚本会编译 stub、卸载器和打包工具，再调用 `wind-packer build` 生成安装程序，输出到 `[package] output_dir` 指定的目录。
+
+已有二进制时也可以直接调用打包工具：
 
 ```
 wind-packer build --config app.toml --stub wind-installer.exe
 ```
 
-清单被嵌入归档头部，安装器与卸载器在**运行期**读取它。应用身份、界面文案、主题色、
-要注册什么、要装哪些字体，全部来自这份配置——代码里不写任何具体产品的信息。
+仓库自带的 `app.toml` 是一份演示用的虚构应用清单，列出了各字段的写法。
 
-## 能力段：缺省即不执行
+## 清单配置
 
-清单的每个能力段都遵循同一约定——**不声明就不做**。一个只有 `[app]` 身份段的普通应用，
-安装计划里只剩「解压 + 可卸载」，不碰系统任何位置。
+`app.toml` 分两部分：运行期清单会嵌入归档供安装器读取，`[package]` 段仅打包时使用。
 
-| 段 | 缺省行为 | 声明后 |
+能力段缺省即不执行，不需要的段删掉即可：
+
+| 段 | 缺省 | 声明后 |
 |---|---|---|
 | `[ime]` | 跳过 | 注册 TSF 输入法（COM + InstallLayoutOrTip） |
-| `[[font]]` | 跳过 | 装字体到 `%WINDIR%\Fonts` 并注册 |
+| `[[font]]` | 跳过 | 安装字体到 `%WINDIR%\Fonts` 并注册 |
 | `[autostart]` | 不注册 | 写 `HKCU\...\Run` |
-| `[[shortcut]]` | 不创建 | 开始菜单 / 桌面快捷方式 |
-| `[startup]` | 装完不启动 | 装完以 `DETACHED_PROCESS` 拉起主程序 |
-| `[datadir]` | 不写 | 把向导中选定的数据目录落盘供主程序读取 |
-| `[strings]` | 中性文案 | 覆盖为应用自己的领域措辞 |
+| `[[shortcut]]` | 不创建 | 开始菜单或桌面快捷方式 |
+| `[startup]` | 装完不启动 | 装完以 `DETACHED_PROCESS` 启动主程序 |
+| `[datadir]` | 不写 | 将向导中选定的数据目录落盘供主程序读取 |
+| `[strings]` | 中性文案 | 覆盖为应用自己的措辞 |
 
-这是刻意的保守默认：通用安装器不擅自改用户的系统。会动注册表的行为一律由清单显式 opt-in。
+只声明 `[app]` 段的应用，安装过程只做解压和写入卸载信息，不改动系统其他位置。修改注册表的行为都需要在清单中显式开启。
 
-## 卸载靠回执，不靠重新推断
+图标与 logo 同样由清单指定，打包时写入 PE 资源。
 
-安装过程中每个有系统副作用的步骤都写一条**回执**（registry key、字体文件、快捷方式路径……），
-卸载时读回执逐条撤销。卸载器**不重新读清单**——这样即便用户升级过若干版本、清单早已变化，
-卸载撤销的仍然精确是当初装下去的那些东西。
+## 命令行
 
-## 锁定文件与「需要重启」
+安装器：
 
-升级时旧文件常被占用。安装器不会因此失败：改名让路 + `MoveFileEx(DELAY_UNTIL_REBOOT)` 排队删除，
-新版照常就位；但「还需重启才能清理干净」这个事实会一路传到用户面前——交互式向导显示警示提示，
-`--silent` 以 **3010**（`ERROR_SUCCESS_REBOOT_REQUIRED`）退出。
+| 参数 | 说明 |
+|---|---|
+| `--silent` | 完全静默，无界面 |
+| `--quiet` | 带界面静默，跳过配置页并显示进度，完成后自动退出 |
+| `--dir <DIR>` | 安装目录 |
+| `--datadir <DIR>` | 数据目录 |
+| `--keep-user-data` | 卸载时保留用户数据 |
+| `--soft-render` | 强制软渲染，等效于设置 `WIND_SOFT_RENDER=1` |
 
-> 调用方注意：`3010` 是**成功**，不是失败。只判 `exit == 0` 会把「装好了但请重启」误报成安装失败。
+子命令 `install` / `uninstall` 分别对应安装与卸载模式。
 
-安装器只提示、不代劳重启——它无从判断用户手头有没有没保存的工作。
+打包工具 `wind-packer` 提供 `pack`、`bundle`、`build`、`inspect` 四个子命令，其中 `build` 为 `pack` 加 `bundle` 的合并操作，`inspect` 用于读取已生成安装程序中嵌入的清单摘要。
 
-## 快速开始
+## 卸载
 
-```powershell
-# 1. 改 app.toml 描述你的应用（仓库自带一份演示用的虚构应用清单）
-# 2. 编译 stub 并打包
-.\scripts\pack.ps1
-```
+安装过程中每个有系统副作用的步骤都会写入一条回执，卸载时读取回执逐条撤销，不重新解析清单。因此用户升级过多个版本、清单已经变化时，卸载撤销的仍是当初安装的内容。
 
-产物落在 `[package] output_dir`。图标与 logo 也由清单指定，打包时写入 PE 资源。
+## 文件占用与重启
 
-## 构建 / 测试
+升级时旧文件常被占用。此时安装器将其改名让路，并用 `MoveFileEx(DELAY_UNTIL_REBOOT)` 排队删除，新版本照常安装。这种情况下安装已完成，但需要重启才能清理干净：交互式向导会显示提示，`--silent` 模式以 3010 退出。
+
+安装器只提示，不会自动重启系统。
+
+## 退出码
+
+| 码 | 含义 |
+|---|---|
+| 0 | 成功 |
+| 1 | 失败 |
+| 3010 | 成功，但需重启以完成清理（`ERROR_SUCCESS_REBOOT_REQUIRED`） |
+
+3010 表示安装成功，取值与 MSI、NSIS 一致。调用方若只判断 `exit == 0`，会把需要重启的情况误判为安装失败。
+
+## 构建与测试
 
 ```
 cargo build
-cargo test --tests      # 集成测试是纯函数断言，无需管理员权限
+cargo test --tests
 cargo clippy --lib
 ```
 
-`cargo test` 含 doctest 时会因 `src/archive/format.rs` 文档注释里的 ASCII 结构图报一个
-既有失败，与业务逻辑无关，用 `--tests` 规避。
+`cargo test` 包含 doctest 时会有一个既有失败：`src/archive/format.rs` 的文档注释中有一张 ASCII 结构图，rustdoc 会将其当作代码块编译。用 `--tests` 跳过。
+
+Windows 目标通过 `.cargo/config.toml` 静态链接 MSVC CRT，产物不依赖 VC++ 运行库。
 
 ## 发布产物
 
-打 `v*` tag 触发 CI 出 Release，包含：
+推送 `v*` tag 触发 CI 构建并创建 Release：
 
-| 资产 | 用途 |
+| 资产 | 说明 |
 |---|---|
-| `wind-installer-windows-x64.exe` | stub —— 打包时由 packer 追加归档 overlay |
-| `wind-uninstaller-windows-x64.exe` | 卸载器 —— 打包前注入到源目录，随安装包解压到安装目录 |
+| `wind-installer-windows-x64.exe` | stub，打包时由 packer 追加归档 |
+| `wind-uninstaller-windows-x64.exe` | 卸载器，打包前注入源目录，随安装包解压到安装目录 |
 | `wind-packer-windows-x64.exe` | 打包工具（Windows） |
-| `wind-packer-linux-x64` | 打包工具（Linux，供全 Linux 流水线用） |
+| `wind-packer-linux-x64` | 打包工具（Linux） |
 | `SHA256SUMS` | 上述文件的校验和 |
 
-资产名不带版本号——版本由 tag 表达，下载方写死文件名即可：
+资产名不含版本号，版本由 tag 表达：
 
 ```
 gh release download v0.1.0 -p 'wind-installer-windows-x64.exe'
 ```
 
-两个跑在**用户机器**上的二进制（stub 与卸载器）静态链接 MSVC CRT，目标机无需安装
-VC++ 运行库；发布前 CI 会实测产物确认这一点。packer 只跑在构建机上，不作此要求。
+stub 与卸载器运行在用户机器上，静态链接 MSVC CRT，CI 在发布前会检查产物确认这一点。打包工具只在构建机运行，不作此要求。
 
-## 依赖与许可
+## 许可
 
-本项目以 MIT 许可发布，见 [LICENSE](LICENSE)。
+MIT，见 [LICENSE](LICENSE)。
 
-- GUI 层用 [windui](https://github.com/huanfeng/wind-ui-rust)。
-- `vendor/editpe` 是 [editpe](https://crates.io/crates/editpe)（BSD-2-Clause）的本地修补副本：
-  上游 0.2.3 的 `VersionInfo::build()` 用 UTF-8 字节数计算版本资源头部长度，含中文时结构错乱、
-  Windows 读不到版本信息；副本已修为 UTF-16 码元数。许可证随副本保留在 `vendor/editpe/LICENSE`。
+GUI 使用 [windui](https://github.com/huanfeng/wind-ui-rust)。
+
+`vendor/editpe` 是 [editpe](https://crates.io/crates/editpe) 0.2.3 的本地修补副本，BSD-2-Clause，许可证见 `vendor/editpe/LICENSE`。上游的 `VersionInfo::build()` 按 UTF-8 字节数计算版本资源头部长度，含中文时结构错乱导致 Windows 读不到版本信息，副本已改为 UTF-16 码元数。
