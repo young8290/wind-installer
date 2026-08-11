@@ -138,7 +138,44 @@ impl ArchiveWriter {
 fn compress_solid(data: &[u8], compression: CompressionType) -> Result<Vec<u8>, String> {
     match compression {
         CompressionType::Zstd => {
-            zstd::encode_all(data, 19).map_err(|e| format!("Zstd compression failed: {}", e))
+            // 多线程压缩。产物仍是标准 zstd 流 —— 解压端（reader.rs 的 zstd::decode_all）
+            // 一行不用改：多线程只是把输入切块并行压，帧格式完全兼容。
+            //
+            // 为什么值得改：打包是发布流程里最大的一块（实测占 d8 的 43%、44.8 s），
+            // 而 encode_all 是单线程的，在多核编译机上只用得到 1 个核。切块会让压缩率
+            // 损失不到 1%，换来接近线性的加速。
+            let workers = std::thread::available_parallelism()
+                .map(|n| n.get() as u32)
+                .unwrap_or(1);
+            let t0 = std::time::Instant::now();
+            let mut enc = zstd::Encoder::new(Vec::new(), 19)
+                .map_err(|e| format!("Zstd encoder init failed: {}", e))?;
+            // 单核机器上不启用 —— 保持与从前逐字节相同的产物。
+            if workers > 1 {
+                enc.multithread(workers)
+                    .map_err(|e| format!("Zstd multithread setup failed: {}", e))?;
+                // 不设 JobSize 的话默认块很大，几十 MB 的输入只切得出两三块，于是再多核
+                // 也只有两三个 worker 在干活（实测 48 核峰值仅 ~2.7 核）。8 MB 一块，
+                // 50 MB 级的产物能摊到 6~7 个 worker；块内仍是 solid，跨块才失去字典复用，
+                // 压缩率损失可控。
+                enc.set_parameter(zstd::stream::raw::CParameter::JobSize(8 << 20))
+                    .map_err(|e| format!("Zstd job size setup failed: {}", e))?;
+            }
+            enc.write_all(data)
+                .map_err(|e| format!("Zstd write failed: {}", e))?;
+            let out = enc
+                .finish()
+                .map_err(|e| format!("Zstd finish failed: {}", e))?;
+            // 打包是发布流程里最大的一块，把它的耗时和压缩比直接打出来 —— 否则下次想优化
+            // 又得靠外部采样去猜它占多少。
+            eprintln!(
+                "    [zstd] {:.1} MB → {:.1} MB  {:.1}s  ({} 线程)",
+                data.len() as f64 / 1048576.0,
+                out.len() as f64 / 1048576.0,
+                t0.elapsed().as_secs_f64(),
+                workers
+            );
+            Ok(out)
         }
         CompressionType::Lzma => {
             let mut encoder = xz2::write::XzEncoder::new(Vec::new(), 9);
