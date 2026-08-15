@@ -67,38 +67,6 @@ enum Mode {
 /// **调用方须知**：把 `3010` 当作成功而非失败处理，再自行提示用户重启。
 const EXIT_REBOOT_REQUIRED: i32 = 3010;
 
-#[cfg(test)]
-mod arg_tests {
-    use super::*;
-
-    /// 应用内自动升级传入的正是这组参数；解析失败会静默退化成交互式向导
-    /// （`ignore_errors = true` 让 clap 返回全默认值，silent 变回 false）。
-    #[test]
-    fn silent_install_with_quoted_dir() {
-        let args = Args::parse_from([
-            "wind-installer",
-            "--silent",
-            "--dir",
-            r"C:\Program Files\Demo App",
-        ]);
-        assert!(args.silent, "--silent 未被识别");
-        assert_eq!(args.dir, Some(PathBuf::from(r"C:\Program Files\Demo App")));
-    }
-
-    #[test]
-    fn silent_alone() {
-        let args = Args::parse_from(["wind-installer", "--silent"]);
-        assert!(args.silent, "--silent 单独传入也未被识别");
-    }
-
-    /// 未知参数应被忽略而不影响已知参数 —— 这是 ignore_errors 的本意。
-    #[test]
-    fn unknown_flag_does_not_swallow_known_ones() {
-        let args = Args::parse_from(["wind-installer", "--silent", "--future-flag"]);
-        assert!(args.silent, "未知参数把 --silent 一起吞掉了");
-    }
-}
-
 fn main() {
     let args = Args::parse();
 
@@ -243,8 +211,10 @@ fn run_uninstall(args: Args) {
     }
 
     if args.silent {
-        let mut options = uninstaller::cleanup::CleanupOptions::default();
-        options.keep_user_data = args.keep_user_data;
+        let options = uninstaller::cleanup::CleanupOptions {
+            keep_user_data: args.keep_user_data,
+            ..Default::default()
+        };
 
         let result = uninstaller::perform_uninstall(&options);
         if !result.success {
@@ -260,4 +230,38 @@ fn run_uninstall(args: Args) {
     }
 
     util::single::release_lock();
+}
+
+// 以下为测试，须置于文件末尾：`#[cfg(test)] mod` 在非测试编译下整块消失，
+// 把真实代码排在它后面会让人误以为文件到此为止。
+#[cfg(test)]
+mod arg_tests {
+    use super::*;
+
+    /// 应用内自动升级传入的正是这组参数；解析失败会静默退化成交互式向导
+    /// （`ignore_errors = true` 让 clap 返回全默认值，silent 变回 false）。
+    #[test]
+    fn silent_install_with_quoted_dir() {
+        let args = Args::parse_from([
+            "wind-installer",
+            "--silent",
+            "--dir",
+            r"C:\Program Files\Demo App",
+        ]);
+        assert!(args.silent, "--silent 未被识别");
+        assert_eq!(args.dir, Some(PathBuf::from(r"C:\Program Files\Demo App")));
+    }
+
+    #[test]
+    fn silent_alone() {
+        let args = Args::parse_from(["wind-installer", "--silent"]);
+        assert!(args.silent, "--silent 单独传入也未被识别");
+    }
+
+    /// 未知参数应被忽略而不影响已知参数 —— 这是 ignore_errors 的本意。
+    #[test]
+    fn unknown_flag_does_not_swallow_known_ones() {
+        let args = Args::parse_from(["wind-installer", "--silent", "--future-flag"]);
+        assert!(args.silent, "未知参数把 --silent 一起吞掉了");
+    }
 }

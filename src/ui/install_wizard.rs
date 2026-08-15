@@ -6,7 +6,10 @@ use windui::geometry::Color;
 use windui::platform::PickDialog;
 use windui::signal::signal;
 use windui::spec::Align;
-use windui::ui::{Element, WindowButtonKind};
+use windui::ui::Element;
+// 仅无边框标题栏用得到；非 frameless 构建下整段标题栏不存在，导入也不该存在。
+#[cfg(feature = "frameless")]
+use windui::ui::WindowButtonKind;
 
 use windui::prelude::Sender;
 

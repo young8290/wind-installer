@@ -330,6 +330,23 @@ fn local_timestamp() -> String {
     )
 }
 
+/// 递归复制目录（用于卸载前备份用户数据到桌面）
+fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let dest = dst.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir_all(&entry.path(), &dest)?;
+        } else {
+            std::fs::copy(entry.path(), &dest)?;
+        }
+    }
+    Ok(())
+}
+
+// 以下为测试，须置于文件末尾：`#[cfg(test)] mod` 在非测试编译下整块消失，
+// 把真实代码排在它后面会让人误以为文件到此为止。
 #[cfg(test)]
 mod guard_tests {
     use super::*;
@@ -425,19 +442,4 @@ mod guard_tests {
         std::fs::create_dir_all(&d).unwrap();
         d
     }
-}
-
-/// 递归复制目录（用于卸载前备份用户数据到桌面）
-fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(dst)?;
-    for entry in std::fs::read_dir(src)? {
-        let entry = entry?;
-        let dest = dst.join(entry.file_name());
-        if entry.file_type()?.is_dir() {
-            copy_dir_all(&entry.path(), &dest)?;
-        } else {
-            std::fs::copy(entry.path(), &dest)?;
-        }
-    }
-    Ok(())
 }
