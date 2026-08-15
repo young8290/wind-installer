@@ -72,7 +72,9 @@ pub fn run_uninstall_wizard() {
 
     // ---- 跨线程进度通道（on_message 在 UI 线程调用，可直接写 Signal）----
     let mut app = App::new(title.clone(), win_w, win_h);
-    let tx = app.channel::<UninstallMsg>(move |msg| match msg {
+    // windui 0.12 起 on_message 收 `&mut EventCtx`（宿主能力通道：toast / 对话框 / 关窗）。
+    // 这里只写 Signal 切页，用不上 ctx。
+    let tx = app.channel::<UninstallMsg>(move |_ctx, msg| match msg {
         UninstallMsg::Status(s) => status_text.set(s),
         UninstallMsg::Finished {
             ok,
@@ -152,8 +154,10 @@ pub fn run_uninstall_wizard() {
         )
         .child(delete_data_row)
         .child(
+            // 0.12 的启用轴分三形态，绑 Signal 走 `_signal` 后缀那一支
+            // （`enabled(bool)` 现在是静态形态，传 Signal 会 E0308）。
             Element::checkbox("删除前备份配置数据到桌面（推荐）", backup_to_desktop)
-                .enabled(clean_roaming),
+                .enabled_signal(clean_roaming),
         )
         .child(Element::checkbox(
             format!(
@@ -177,7 +181,7 @@ pub fn run_uninstall_wizard() {
                         .corner(8.0)
                         .bg(Color::hex(theme::error()))
                         .fg(Color::hex(0xFFFFFF))
-                        .enabled(confirmed)
+                        .enabled_signal(confirmed)
                         .on_click(move |_ctx: &mut EventCtx| {
                             current_page.set(PAGE_PROGRESS);
 
@@ -251,7 +255,7 @@ pub fn run_uninstall_wizard() {
                         .fg(Color::hex(theme::text_primary())),
                 )
                 .child(
-                    Element::label_rc(status_text)
+                    Element::label_signal(status_text)
                         .font_size(12.0)
                         .fg(Color::hex(theme::text_secondary()))
                         .width_match()
@@ -334,7 +338,7 @@ pub fn run_uninstall_wizard() {
                         .fg(Color::hex(theme::text_primary())),
                 )
                 .child(
-                    Element::label_rc(finish_error)
+                    Element::label_signal(finish_error)
                         .font_size(12.0)
                         .fg(Color::hex(theme::error()))
                         .width_match()
@@ -470,7 +474,7 @@ pub fn run_uninstall_wizard() {
     let app = app
         .centered()
         .resizable(false)
-        .accelerated(super::is_accelerated())
+        .renderer(super::renderer())
         .bg(Color::hex(theme::bg_primary()))
         .content(root);
 

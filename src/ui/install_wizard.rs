@@ -234,7 +234,9 @@ pub fn run_install_wizard(opts: WizardOptions) {
 
     // ---- 跨线程进度通道（on_message 在 UI 线程调用，可直接写 Signal）----
     let mut app = App::new(title.as_str(), win_w, win_h);
-    let tx = app.channel::<ProgressMsg>(move |msg| match msg {
+    // windui 0.12 起 on_message 收 `&mut EventCtx`（宿主能力通道：toast / 对话框 / 关窗）。
+    // 这里只写 Signal 切页，用不上 ctx。
+    let tx = app.channel::<ProgressMsg>(move |_ctx, msg| match msg {
         ProgressMsg::Status(s) => progress_text.set(s),
         ProgressMsg::Progress(f) => progress_value.set(f),
         // 延迟结束，切到进度页；安装已在发出此消息的那个线程里继续进行
@@ -387,13 +389,15 @@ pub fn run_install_wizard(opts: WizardOptions) {
                     Element::text_input(data_dir, meta::s_data_dir_hint())
                         .weight(1.0)
                         .height(34)
-                        .enabled(signal(is_fresh_install))
+                        // 0.12 的 `enabled` 直接收 bool，不必再为一个常量分配信号槽
+                        // （信号槽当前不回收，旧写法每次构建都占一个永不释放的位置）。
+                        .enabled(is_fresh_install)
                         .visible_when(move || install_mode.get() == 0),
                 )
                 .child(
                     Element::button("更改")
                         .height(34)
-                        .enabled(signal(is_fresh_install))
+                        .enabled(is_fresh_install)
                         .visible_when(move || install_mode.get() == 0)
                         .on_click(move |ctx: &mut EventCtx| {
                             ctx.request_pick_folder(
@@ -453,7 +457,7 @@ pub fn run_install_wizard(opts: WizardOptions) {
         )
         // 校验错误提示（仅未勾协议时可见）
         .child(
-            Element::label_rc(config_error)
+            Element::label_signal(config_error)
                 .font_size(11.0)
                 .fg(Color::hex(theme::error()))
                 .align(Align::Center),
@@ -467,7 +471,7 @@ pub fn run_install_wizard(opts: WizardOptions) {
                 .bg(Color::hex(theme::accent()))
                 .fg(Color::hex(0xFFFFFF))
                 .align(Align::Center)
-                .enabled(agreed)
+                .enabled_signal(agreed)
                 .on_click(move |_ctx: &mut EventCtx| {
                     config_error.set(String::new());
                     progress_value.set(0.0);
@@ -522,7 +526,7 @@ pub fn run_install_wizard(opts: WizardOptions) {
                         .corner(3.0),
                 )
                 .child(
-                    Element::label_rc(progress_text)
+                    Element::label_signal(progress_text)
                         .font_size(12.0)
                         .fg(Color::hex(theme::text_secondary()))
                         .width_match()
@@ -615,7 +619,7 @@ pub fn run_install_wizard(opts: WizardOptions) {
                         .fg(Color::hex(theme::text_primary())),
                 )
                 .child(
-                    Element::label_rc(finish_error)
+                    Element::label_signal(finish_error)
                         .font_size(12.0)
                         .fg(Color::hex(theme::error()))
                         .width_match()
@@ -681,7 +685,7 @@ pub fn run_install_wizard(opts: WizardOptions) {
     let app = app
         .centered()
         .resizable(false)
-        .accelerated(super::is_accelerated())
+        .renderer(super::renderer())
         .bg(Color::hex(theme::bg_primary()))
         .content(root);
 
