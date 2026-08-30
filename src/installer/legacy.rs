@@ -27,6 +27,26 @@ pub fn cleanup_legacy(install_dir: &Path, r: &mut dyn Reporter) {
     }
 
     for rel in meta::legacy_dirs() {
+        // 内容目录不接受「旧版遗留」这个身份——它们由解包正向覆盖维护，不是上一版
+        // 留下的垃圾；含 `..` 的条目更是能走出安装目录（见 `manifest::classify_legacy_dir`）。
+        // 打包期已拒绝这两类清单，这里是对**已经打出去的旧安装包**的运行期兜底：
+        // 宁可留下一个真正的遗留目录，也不能删掉内容层或删到安装目录之外。
+        //
+        // 两类分开报，与打包期同一口径：合成一句会让读日志的人以为换个名字就能过。
+        if let Some(why) = crate::manifest::classify_legacy_dir(rel) {
+            r.warn(&match why {
+                crate::manifest::LegacyDirRejection::EscapesInstallDir => {
+                    format!(
+                        "忽略 legacy_dirs 中含 `..` 的条目 {}（会走出安装目录）",
+                        rel
+                    )
+                }
+                crate::manifest::LegacyDirRejection::ContentDir(_) => {
+                    format!("忽略 legacy_dirs 中的内容目录 {}", rel)
+                }
+            });
+            continue;
+        }
         let path = install_dir.join(rel);
         if !path.exists() {
             continue;
@@ -36,31 +56,7 @@ pub fn cleanup_legacy(install_dir: &Path, r: &mut dyn Reporter) {
                 "旧版目录 {} 删除失败（将于重启后清理）: {}",
                 rel, e
             ));
-            schedule_dir_on_reboot(&path);
+            reboot::schedule_dir_on_reboot(&path);
         }
     }
-}
-
-/// 把一棵删不掉的目录树排进重启删除队列。
-///
-/// `MoveFileExW` 对**非空**目录无效，故必须自底向上逐项排队：先文件、再子目录、
-/// 最后目录自身。只排目录一条的话，重启时它仍非空，删除会静默失败。
-fn schedule_dir_on_reboot(dir: &Path) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        // 连列目录都做不到（权限/句柄问题）：至少把目录本身记一笔，
-        // 让「需要重启」的结论不会因为这里读不到而丢失。
-        reboot::record_pending(dir, false);
-        return;
-    };
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            schedule_dir_on_reboot(&path);
-        } else if std::fs::remove_file(&path).is_err() {
-            let _ = reboot::schedule_delete_on_reboot(&path);
-        }
-    }
-
-    let _ = reboot::schedule_delete_on_reboot(dir);
 }

@@ -36,6 +36,10 @@ process_names   = ["demo_app", "demo_helper"]        # 安装/卸载前终止
 acl_dlls        = ["demo_tsf.dll", "demo_tsf_x86.dll"]  # 需 ALL APP PACKAGES 权限
 legacy_files    = ["demo_old.dll"]        # 升级时清理的旧版遗留文件（相对安装目录）
 legacy_dirs     = []                      # 升级时清理的旧版遗留目录
+                                          # 打包器会拒绝这几类（那是内容层，不是遗留物）：
+                                          #   data                —— 但 data/子目录 允许清理
+                                          #   data_custom 及其子目录 —— 不在包里，删了装不回来
+                                          #   含 .. 的写法         —— 会走出安装目录
 
 [ui]
 install_win   = { w = 520, h = 420 }

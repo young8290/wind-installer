@@ -237,12 +237,15 @@ pub fn delete_install_files(install_dir: &PathBuf) -> Result<(), String> {
         }
     }
 
-    // 尝试删除安装目录：删不掉（尚有锁定文件）就排重启删——上面各文件已单独排队，
-    // 目录会在它们清空后于重启时删除。
-    if std::fs::remove_dir_all(install_dir).is_err()
-        && reboot::schedule_delete_on_reboot(install_dir).is_err()
-    {
-        eprintln!("Warning: Could not delete install directory");
+    // 尝试删除安装目录：删不掉（尚有锁定文件）就**递归**排重启删。
+    //
+    // 这里此前只排目录自身一条，而 `MoveFileExW` 对非空目录无效——上面单独排过队的
+    // 只有 binaries 与 `.old_`/`.bak` 残留，`data/` 等数据目录下的文件一个都没排，
+    // 于是重启时这个目录仍非空、删除静默失败，整棵树的重启兜底等于不存在。
+    // `schedule_dir_on_reboot` 自底向上逐项处理，且能当场删掉的一律当场删、不进队列，
+    // 故正常路径（`remove_dir_all` 一把成功）根本走不到它，也不会多排任何重启任务。
+    if std::fs::remove_dir_all(install_dir).is_err() {
+        reboot::schedule_dir_on_reboot(install_dir);
     }
 
     Ok(())

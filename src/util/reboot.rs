@@ -135,3 +135,135 @@ pub fn pending_summary() -> String {
 pub fn reset_ledger() {
     ledger_lock().clear();
 }
+
+// ── 目录树的重启删除 ─────────────────────────────────────────────────────────
+
+/// 把一棵删不掉的目录树排进重启删除队列。
+///
+/// `MoveFileExW` 对**非空**目录无效，故必须自底向上逐项处理：先文件、再子目录、
+/// 最后目录自身。只排目录一条的话，重启时它仍非空，删除会静默失败——这正是
+/// 「安装目录里有文件被占用 ⇒ 重启兜底整棵树都无效」这个缺口的成因。
+///
+/// 三条不变量，改动时勿破：
+///
+/// 1. **能当场删掉的东西不进队列。** 无占用时走完这里一条记录都不留，账本为空，
+///    「需要重启」的结论不受影响；队列长度只反映真正卡住的东西（实测安装目录
+///    ~100 文件 / ~40 目录，即便全卡住也远低于注册表值 1MB 的标准格式上限）。
+/// 2. **删不掉的文件先改名 `.old_xxxxxxxx` 再排队。** 排进
+///    `PendingFileRenameOperations` 的删除要到**下次开机**才执行，而用户完全可能
+///    在此之前就重装到同一目录。排原路径 = 让上一次卸载的遗留指令删掉新装的同名
+///    文件（重启后「词库莫名消失」）；排一个随机后缀名则永不与新装产物撞名。
+///    这与解压让路、卸载删二进制是同一套路。
+/// 3. **正在运行的自身可执行文件一概不碰。** 改名后 `current_exe()` 仍返回旧路径
+///    （`GetModuleFileNameW` 在加载时固化），卸载器的自删除流程会因此复制不到自己而
+///    静默失效；排队它的原路径又会在重装后删掉新的 `uninstall.exe`，把 ARP 条目
+///    指向不存在的程序。它由 `uninstaller::selfdelete` 负责，这里让开。
+pub fn schedule_dir_on_reboot(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        // 连列目录都做不到（权限/句柄问题）：至少把目录本身记一笔，
+        // 让「需要重启」的结论不会因为这里读不到而丢失。
+        record_pending(dir, false);
+        return;
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        // 用 `file_type()` 而非 `path.is_dir()`：后者跟随符号链接/junction，会递归进
+        // 链接目标把**目标目录**的内容删掉。`FileType::is_dir()` 对重解析点返回 false，
+        // 于是链接按「文件」处理——删的是链接本身，不是它指向的东西。
+        let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+        if is_dir {
+            schedule_dir_on_reboot(&path);
+        } else if !is_current_exe(&path) && std::fs::remove_file(&path).is_err() {
+            // 走到这里的「非目录」除了普通文件，还有指向目录的重解析点（junction /
+            // 目录符号链接）——对它们 `remove_file` 恒为「拒绝访问」，而 `remove_dir`
+            // 直接成功且**只摘掉链接、目标目录安然无恙**。不先试这一下的话，安装目录
+            // 里只要有一个 junction，每次卸载都会白白多一条重启账、完成页无端提示
+            // 「需要重启」，还留下一个改了名的链接。
+            if std::fs::remove_dir(&path).is_err() {
+                let _ = schedule_delete_on_reboot(&stash_aside(&path));
+            }
+        }
+    }
+
+    // 子项清空后目录本身通常就能删掉——能删就删，别往队列里塞无谓的条目（不变量 1）。
+    if std::fs::remove_dir(dir).is_err() {
+        let _ = schedule_delete_on_reboot(dir);
+    }
+}
+
+/// 把删不掉的文件改名让路，返回**实际要排队的路径**；改名失败则原路返回。
+///
+/// 同卷改名只改目录项，对已被打开/已加载为映像的文件同样成立；只有被以不含
+/// `FILE_SHARE_DELETE` 方式打开的文件会失败，那时退回排原路径（见不变量 2）。
+///
+/// **已经是 `.old_xxxxxxxx` 的名字原样返回、不再改一次。** 这不是洁癖：卸载时
+/// `delete_install_files` 的 binaries 循环会先把锁定的 `app.exe` 改成
+/// `app.exe.old_aaaaaaaa` 并排队，随后 `remove_dir_all` 失败、递归兜底又碰上同一个
+/// 文件。再改一次名的后果是队列里出现**两条**——先排的那条指向已不存在的路径，成了
+/// 空转指令，而 `pending_summary()` 报给用户的「N 个文件待重启后清理」也随之偏大。
+/// 那个随机后缀本来就是防撞的，套第二层没有任何收益。
+fn stash_aside(path: &Path) -> PathBuf {
+    let Some(name) = path.file_name().map(|n| n.to_string_lossy().into_owned()) else {
+        return path.to_path_buf();
+    };
+    if is_stashed_name(&name) {
+        return path.to_path_buf();
+    }
+    let stashed = path.with_file_name(format!("{}.old_{:08x}", name, rand::random::<u32>()));
+    if std::fs::rename(path, &stashed).is_ok() {
+        stashed
+    } else {
+        path.to_path_buf()
+    }
+}
+
+/// 名字是否已是本模块（或 `delete_install_files`）产出的让路名：`.old_` + 8 位十六进制。
+fn is_stashed_name(name: &str) -> bool {
+    match name.rsplit_once(".old_") {
+        Some((stem, suffix)) => {
+            !stem.is_empty() && suffix.len() == 8 && suffix.bytes().all(|b| b.is_ascii_hexdigit())
+        }
+        None => false,
+    }
+}
+
+/// 该路径是否就是当前进程的可执行文件（见不变量 3）。
+///
+/// 比较走 `canonicalize` 而非字符串：两边一个来自 `GetModuleFileNameW`、一个由
+/// `install_dir.join(名字)` 拼出，可能在 8.3 短名、junction 挂载点、大小写上写法不同，
+/// 而**判漏的代价是自删除静默失效**——那种失败没有任何日志能看出来。
+///
+/// **文件名快速通道的名字必须取自 `canonicalize` 之后的路径**，不能取 `current_exe()`
+/// 的原始返回值：进程若是以 8.3 短路径启动的（`install directory` 这类带空格的目录
+/// 必有短名），`current_exe()` 原样返回 `...\INSTAL~1\UNINST~1.EXE`，而 `read_dir`
+/// 永远给磁盘长名 `uninstall.exe`——两边比不上，函数会**在 canonicalize 之前就返回
+/// `false`**，自删除随即静默失效（实测复现过）。canonicalize 后两边都是磁盘长名。
+///
+/// 取不到自身路径时返回 `false`：那只是让自身 exe 与其他文件同等对待（改名+排队），
+/// 不会影响其余条目的处理；反过来返回 `true` 又会放过一个同名文件。两害相权取其轻。
+///
+/// `pub` 的理由同 [`reset_ledger`]：本 crate 的 `--lib` 单测跑不起来（二进制名含
+/// "install"，命中 UAC 安装器启发式），这条不变量只能在 `tests/` 里断言。
+#[doc(hidden)]
+pub fn is_current_exe(path: &Path) -> bool {
+    static SELF_EXE: OnceLock<Option<(std::ffi::OsString, PathBuf)>> = OnceLock::new();
+    let Some((self_name, self_real)) = SELF_EXE
+        .get_or_init(|| {
+            let exe = std::env::current_exe().ok()?;
+            let real = std::fs::canonicalize(&exe).unwrap_or(exe);
+            let name = real.file_name()?.to_os_string();
+            Some((name, real))
+        })
+        .as_ref()
+    else {
+        return false;
+    };
+
+    // 先比文件名（无 IO）——绝大多数条目在这里就否掉了，不必为每个文件做一次
+    // `canonicalize` 系统调用。
+    if path.file_name().map(|n| n.eq_ignore_ascii_case(self_name)) != Some(true) {
+        return false;
+    }
+    std::fs::canonicalize(path).as_deref().unwrap_or(path) == self_real.as_path()
+}

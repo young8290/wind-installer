@@ -344,3 +344,203 @@ source_dir = "./build"
         ProjectConfig::from_toml_str(toml_str_no_info).expect("不包含 version_info 应解析成功");
     assert!(cfg_no_info.package.version_info.is_none());
 }
+
+// ── legacy_dirs 不得点名内容目录 ─────────────────────────────────────────────
+//
+// 为什么校验非落在解析层不可：清单是**产品仓自己维护**的文件（本仓的 app.toml 只是
+// 示例），而 `legacy_dirs` 的语义与执行在本仓。清单那侧的测试证明不了「安装器拿这个
+// 字段干什么」，本仓的示例清单也管不住别人的产品清单。两者唯一的交汇点是打包器：
+// 任何清单都必须经由 `ProjectConfig::from_toml_str`，故校验落在那里，本测试钉住它。
+
+/// 内容目录特殊在哪：它们是安装目录下的**内容层**，不是旧版遗留物。
+///
+/// - `data` 是应用随包分发的资源目录，由解包正向覆盖维护，从不需要先删；
+/// - `data_custom` 惯例上**根本不在安装包里**（由部署方放置、应用只读），删掉之后
+///   没有任何东西会把它装回来——这是它区别于 `data` 的特有理由。
+///
+/// 而 `legacy_dirs` 是整个安装流程里唯一会在升级时删除安装目录下内容的入口
+/// （`CleanupLegacy` 在解包前 `remove_dir_all`）。往里写一个内容目录名 = 让升级流程
+/// 删用户数据，且这种故障只在真正部署了那一层的机器上复现得出来。
+#[test]
+fn reserved_content_dirs_rejected_in_legacy_dirs() {
+    for bad in ["data", "data_custom"] {
+        let toml = format!(
+            r#"
+[app]
+id           = "MyApp"
+display_name = "My App"
+version      = "1.0.0"
+publisher    = "Me"
+main_exe     = "app.exe"
+legacy_dirs  = ["{bad}"]
+
+[package]
+source_dir = "./build"
+"#
+        );
+        let err = ProjectConfig::from_toml_str(&toml)
+            .expect_err(&format!("legacy_dirs = [\"{bad}\"] 必须被拒绝"));
+        assert!(err.contains(bad), "错误信息应点名是哪一项: {err}");
+    }
+}
+
+/// 绕过检查靠的是换个写法，不是换个名字。
+///
+/// `.//data` 与 `data/.` 不是纸面漏洞：`install_dir.join(rel)` 对这两个写法都解析得到，
+/// `remove_dir_all` **真能把 `data` 整个删掉**（实测过）。它们曾经漏出去，是因为归一化
+/// 在剥前后缀而不是切分量——剥的顺序固定、每种剥法只做一遍。
+#[test]
+fn reserved_dir_check_is_spelling_insensitive() {
+    use wind_installer::manifest::is_reserved_legacy_dir;
+
+    for bad in [
+        "data",
+        "Data",
+        "DATA_CUSTOM",
+        "data_custom/",
+        "./data_custom",
+        r"data_custom\",
+        " data ",
+        "/data/",
+        "data//",
+        // 剥前后缀式归一化漏掉的两种写法
+        ".//data",
+        "data/.",
+        // `data_custom` 是 AnyDepth：子目录同样删了装不回来
+        "data_custom/sub",
+        r"data_custom\themes\dark",
+        // `..` 走得出自己的子树：`data/..` 就是 install_dir 本身
+        "data/..",
+        "..",
+        "plugins/../data",
+    ] {
+        assert!(is_reserved_legacy_dir(bad), "应判定为受保护目录: {bad:?}");
+    }
+}
+
+/// 但别把正常的遗留目录一起拦下——`legacy_dirs` 本身是有用功能。
+///
+/// 尤其 `data/sub`：`data` 随包分发、解包会正向覆盖回来，**删一个新版不再分发的子目录
+/// 正是 `legacy_dirs` 的正当用法**。这与 `data_custom/sub` 被拦是有意的不对称（两者的
+/// 禁令理由不同，见 `RESERVED_LEGACY_DIRS`），不要觉得不一致而「顺手统一」。
+#[test]
+fn ordinary_legacy_dirs_still_allowed() {
+    use wind_installer::manifest::is_reserved_legacy_dir;
+
+    for ok in [
+        "plugins",
+        "data2",
+        "olddata",
+        "user_data",
+        "data/sub",
+        "data/old_themes",
+        r"data\legacy\v1",
+        "./data/sub",
+    ] {
+        assert!(!is_reserved_legacy_dir(ok), "不该被拦下: {ok:?}");
+    }
+
+    let toml = r#"
+[app]
+id           = "MyApp"
+display_name = "My App"
+version      = "1.0.0"
+publisher    = "Me"
+main_exe     = "app.exe"
+legacy_dirs  = ["plugins", "old_cache"]
+
+[package]
+source_dir = "./build"
+"#;
+    let cfg = ProjectConfig::from_toml_str(toml).expect("普通 legacy_dirs 应可解析");
+    assert_eq!(cfg.manifest.app.legacy_dirs, ["plugins", "old_cache"]);
+}
+
+/// 运行期入口刻意不校验：已发布的安装包若带着坏清单，在这里报错等于让它彻底起不来，
+/// 用户既改不了那份清单也无从自救。拦截点在打包期，执行前再由 `legacy` 逐条跳过。
+#[test]
+fn runtime_manifest_load_stays_permissive() {
+    let toml = r#"
+[app]
+id           = "MyApp"
+display_name = "My App"
+version      = "1.0.0"
+publisher    = "Me"
+main_exe     = "app.exe"
+legacy_dirs  = ["data_custom"]
+"#;
+    let m = AppManifest::from_toml_bytes(toml.as_bytes())
+        .expect("运行期载入不该因清单里的坏条目而失败");
+    assert_eq!(m.app.legacy_dirs, ["data_custom"]);
+    assert!(m.validate().is_err(), "但显式校验仍应判它不合法");
+}
+
+/// 含 `..` 的条目要有**自己的**错误文案，不能复用「这是受保护目录」。
+///
+/// 用户写 `data/..` 时，「不接受含 `..` 的路径」才是有用的信息。报成「`data` 是受保护
+/// 目录」会让人以为换个名字就行，于是改写成 `plugins/..`——那同样是把整个安装目录
+/// `remove_dir_all` 掉（实测：`data/..` 之后连基准目录本身都没了）。
+#[test]
+fn escaping_paths_get_their_own_error_message() {
+    use wind_installer::manifest::{classify_legacy_dir, LegacyDirRejection};
+
+    // 用 TOML **字面量字符串**（单引号）包 rel：基本字符串里 `data_custom\..\..` 的反斜杠
+    // 会被当成转义序列，解析就先失败了，`expect_err` 拿到的是 TOML 报错而非校验报错——
+    // 断言会因此变成假绿。本仓 `[paths]` 写 Windows 路径用的也是单引号。
+    fn err_for(rel: &str) -> String {
+        let toml = format!(
+            r#"
+[app]
+id           = "MyApp"
+display_name = "My App"
+version      = "1.0.0"
+publisher    = "Me"
+main_exe     = "app.exe"
+legacy_dirs  = ['{rel}']
+
+[package]
+source_dir = "./build"
+"#
+        );
+        let err = ProjectConfig::from_toml_str(&toml).expect_err(&format!("{rel:?} 必须被拒绝"));
+        assert!(
+            !err.starts_with("Failed to parse app.toml"),
+            "{rel:?} 死在 TOML 解析上，根本没走到校验: {err}"
+        );
+        err
+    }
+
+    // `..` 与具体名字无关：换个名字照样拒，且理由不变
+    for esc in ["data/..", "..", "plugins/../data", r"data_custom\..\.."] {
+        assert_eq!(
+            classify_legacy_dir(esc),
+            Some(LegacyDirRejection::EscapesInstallDir),
+            "{esc:?} 应判为「走出安装目录」而不是「内容目录」"
+        );
+        // `..` 那条文案**一个「内容」字都不许出现**：`plugins/..` 也走这条，而 `plugins`
+        // 根本不是内容目录——说它是就是说假话，还会把人引到「换个名字就行」的错路上。
+        let e = err_for(esc);
+        assert!(
+            e.contains("不接受含 `..` 的路径"),
+            "{esc:?} 的文案没说清原因: {e}"
+        );
+        assert!(
+            !e.contains("内容"),
+            "{esc:?} 的文案说它是内容目录——对 plugins/.. 这就是假话: {e}"
+        );
+    }
+
+    // 内容目录仍走原来那套文案，两边不串
+    for content in ["data", "data_custom/sub"] {
+        assert!(matches!(
+            classify_legacy_dir(content),
+            Some(LegacyDirRejection::ContentDir(_))
+        ));
+        let e = err_for(content);
+        assert!(e.contains("内容层"), "{content:?} 的文案不对: {e}");
+        assert!(
+            !e.contains("不接受含 `..` 的路径"),
+            "{content:?} 串到了 `..` 文案: {e}"
+        );
+    }
+}

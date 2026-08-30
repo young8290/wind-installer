@@ -429,6 +429,11 @@ impl AppManifest {
     }
 
     /// 从 TOML 文本字节反序列化（从归档头部 / 安装目录 .manifest 读取）。
+    ///
+    /// **刻意不调用 [`AppManifest::validate`]**：这是运行期入口，清单已经嵌在
+    /// 用户手里那个安装包里了。在这里报错等于让一个已发布的安装/卸载器彻底起不来，
+    /// 而用户既改不了那份清单、也就无从自救。校验放在打包期（[`ProjectConfig::from_toml_str`]）
+    /// 拦；对已发布的旧包，由 `installer::legacy` 在执行前逐条跳过受保护目录兜底。
     pub fn from_toml_bytes(bytes: &[u8]) -> Result<Self, String> {
         let text = std::str::from_utf8(bytes)
             .map_err(|e| format!("Manifest is not valid UTF-8: {}", e))?;
@@ -452,9 +457,137 @@ impl AppManifest {
 }
 
 impl ProjectConfig {
-    /// 从 app.toml 文本解析。
+    /// 从 app.toml 文本解析，并做打包期校验。
     pub fn from_toml_str(text: &str) -> Result<Self, String> {
-        toml::from_str(text).map_err(|e| format!("Failed to parse app.toml: {}", e))
+        let cfg: Self =
+            toml::from_str(text).map_err(|e| format!("Failed to parse app.toml: {}", e))?;
+        cfg.manifest.validate()?;
+        Ok(cfg)
+    }
+}
+
+// ── 内容目录：`legacy_dirs` 的禁区 ───────────────────────────────────────────
+
+/// **内容目录**的常用名——不得出现在 `legacy_dirs` 里。
+///
+/// `legacy_dirs` 的语义是「上一版装出来、新版**不再装**的目录」，`CleanupLegacy`
+/// 在解包**之前**把它们整个 `remove_dir_all`。而内容目录不是遗留物：
+///
+/// - `data` —— 应用随包分发的资源目录，几乎每个带资源的应用都有一个。它由解包
+///   **正向覆盖**维护，从来不需要先被删掉。
+/// - `data_custom` —— 与 `data` 同级的定制内容层，惯例是**不在安装包里**：由部署方
+///   放置、应用只读。正因为它不在包里，删掉之后**没有任何东西会把它装回来**——这是
+///   它区别于 `data` 的特有理由，也是这条禁令的分量所在。
+///
+/// 为什么校验必须存在：`legacy_dirs` 是整个安装流程里**唯一**会在升级时删除安装目录
+/// 下内容的入口（`PrepareArchive` 只 `create_dir_all`，`ExtractFiles` 只正向遍历包内
+/// 条目，都不反查差集）。往这个列表里写一个内容目录名，就等于让升级流程删用户数据；
+/// 而这种故障只在真正部署了那一层的机器上复现得出来，作者的开发机上永远是好的。
+/// **`data` 与 `data_custom` 的深度规则不同，这不是疏漏，别顺手统一掉。**
+///
+/// 差别直接来自上面两条理由的差别：
+///
+/// - `data` 随包分发，解包会把内容正向覆盖回来。所以「删掉一个新版不再分发的子目录」
+///   恰恰是 `legacy_dirs` 的**正当用法**——`data/old_themes` 该放行。一并拦下等于把这个
+///   功能真正有用的场景削掉。故 [`DepthRule::ExactOnly`]：只拦 `data` 本身。
+/// - `data_custom` 的危险性来自「不在包里、删了不会回来」，而这条对它的**子目录一字不差
+///   地成立**——`data_custom/themes` 删掉同样没有任何东西会装回来。故
+///   [`DepthRule::AnyDepth`]：首段命中即拦，任何深度。而且
+///   `legacy_dirs = ["data_custom/themes"]` 比写 `data_custom` 现实得多——作者想清掉旧版
+///   留下的某个子目录，很自然就这么写。
+pub const RESERVED_LEGACY_DIRS: &[(&str, DepthRule)] = &[
+    ("data", DepthRule::ExactOnly),
+    ("data_custom", DepthRule::AnyDepth),
+];
+
+/// 受保护内容目录的匹配深度。见 [`RESERVED_LEGACY_DIRS`] 里为什么两者不同。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DepthRule {
+    /// 只拦目录本身；它的子目录放行。
+    ExactOnly,
+    /// 首段命中即拦，任何深度。
+    AnyDepth,
+}
+
+/// 一个 `legacy_dirs` 条目被拒的原因。
+///
+/// **两类原因必须分开报，不能合成一句。** 用户写 `data/..` 时，「不接受含 `..` 的路径」
+/// 才是有用的信息；报成「`data` 是受保护目录」会让人以为换个名字就行，于是改写成
+/// `plugins/..`——那同样是删光整个安装目录。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LegacyDirRejection {
+    /// 含 `..` 分量：能走出安装目录，与具体名字无关。
+    EscapesInstallDir,
+    /// 命中受保护的内容目录（携带命中的那个名字）。
+    ContentDir(&'static str),
+}
+
+/// 判定一个 `legacy_dirs` 条目该不该被拒，以及为什么。
+///
+/// **归一化按路径分量做，不按前后缀剥。** 「剥前后缀」那种写法（`trim_matches('/')` →
+/// `trim_start_matches("./")` → `trim()`）的毛病是剥的顺序固定、每种剥法只做一遍，于是
+/// `.//data`（剥一次 `./` 得 `/data` 就停手）、`data/.`（首尾都不是 `/`、也不以 `./`
+/// 开头）全都漏出去——而这两个写法 `install_dir.join(rel)` 解析得到，`remove_dir_all`
+/// **真能把 `data` 整个删掉**（实测）。切成分量后，空段与 `.` 段一并丢弃，三类写法一次覆盖。
+///
+/// **含 `..` 分量的条目一律拒绝，且优先于内容目录判定。** 它能走出自己的子树：`data/..`
+/// 就是 `install_dir` 本身，拿去 `remove_dir_all` 等于升级时把整个安装目录（含
+/// `data_custom`）删光——实测确认。守卫无从对这种条目讲道理，只能拒绝；`legacy_dirs`
+/// 本就该是「安装目录下的相对目录名」。
+pub fn classify_legacy_dir(name: &str) -> Option<LegacyDirRejection> {
+    let parts: Vec<String> = name
+        .replace('\\', "/")
+        .split('/')
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && *s != ".")
+        .map(|s| s.to_ascii_lowercase())
+        .collect();
+
+    if parts.iter().any(|p| p == "..") {
+        return Some(LegacyDirRejection::EscapesInstallDir);
+    }
+    let head = parts.first()?;
+    let has_deeper = parts.len() > 1;
+    RESERVED_LEGACY_DIRS
+        .iter()
+        .find(|(reserved, rule)| reserved == head && (!has_deeper || *rule == DepthRule::AnyDepth))
+        .map(|(reserved, _)| LegacyDirRejection::ContentDir(reserved))
+}
+
+/// `name` 是否不得作为 `legacy_dirs` 条目执行。运行期兜底（`installer::legacy`）只需
+/// 这个是非判断；要给人看的理由走 [`classify_legacy_dir`]。
+pub fn is_reserved_legacy_dir(name: &str) -> bool {
+    classify_legacy_dir(name).is_some()
+}
+
+impl AppManifest {
+    /// 打包期校验。失败即拒绝出包——比打出一个升级时会删用户数据的安装包好。
+    pub fn validate(&self) -> Result<(), String> {
+        if let Some((bad, why)) = self
+            .app
+            .legacy_dirs
+            .iter()
+            .find_map(|d| classify_legacy_dir(d).map(|why| (d, why)))
+        {
+            return Err(match why {
+                LegacyDirRejection::EscapesInstallDir => format!(
+                    "legacy_dirs 不接受含 `..` 的路径 {:?}：`install_dir.join(它)` 会走出\
+                     安装目录（`data/..` 解析出来就是安装目录本身），随后的 remove_dir_all \
+                     就删到了 legacy_dirs 管不着的地方——实测 `data/..` 会把整个安装目录\
+                     删光。这与写的是哪个名字无关，`plugins/..` 一样。legacy_dirs 的条目\
+                     必须是安装目录下的相对目录名",
+                    bad
+                ),
+                LegacyDirRejection::ContentDir(_) => format!(
+                    "legacy_dirs 不得包含 {:?}：它指向安装目录下的内容层，不是旧版遗留物。\
+                     `data` 由解包正向覆盖、无需先删（但它的子目录允许清理）；\
+                     `data_custom` 惯例上不在安装包里，删掉之后没有任何东西会把它装回来，\
+                     故连子目录一并保护（规则见 manifest::RESERVED_LEGACY_DIRS）",
+                    bad
+                ),
+            });
+        }
+        Ok(())
     }
 }
 
