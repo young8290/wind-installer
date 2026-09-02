@@ -394,15 +394,30 @@ fn remove_path(path: &Path) {
     let Ok(meta) = std::fs::symlink_metadata(path) else {
         return; // 不存在：本就没什么可删
     };
-    let r = if meta.file_type().is_dir() {
+    let is_dir = meta.file_type().is_dir();
+    let r = if is_dir {
         std::fs::remove_dir_all(path)
     } else {
         // 普通文件，或指向目录的 junction/符号链接——后者 remove_file 会拒绝访问，
         // 而 remove_dir 能把链接本身摘掉且不碰目标。
         std::fs::remove_file(path).or_else(|_| std::fs::remove_dir(path))
     };
-    if let Err(e) = r {
-        eprintln!("Warning: 删除 {} 失败: {}", path.display(), e);
+    if r.is_err() {
+        // 删不掉必须**记账**，不能只 eprintln——卸载器是 windows_subsystem = "windows"
+        // 的无控制台进程，打出去等于丢弃（AGENTS.md §锁定文件与「需要重启」）。
+        //
+        // 这里的失败是高概率而非理论：WindInput 的 cache_dirs 含 logs，而 logs/tsf_log/
+        // 由仍被 ctfmon 加载的 TSF DLL 直接写着，DLL 没释放时 remove_dir_all 必然失败。
+        // 不记账则 need_reboot 漏判 ⇒ 完成页告诉用户卸载干净 ⇒ 那堆日志永久留下——
+        // 正是本次要修的那个残留，只是下移了一层。
+        //
+        // 目录走递归排队：MoveFileExW 对非空目录无效，只排目录自身等于没排
+        // （commit 457b542 为同一件事引入了 schedule_dir_on_reboot）。
+        if is_dir {
+            reboot::schedule_dir_on_reboot(path);
+        } else {
+            let _ = reboot::schedule_delete_on_reboot(path);
+        }
     }
 }
 
@@ -677,6 +692,80 @@ mod guard_tests {
         assert!(root.exists());
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&sibling);
+    }
+
+    /// 守卫修复的**落地**验收：拿真实目录树跑一遍两个 P0 的具体形态。
+    ///
+    /// 只断言 `classify_local_data_entry` 返回什么是不够的——上一版守卫的毛病恰恰是
+    /// 「校验的串」与「拿去 join 的串」不是同一个，那种错误在枚举层面看不出来。这里
+    /// 直接过 `remove_local_data_entries`，看树还在不在。
+    ///
+    /// 修复前的实测结果（已复现）：`...` 让 remove_dir_all 把整棵树删光；`logs/C:x`
+    /// 拼出 `C:x` 落到 C: 盘当前目录。
+    ///
+    /// **承重范围要说清楚**：注入验证显示，去掉尾点归零那条检查会让本测试变红，但去掉
+    /// 盘符检查**不会**——带盘符的条目逃到作用域根**之外**，根里的东西反而毫发无损，
+    /// 这种「删错了地方」在「树还在不在」上照不出来。盘符那一档的承重测试是
+    /// `tests/manifest_parse.rs::drive_prefix_in_any_component_is_rejected`（它直接断言
+    /// `safe_local_data_rel` 拿不到值）。这里保留那几个条目，是为了确认它们至少不会
+    /// **顺带**破坏根内的东西。
+    #[test]
+    fn p0_forms_cannot_destroy_the_tree() {
+        let root = local_tree("p0");
+        let evil = crate::manifest::LocalDataInfo {
+            cache_dirs: vec![
+                "...".into(), // 剥掉尾点后指回根本身
+                ". .".into(),
+                "logs/C:x".into(), // 非首分量带盘符 → push 截断缓冲区
+                "./C:x".into(),
+                " C:x".into(),
+                "cache/C:evil".into(),
+            ],
+            state_files: vec![],
+            remove_dir_when_empty: false,
+        };
+        remove_local_data_entries(Some(&evil), &root, &opts(true, false));
+
+        assert!(root.exists(), "作用域根被删掉了——`...` 那一档又漏了");
+        assert!(
+            root.join("cache").join("x.bin").exists(),
+            "根下的内容被删掉了"
+        );
+        assert!(root.join("logs").exists(), "logs 被误删");
+        assert!(root.join("state.toml").exists(), "状态文件被误删");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 删不掉时必须**记账**，不能只 eprintln——卸载器是无控制台进程，打出去等于丢弃，
+    /// 而 need_reboot 会因此漏判、完成页告诉用户「卸载干净」。
+    ///
+    /// 用 `share_mode(0)` 独占打开目录里的一个文件来制造真实的删除失败：这正是现场
+    /// 的形态（logs/tsf_log 由仍被 ctfmon 加载的 TSF DLL 占着）。
+    #[test]
+    fn undeletable_entries_are_recorded_in_the_reboot_ledger() {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        let root = local_tree("locked");
+        reboot::reset_ledger();
+        assert!(!reboot::is_reboot_pending(), "前置：账本应为空");
+
+        let locked = root.join("logs").join("held.bin");
+        std::fs::write(&locked, b"x").unwrap();
+        let _guard = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0) // 不共享读/写/删除 —— 谁也删不掉它
+            .open(&locked)
+            .expect("独占打开失败");
+
+        remove_path(&root.join("logs"));
+
+        assert!(
+            reboot::is_reboot_pending(),
+            "删不掉却没记账：need_reboot 会漏判，完成页就会谎报卸载干净"
+        );
+        drop(_guard);
+        reboot::reset_ledger();
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     fn tmpdir(tag: &str) -> PathBuf {

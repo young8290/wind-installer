@@ -14,7 +14,7 @@
 // 在 installer/uninstaller 二进制中不构造，故模块级允许 dead_code。
 #![allow(dead_code)]
 
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -381,41 +381,72 @@ pub struct LocalDataInfo {
     pub remove_dir_when_empty: bool,
 }
 
-/// 一个 `[localdata]` 条目被拒的原因。三类分开报——它们要求作者做的修改完全不同。
+/// 一个 `[localdata]` 条目被拒的原因。分开报——它们要求作者做的修改完全不同。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LocalDataRejection {
-    /// 归一化后一个分量都不剩（`""` / `"."` / `"./"`）：指的是作用域根本身。
+    /// 归一化后指向作用域根本身（`""` / `"."` / `"..."` / `". ."`）。
     ResolvesToRoot,
     /// 含 `..` 分量：能走出 `%LOCALAPPDATA%\{app.id}`。
     EscapesLocalDir,
-    /// 绝对路径或带盘符：`join` 会**整个替换**掉前缀，落到条目自己写的任意位置。
+    /// 任一分量带盘符或路径前缀：`join` 会**整个替换**掉前缀。
     NotRelative,
+    /// 分量尾部带点或空格：Win32 会剥掉它们，写的是 `logs .`、删的却是 `logs`。
+    TrailingDotOrSpace,
+}
+
+/// 归一化 **并** 校验，一次做完：`Ok` 给出真正要拿去 `join` 的相对路径，`Err` 给出理由。
+///
+/// **校验必须作用在最终要用的那个值上。** 上一版把守卫打在原始串上、却拿逐分量拼出来的
+/// `PathBuf` 去 `join`——两者不是同一个东西，于是整串「看着」是相对路径、拼出来却不是：
+///
+/// - `logs/C:x`、`./C:x`、` C:x`、`cache/C:evil` 全部放行。`PathBuf::push` 遇到**任何**带
+///   前缀的分量都会截断整个缓冲区（不只第一个），于是拼出来是 `C:x`；`root.join("C:x")`
+///   的结果仍是 `C:x`，解析为 C: 盘**当前目录**下的 `x`，删除落到作用域根之外。旧守卫查的
+///   是 `raw.chars().nth(1)`，即**整串**的第 2 个字符，非首分量一个都拦不住。
+/// - `...`、`. .`、`.. .` 全部放行。Win32 会剥掉分量尾部的点与空格，剥完为空即指回父目录
+///   自己——实测 `remove_dir_all(root.join("..."))` 返回 `Ok(())` 并把整棵树删光。于是用户
+///   只勾了「清除本地缓存」，另一组的用户状态跟着一起没了。
+///
+/// 两者是同一个成因：**被校验的串与被使用的串不是同一个**。所以这里不再有两条路径——
+/// 分量切完就地逐个判，通过的那份分量直接拼成结果，中间没有第二次转换的余地。
+fn resolve_local_data_entry(entry: &str) -> Result<PathBuf, LocalDataRejection> {
+    let raw = entry.replace('\\', "/");
+    if raw.starts_with('/') {
+        return Err(LocalDataRejection::NotRelative);
+    }
+    let parts = local_data_parts(&raw);
+    if parts.is_empty() {
+        return Err(LocalDataRejection::ResolvesToRoot);
+    }
+    for p in &parts {
+        if p == ".." {
+            return Err(LocalDataRejection::EscapesLocalDir);
+        }
+        // 盘符、ADS（`a:b`）、任何带 `:` 的写法：`push` 会拿它当新的根。
+        if p.contains(':') {
+            return Err(LocalDataRejection::NotRelative);
+        }
+        // 剥掉 Win32 会忽略的尾部点与空格后什么都不剩 = 这个分量指的是父目录自己。
+        let trimmed = p.trim_end_matches(['.', ' ']);
+        if trimmed.is_empty() {
+            return Err(LocalDataRejection::ResolvesToRoot);
+        }
+        if trimmed != p.as_str() {
+            return Err(LocalDataRejection::TrailingDotOrSpace);
+        }
+        // 兜底：不是「单独一个普通名字」的一律不放行（前缀、根、`.`、`..`）。上面几条
+        // 各覆盖一种已知形态，这条挡的是它们都没想到的那些。
+        let mut comps = Path::new(p.as_str()).components();
+        if !matches!(comps.next(), Some(Component::Normal(_))) || comps.next().is_some() {
+            return Err(LocalDataRejection::NotRelative);
+        }
+    }
+    Ok(parts.iter().collect())
 }
 
 /// 判定一个 `[localdata]` 条目该不该被拒。`None` 即安全。
-///
-/// 归一化与 [`classify_legacy_dir`] 同法（按分量切、丢空段与 `.` 段），但多守两条
-/// **这里特有的致命形态**：
-///
-/// - **归一化后空分量**。`root.join("")` 得到的是 `%LOCALAPPDATA%\{app.id}` **本身**，
-///   而条目随后要被 `remove_dir_all`——用户只勾了「清除本地缓存」，整个本机数据目录连同
-///   用户状态一起消失，两个勾选各自的语义在这一步全部作废。`legacy_dirs` 里写 `"."`
-///   顶多命中内容目录判定，这里却是一步到位的数据损失。
-/// - **盘符起始**（`C:x`）。它 `is_absolute()` 为 `false`，单看 `Path` 判不出来，
-///   而 `join` 照样丢弃前缀——同一个坑 `guard_shape` 也专门堵过一次。
 pub fn classify_local_data_entry(entry: &str) -> Option<LocalDataRejection> {
-    let raw = entry.replace('\\', "/");
-    if raw.starts_with('/') || raw.chars().nth(1) == Some(':') {
-        return Some(LocalDataRejection::NotRelative);
-    }
-    let parts = local_data_parts(&raw);
-    if parts.iter().any(|p| p == "..") {
-        return Some(LocalDataRejection::EscapesLocalDir);
-    }
-    if parts.is_empty() {
-        return Some(LocalDataRejection::ResolvesToRoot);
-    }
-    None
+    resolve_local_data_entry(entry).err()
 }
 
 /// 归一化条目为路径分量。大小写原样保留——Windows 路径不敏感，但拼出来是要给人看的。
@@ -427,13 +458,10 @@ fn local_data_parts(raw: &str) -> Vec<String> {
         .collect()
 }
 
-/// 安全条目 → 归一化后的相对路径；不安全 → `None`。运行期清理只需要这个是非判断，
-/// 要给人看的理由走 [`classify_local_data_entry`]。
+/// 安全条目 → 归一化后的相对路径；不安全 → `None`。运行期清理只要这个是非判断，
+/// 要给人看的理由走 [`classify_local_data_entry`]。**两者出自同一次解析**，不会漂移。
 pub fn safe_local_data_rel(entry: &str) -> Option<PathBuf> {
-    if classify_local_data_entry(entry).is_some() {
-        return None;
-    }
-    Some(local_data_parts(&entry.replace('\\', "/")).iter().collect())
+    resolve_local_data_entry(entry).ok()
 }
 
 /// 安装完成后的启动行为。
@@ -699,10 +727,17 @@ impl AppManifest {
                         field, bad
                     ),
                     LocalDataRejection::NotRelative => format!(
-                        "[localdata].{} 的条目 {:?} 不是相对路径：`join` 遇到绝对路径或\
-                         盘符会**整个替换**掉前缀，于是删除落到条目自己写的位置，而不是\
-                         `%LOCALAPPDATA%\\{{app.id}}` 之下。注意 `C:x` 这种写法 \
+                        "[localdata].{} 的条目 {:?} 里有分量带盘符或路径前缀：\
+                         `PathBuf::push` 遇到这种分量会**截断整个缓冲区**——不只第一个，\
+                         `logs/C:x` 拼出来也是 `C:x`，`join` 之后落到 C: 盘当前目录，\
+                         而不是 `%LOCALAPPDATA%\\{{app.id}}` 之下。注意 `C:x` 的 \
                          `is_absolute()` 为 false，光看 Path 判不出来",
+                        field, bad
+                    ),
+                    LocalDataRejection::TrailingDotOrSpace => format!(
+                        "[localdata].{} 的条目 {:?} 有分量以点或空格结尾：Win32 解析路径时\
+                         会把它们剥掉，于是写的是 `logs .`、删的却是 `logs`。这类条目删得掉\
+                         东西、但删的不是你写的那个，故一律拒绝而不是默默归一化",
                         field, bad
                     ),
                 });

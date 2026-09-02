@@ -130,10 +130,13 @@ markers = ["config.toml", "projects"]
 #      state_files →「删除用户数据」：删了就没了的用户侧状态
 #    合成一组的话，用户只勾了清缓存却把状态一起丢了——而他明确没勾另一个。
 #
-#    条目是相对 %LOCALAPPDATA%\{app.id} 的路径。打包器会拒绝这三类：
-#      归一化后为空（""、"."）—— 指的是那个目录本身，会被整个删光
+#    条目是相对 %LOCALAPPDATA%\{app.id} 的路径，逐个分量校验（不是整串），打包器拒绝四类：
+#      归一化后指向根本身  —— ""、"."、"..."、". ."。Win32 会剥掉分量尾部的点与空格，
+#                            剥完为空就是父目录自己；实测 remove_dir_all 会把整个目录删光
 #      含 ..              —— 走得出作用域
-#      绝对路径或带盘符    —— join 会整个替换掉前缀（注意 "C:x" 的 is_absolute() 是 false）
+#      任一分量带盘符      —— PathBuf::push 遇到带前缀的分量会截断整个缓冲区，不只第一个：
+#                            "logs/C:x" 拼出来就是 "C:x"（注意它的 is_absolute() 是 false）
+#      分量尾部带点        —— "logs." 在 Win32 下就是 "logs"，删得掉但删的不是你写的那个
 [localdata]
 cache_dirs  = ["cache", "logs"]
 state_files = ["state.toml"]

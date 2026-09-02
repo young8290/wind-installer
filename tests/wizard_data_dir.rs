@@ -28,6 +28,9 @@ main_exe     = "demo.exe"
 
 [datadir]
 conf_file = "datadir.conf"
+
+[localdata]
+state_files = ["state.toml", "seen.marker"]
 "#;
 
 #[test]
@@ -70,4 +73,31 @@ fn data_dir_initial_value_follows_conf_file() {
     );
 
     let _ = std::fs::remove_dir_all(&root);
+}
+
+/// 危险勾选的说明文案与它真正会删的东西必须对得上（AGENTS.md 规则 5）。
+///
+/// 勾上「删除用户数据」现在**还会**删 `[localdata].state_files`，而清单给的确认弹窗
+/// 正文只提数据目录一个路径。弹窗才是「同意」的闸口——用户按下「确定删除」前读的最后
+/// 一句话——少说这一组，提示与不可逆动作之间就又有了第二份推导。
+///
+/// 断言的是 `state_files_clause()` 本身：勾选行附注与弹窗都从它取值，钉住它就等于钉住
+/// 两处；分别断言两段拼好的文案反而会漏掉「其中一处忘了拼」的情形。
+#[test]
+fn delete_confirmation_text_covers_every_state_file() {
+    use wind_installer::ui::uninstall_wizard::state_files_clause;
+
+    meta::init(AppManifest::from_toml_bytes(MANIFEST.as_bytes()).expect("解析清单失败"));
+
+    let clause = state_files_clause();
+    for f in ["state.toml", "seen.marker"] {
+        assert!(
+            clause.contains(f),
+            "清单声明了 {f}，但界面文案没提它——用户会以为它不会被删: {clause}"
+        );
+    }
+    assert!(
+        clause.contains("Demo"),
+        "文案要说清是哪个目录下的: {clause}"
+    );
 }

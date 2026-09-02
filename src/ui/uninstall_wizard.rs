@@ -49,6 +49,27 @@ impl Reporter for GuiReporter {
     }
 }
 
+/// `%LOCALAPPDATA%\{app.id}` 下跟随「删除用户数据」勾选的那一组，渲染成一句可读文本。
+/// 清单未声明 `[localdata]`（或 `state_files` 为空）即返回空串。
+///
+/// 勾选行的附注与确认弹窗**都**从这里取。弹窗才是「同意」的闸口——用户按下
+/// 「确定删除」前读的最后一句话——两处各写一遍迟早漂移，而漂移掉的那一半恰好是
+/// 不可逆动作的说明（AGENTS.md 规则 5：提示文案与不可逆动作之间不能有第二份推导）。
+///
+/// 公开是为了让 `tests/wizard_data_dir.rs` 能直接对账「界面说的 = 清单声明的」，
+/// 那个测试的职责本就是向导初值、卸载提示、实际删除三方一致。
+pub fn state_files_clause() -> String {
+    let files: &[String] = meta::localdata().map_or(&[], |l| l.state_files.as_slice());
+    if files.is_empty() {
+        return String::new();
+    }
+    format!(
+        "%LOCALAPPDATA%\\{} 下的 {}",
+        meta::app_id(),
+        files.join("、")
+    )
+}
+
 pub fn run_uninstall_wizard() {
     // ---- 运行期窗口尺寸（来自清单；非无边框模式高度 -40 补偿系统标题栏）----
     let (win_w, base_h) = meta::uninstall_win();
@@ -124,21 +145,22 @@ pub fn run_uninstall_wizard() {
     // 是 AGENTS.md 规则 5 的要求——用户是照着这行字按下不可逆按钮的。清单没声明
     // [localdata] 时两串都是空，缓存勾选整行也不显示（勾了什么都不做比没有更糟）。
     let local_root = format!("%LOCALAPPDATA%\\{}", meta::app_id());
-    let cache_dirs: &[String] = meta::localdata().map_or(&[], |l| &l.cache_dirs);
-    let state_files: &[String] = meta::localdata().map_or(&[], |l| &l.state_files);
+    let cache_dirs: &[String] = meta::localdata().map_or(&[], |l| l.cache_dirs.as_slice());
     let has_cache_entries = !cache_dirs.is_empty();
+    // 勾选行附注与确认弹窗都从 state_files_clause() 取，不各写一遍——见该函数文档。
+    let state_clause = state_files_clause();
+    let confirm_clause = state_clause.clone();
     // 措辞必须是**条件式**的。写成「另将删除 …」是在陈述事实，而这一组只有在上面那个
     // 危险勾选被勾上时才删——没勾就不删，界面却说了要删，同样是规则 5 的违反，只是
     // 方向相反（说了不做，而不是做了不说）。指名是哪个勾选、而不是靠「上一项」这种
     // 位置指代：文案与那个勾选取自同一个 s_user_data_label()，中间再插几行也不会错位。
-    let state_note = if state_files.is_empty() {
+    let state_note = if state_clause.is_empty() {
         String::new()
     } else {
         format!(
-            "勾选「{}」时，还将一并删除 {} 下的 {}",
+            "勾选「{}」时，还将一并删除 {}",
             meta::s_user_data_label(),
-            local_root,
-            state_files.join("、")
+            state_clause
         )
     };
 
@@ -460,6 +482,21 @@ pub fn run_uninstall_wizard() {
                     .font_size(13.0)
                     .fg(Color::hex(theme::text_secondary()))
                     .width_match(),
+                )
+                .child(
+                    // 弹窗才是「同意」的闸口——用户按下「确定删除」前读的最后一句话。
+                    // 清单给的那段正文只说了数据目录，而勾上这个框现在还会删
+                    // %LOCALAPPDATA% 那一组；少说这一句，提示与不可逆动作之间就又有了
+                    // 第二份推导（AGENTS.md 规则 5）。文案与勾选行附注同源，不另取。
+                    Element::label(if confirm_clause.is_empty() {
+                        String::new()
+                    } else {
+                        format!("另含 {}。", confirm_clause)
+                    })
+                    .font_size(12.0)
+                    .fg(Color::hex(theme::text_muted()))
+                    .width_match()
+                    .visible_when(move || !state_files_clause().is_empty()),
                 )
                 .child(
                     Element::row()

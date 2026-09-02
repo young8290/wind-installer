@@ -676,3 +676,89 @@ fn safe_local_data_rel_normalizes_hand_written_paths() {
         assert!(safe_local_data_rel(bad).is_none(), "{bad:?} 不该放行");
     }
 }
+/// 回归：**非首分量**带盘符。旧守卫只查整串的第 2 个字符（`raw.chars().nth(1)`），于是
+/// `logs/C:x` 这类整串看着是相对路径的写法全部放行，而 `PathBuf::push` 遇到任何带前缀的
+/// 分量都会截断整个缓冲区——拼出来是 `C:x`，`root.join("C:x")` 仍是 `C:x`，解析为 C: 盘
+/// **当前目录**下的 `x`，`remove_dir_all` 就落到了作用域根之外。实测四种变体全部逃逸。
+#[test]
+fn drive_prefix_in_any_component_is_rejected() {
+    use wind_installer::manifest::{
+        classify_local_data_entry, safe_local_data_rel, LocalDataRejection,
+    };
+
+    for bad in [
+        "logs/C:x",
+        "./C:x",
+        " C:x",
+        "cache/C:evil",
+        r"cache\C:x",
+        "a:b",
+        "C:x",
+    ] {
+        assert_eq!(
+            classify_local_data_entry(bad),
+            Some(LocalDataRejection::NotRelative),
+            "{bad:?} 应被判为非相对路径"
+        );
+        // 双保险：真正拿去 join 的那个值必须根本拿不到。
+        assert!(safe_local_data_rel(bad).is_none(), "{bad:?} 不该放行");
+    }
+}
+
+/// 回归：Win32 会剥掉分量尾部的点与空格，剥完为空即指回父目录自己。旧守卫只过滤
+/// `trim()` 后恰好等于 `"."` 或空串的分量，于是 `...` / `. .` / `.. .` 全部放行。
+/// 实测 `remove_dir_all(root.join("..."))` 返回 `Ok(())` 并把整棵树删光——用户只勾了
+/// 「清除本地缓存」，另一组的用户状态跟着一起没了，正是 ResolvesToRoot 文档描述的灾难。
+///
+/// `...` 是清单作者写得出的手滑（想写「等等」），不是攻击构造。
+#[test]
+fn dot_and_space_forms_that_resolve_to_root_are_rejected() {
+    use wind_installer::manifest::{
+        classify_local_data_entry, safe_local_data_rel, LocalDataRejection,
+    };
+
+    for bad in ["...", ". .", ".. .", "....", "logs/...", " . "] {
+        assert!(
+            matches!(
+                classify_local_data_entry(bad),
+                Some(LocalDataRejection::ResolvesToRoot | LocalDataRejection::EscapesLocalDir)
+            ),
+            "{bad:?} 应被拒（实测它会让 remove_dir_all 删掉整个作用域根），实得 {:?}",
+            classify_local_data_entry(bad)
+        );
+        assert!(safe_local_data_rel(bad).is_none(), "{bad:?} 不该放行");
+    }
+}
+
+/// 尾部带点/空格的**普通**分量：`logs .` 在 Win32 下就是 `logs`。删得掉东西，但删的不是
+/// 作者写的那个。默默归一化会让清单与实际动作对不上，故单独报一类错而不是悄悄放行。
+#[test]
+fn trailing_dot_or_space_components_get_their_own_error() {
+    use wind_installer::manifest::{classify_local_data_entry, LocalDataRejection};
+
+    // 只有**尾部点号**危险：`str::trim` 已经把分量两端的空格去掉了（TOML 里的行尾空格
+    // 几乎都是手滑，且 Win32 同样忽略它），而它不动点号——`logs.` 因此原样活到 join，
+    // 再由 Win32 解析成 `logs`。`logs .` 是两者的组合：去掉尾点后还剩一个尾空格。
+    for bad in ["logs.", "cache/logs .", "logs ."] {
+        assert_eq!(
+            classify_local_data_entry(bad),
+            Some(LocalDataRejection::TrailingDotOrSpace),
+            "{bad:?} 应被判为尾部点/空格"
+        );
+    }
+    let e = manifest_with_localdata(r#"cache_dirs = ["logs ."]"#).expect_err("应被拒");
+    assert!(e.contains("点或空格结尾"), "文案不对: {e}");
+
+    // 但**分量之间**的空格与点是正常文件名的一部分，不能误伤。
+    // 分量**内部**的空格与点是正常文件名的一部分；两端的空格被 trim 掉后同样合法。
+    for ok in [
+        "my logs",
+        "state.toml",
+        "a.b.c",
+        "cache/my logs",
+        "logs ",
+        "state.toml ",
+    ] {
+        assert_eq!(classify_local_data_entry(ok), None, "{ok:?} 不该被拒");
+    }
+}
