@@ -46,7 +46,7 @@ pub struct ArchiveEntry {
 /// 归档头部
 ///
 /// 二进制布局（v3）：
-/// ```
+/// ```text
 /// [0..8]    magic "WINDPKG\0"
 /// [8..12]   version u32 le
 /// [12]      compression u8

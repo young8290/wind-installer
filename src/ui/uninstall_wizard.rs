@@ -75,7 +75,9 @@ pub fn run_uninstall_wizard() {
 
     // ---- 跨线程进度通道（on_message 在 UI 线程调用，可直接写 Signal）----
     let mut app = App::new(title.clone(), win_w, win_h);
-    // windui 0.12 起 on_message 收 `&mut EventCtx`（宿主能力通道：toast / 对话框 / 关窗）。
+    // windui 0.12 起 on_message 收 `&mut EventCtx`（宿主能力通道：toast / 对话框）。
+    // 0.14 起通道回调里的 close / close_forced / window_op 被**丢弃**：通道挂在 App 级、
+    // 借哪棵树排空是实现细节，「关掉哪个窗口」本就不确定。要关窗请走窗口自身的交互。
     // 这里只写 Signal 切页，用不上 ctx。
     let tx = app.channel::<UninstallMsg>(move |_ctx, msg| match msg {
         UninstallMsg::Status(s) => status_text.set(s),
