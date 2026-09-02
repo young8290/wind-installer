@@ -347,11 +347,12 @@ fn remove_local_data_entries(
         return;
     }
 
-    for entry in entries_to_remove(info, options) {
+    let entries = entries_to_remove(info, options);
+    for entry in &entries {
         // 打包期 `AppManifest::validate` 已经拦过一遍；这里是运行期兜底——归档里的
         // 清单未必出自本机的打包器。拒绝的代价只是少删一项，放行的代价是
         // remove_dir_all 落到 %LOCALAPPDATA% 之外。
-        match crate::manifest::safe_local_data_rel(entry) {
+        match crate::manifest::safe_local_data_rel(entry.as_str()) {
             None => eprintln!("Warning: 跳过不安全的 [localdata] 条目 {:?}", entry),
             Some(rel) => remove_path(&root.join(rel)),
         }
@@ -361,7 +362,13 @@ fn remove_local_data_entries(
     // 在删除的同一步里保证；先 read_dir 判一遍再删的话，中间那个窗口足够应用写回一个
     // 文件，删掉的就成了「刚才是空的」。这也顺带覆盖了「用户两个勾选都勾了」的常规
     // 路径——否则一个空目录会永远留在 %LOCALAPPDATA% 里。
-    if info.remove_dir_when_empty {
+    //
+    // `!entries.is_empty()` 这一档：两个框都没勾（或清单两组都空）时，我们**根本没动过**
+    // 这个目录，那就连收尾也别做——哪怕它恰好是空的。删一个空目录没有数据损失，但那是
+    // 用户没勾的事，而这个目录属于应用的命名空间、不属于安装器。代价是一种窄情形会留下
+    // 空目录：全新安装、应用一次没跑过（目录里只有安装器自己写的 conf，已被回执删掉），
+    // 用户又把两个框都取消。那正是他要求的「什么都别动」。
+    if info.remove_dir_when_empty && !entries.is_empty() {
         let _ = std::fs::remove_dir(root);
     }
 }
@@ -666,6 +673,21 @@ mod guard_tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// 两个框都没勾 = 我们根本没动过这个目录，那么连「空了就收掉」也不该做。
+    /// 删一个空目录没有数据损失，但那是用户没勾的事。
+    #[test]
+    fn both_unchecked_leaves_even_an_empty_dir_alone() {
+        let root = tmpdir("empty_untouched"); // 空目录
+        remove_local_data_entries(Some(&localdata()), &root, &opts(false, false));
+        assert!(
+            root.exists(),
+            "两个框都没勾时，连空目录也不该收——那是用户没勾的事"
+        );
+        // 对照：勾了缓存（我们确实动过这个目录）→ 空了就该收掉
+        remove_local_data_entries(Some(&localdata()), &root, &opts(true, false));
+        assert!(!root.exists(), "勾了之后清空的目录该被收掉");
+    }
+
     /// 运行期兜底：归档里的清单未必出自本机的打包器，故守卫要在删之前再跑一次。
     /// 用 `..` 逃出作用域根去删兄弟目录——放行的话删的就是 %LOCALAPPDATA% 下的别人。
     #[test]
@@ -677,10 +699,18 @@ mod guard_tests {
         std::fs::write(sibling.join("keep.txt"), b"keep").unwrap();
 
         let evil = crate::manifest::LocalDataInfo {
+            // 取样刻意**跨过分支中心**：`..` / `.` / `C:x` 各是一个分支的正中央，
+            // 只挑它们，得到的是「守卫有几个分支」的信心，不是「守卫封闭」的信心——
+            // 两个 P0 当初正是从分支之间的缝里穿过去的。后四条就是那些缝。
             cache_dirs: vec![
                 "../wind_guard_sibling_victim".into(),
                 ".".into(),
                 "C:x".into(),
+                "./C:x".into(), // 非首分量带盘符
+                "logs/C:x".into(),
+                " C:x".into(),
+                "...".into(), // 尾点剥完指回根
+                ". .".into(),
             ],
             state_files: vec![],
             remove_dir_when_empty: false,

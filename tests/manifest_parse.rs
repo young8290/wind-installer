@@ -762,3 +762,46 @@ fn trailing_dot_or_space_components_get_their_own_error() {
         assert_eq!(classify_local_data_entry(ok), None, "{ok:?} 不该被拒");
     }
 }
+/// 钉住守卫真正要保证的那个**下游性质**，而不是它的返回值：**放行的条目 join 之后必须
+/// 仍在作用域根之下、且不等于根本身**。
+///
+/// 这条测试存在的理由是 P0-1 的成因：守卫函数的返回值与 `root.join(rel)` 的实际落点是
+/// 两件事，而那次缺陷正是这两件事分叉造成的——`classify` 说「相对路径」，`join` 出来的
+/// 却是 `C:x`。只断言枚举的测试对这种分叉是瞎的，无论取样多密。
+///
+/// 不碰文件系统，纯路径运算，故 root 用一个不存在的虚构路径即可。
+#[test]
+fn every_allowed_entry_stays_under_the_root_after_join() {
+    use std::path::Path;
+    use wind_installer::manifest::safe_local_data_rel;
+
+    let root = Path::new(r"C:\Users\U\AppData\Local\MyApp");
+    let probes = [
+        "logs",
+        "cache/sub",
+        "my logs",
+        "state.toml",
+        // 以下若被放行就是缺陷；放行了也必须仍在根之下（两道都得过）
+        "./C:x",
+        "logs/C:x",
+        " C:x",
+        "C:x",
+        "...",
+        ". .",
+        "..",
+        "cache/..",
+        "/etc",
+        "",
+    ];
+    for e in probes {
+        let Some(rel) = safe_local_data_rel(e) else {
+            continue; // 被拒即安全
+        };
+        let joined = root.join(&rel);
+        assert!(
+            joined.starts_with(root),
+            "{e:?} 放行后 join 逃出了作用域根: rel={rel:?} joined={joined:?}"
+        );
+        assert_ne!(joined, root, "{e:?} 放行后 join 就是作用域根本身");
+    }
+}
