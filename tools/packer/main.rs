@@ -497,6 +497,22 @@ fn cmd_inspect(file: &Path) -> Result<(), String> {
             .map(|d| d.conf_file.clone())
             .unwrap_or_default()
     });
+    print_capability(
+        "本机数据清理 [localdata]",
+        m.localdata.is_some(),
+        || {
+            m.localdata
+                .as_ref()
+                .map(|l| {
+                    format!(
+                        "缓存 {} 项 / 状态 {} 项",
+                        l.cache_dirs.len(),
+                        l.state_files.len()
+                    )
+                })
+                .unwrap_or_default()
+        },
+    );
     print_capability("URL 协议", !m.app.url_protocol.trim().is_empty(), || {
         format!("{}://", m.app.url_protocol)
     });

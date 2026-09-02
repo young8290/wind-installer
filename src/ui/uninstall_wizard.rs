@@ -119,9 +119,32 @@ pub fn run_uninstall_wizard() {
                 .text_align(Align::Center),
         );
 
+    // 两个勾选各自会动 %LOCALAPPDATA%\{app.id} 下的一组条目（清单 [localdata] 声明）。
+    // 这两串说明**由同一份清单生成**，不是另写一遍：界面上说会删什么、卸载就删什么，
+    // 是 AGENTS.md 规则 5 的要求——用户是照着这行字按下不可逆按钮的。清单没声明
+    // [localdata] 时两串都是空，缓存勾选整行也不显示（勾了什么都不做比没有更糟）。
+    let local_root = format!("%LOCALAPPDATA%\\{}", meta::app_id());
+    let cache_dirs: &[String] = meta::localdata().map_or(&[], |l| &l.cache_dirs);
+    let state_files: &[String] = meta::localdata().map_or(&[], |l| &l.state_files);
+    let has_cache_entries = !cache_dirs.is_empty();
+    // 措辞必须是**条件式**的。写成「另将删除 …」是在陈述事实，而这一组只有在上面那个
+    // 危险勾选被勾上时才删——没勾就不删，界面却说了要删，同样是规则 5 的违反，只是
+    // 方向相反（说了不做，而不是做了不说）。指名是哪个勾选、而不是靠「上一项」这种
+    // 位置指代：文案与那个勾选取自同一个 s_user_data_label()，中间再插几行也不会错位。
+    let state_note = if state_files.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "勾选「{}」时，还将一并删除 {} 下的 {}",
+            meta::s_user_data_label(),
+            local_root,
+            state_files.join("、")
+        )
+    };
+
     // 删除用户数据：危险勾选行（受控 on_toggle：未勾时弹应用内确认对话框，已勾时直接取消）
     // 括号内是本机实际生效的数据目录（自定义过就显示自定义路径），与确认对话框、
-    // 与真正删除的目录同出一次解析；缓存那一行不走这个解析，它的位置由我们自己算。
+    // 与真正删除的目录同出一次解析。
     let delete_data_row = Element::checkbox(
         format!(
             "{}（{}）",
@@ -159,19 +182,30 @@ pub fn run_uninstall_wizard() {
         )
         .child(delete_data_row)
         .child(
+            Element::label(state_note.clone())
+                .width_match()
+                .font_size(11.0)
+                .fg(Color::hex(theme::text_muted()))
+                .visible_when(move || !state_note.is_empty()),
+        )
+        .child(
             // 0.12 的启用轴分三形态，绑 Signal 走 `_signal` 后缀那一支
             // （`enabled(bool)` 现在是静态形态，传 Signal 会 E0308）。
             Element::checkbox("删除前备份配置数据到桌面（推荐）", backup_to_desktop)
                 .enabled_signal(clean_roaming),
         )
-        .child(Element::checkbox(
-            format!(
-                "{}（%LOCALAPPDATA%\\{}\\cache）",
-                meta::s_cache_label(),
-                meta::app_id()
-            ),
-            clean_cache,
-        ))
+        .child(
+            Element::checkbox(
+                format!(
+                    "{}（{} 下的 {}）",
+                    meta::s_cache_label(),
+                    local_root,
+                    cache_dirs.join("、")
+                ),
+                clean_cache,
+            )
+            .visible_when(move || has_cache_entries),
+        )
         .child(Element::leaf().weight(1.0))
         .child(Element::checkbox("我已确认，继续卸载", confirmed))
         .child(

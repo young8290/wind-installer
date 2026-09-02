@@ -544,3 +544,135 @@ source_dir = "./build"
         );
     }
 }
+// ── [localdata]：%LOCALAPPDATA%\{app.id} 下的卸载清理声明 ─────────────────────
+//
+// 这一段的下游动作是 remove_dir_all，作用域根是一个**真实存在且装着用户状态**的目录，
+// 所以守卫的三条拒绝理由各测各的：它们要求清单作者做的修改完全不同，合成一句会让人
+// 以为换个名字就能过（`legacy_dirs` 的同类文案里已经吃过这个亏）。
+
+fn manifest_with_localdata(body: &str) -> Result<AppManifest, String> {
+    let toml = format!(
+        r#"
+[app]
+id           = "MyApp"
+display_name = "My App"
+version      = "1.0.0"
+publisher    = "Me"
+main_exe     = "app.exe"
+
+[localdata]
+{body}
+"#
+    );
+    let m: AppManifest = toml::from_str(&toml).expect("TOML 应能解析");
+    m.validate().map(|()| m)
+}
+
+/// 整段缺省 = 卸载完全不碰 %LOCALAPPDATA%\{app.id}。这是能力段的统一约定
+/// （AGENTS.md 规则 2），也是通用安装器不擅自动系统的保守默认。
+#[test]
+fn localdata_absent_means_uninstall_leaves_local_dir_alone() {
+    let toml = r#"
+[app]
+id           = "MyApp"
+display_name = "My App"
+version      = "1.0.0"
+publisher    = "Me"
+main_exe     = "app.exe"
+"#;
+    let m: AppManifest = toml::from_str(toml).unwrap();
+    assert!(
+        m.localdata.is_none(),
+        "未声明 [localdata] 时必须是 None——Some(默认值) 会让卸载去删一个没人声明过的目录"
+    );
+}
+
+/// 两组条目必须各自独立解析。写成一组的清单会解析失败而不是静默把 state_files 当缓存。
+#[test]
+fn localdata_parses_both_groups_separately() {
+    let m = manifest_with_localdata(
+        r#"cache_dirs  = ["cache", "logs"]
+state_files = ["state.toml", "user_config.seen"]
+remove_dir_when_empty = true"#,
+    )
+    .expect("合法清单不该被拒");
+    let local = m.localdata.expect("[localdata] 应被解析出来");
+    assert_eq!(local.cache_dirs, ["cache", "logs"]);
+    assert_eq!(local.state_files, ["state.toml", "user_config.seen"]);
+    assert!(local.remove_dir_when_empty);
+}
+
+/// 归一化后为空 = 指向作用域根本身。这是本段特有的致命形态：`root.join("")` 就是
+/// %LOCALAPPDATA%\{app.id}，随后 remove_dir_all 会把整个目录删光——包括另一组条目
+/// 对应的、用户这次并没有勾选删除的东西。两个勾选的语义在这一步一起作废。
+#[test]
+fn localdata_entries_resolving_to_root_are_rejected() {
+    use wind_installer::manifest::{classify_local_data_entry, LocalDataRejection};
+
+    for bad in ["", ".", "./", " ", ".//./"] {
+        assert_eq!(
+            classify_local_data_entry(bad),
+            Some(LocalDataRejection::ResolvesToRoot),
+            "{bad:?} 应被判为指向作用域根"
+        );
+    }
+    let e = manifest_with_localdata(r#"cache_dirs = ["."]"#).expect_err("应被打包期校验拒绝");
+    assert!(e.contains("作用域根"), "文案没说清是哪种错: {e}");
+    assert!(e.contains("cache_dirs"), "文案没指出是哪一组: {e}");
+}
+
+/// `..` 与「绝对路径/盘符」分开报：前者要作者删掉 `..`，后者要他改写成相对路径。
+/// 注意 `C:x` 的 `is_absolute()` 为 false，只看 Path 判不出来——`guard_shape` 也专门堵过。
+#[test]
+fn localdata_escaping_and_absolute_entries_rejected() {
+    use wind_installer::manifest::{classify_local_data_entry, LocalDataRejection};
+
+    for bad in ["..", "cache/..", "logs/../..", r"cache\..\.."] {
+        assert_eq!(
+            classify_local_data_entry(bad),
+            Some(LocalDataRejection::EscapesLocalDir),
+            "{bad:?} 应被判为走出作用域"
+        );
+    }
+    for bad in ["/etc", "C:x", r"C:\Windows", "/"] {
+        assert_eq!(
+            classify_local_data_entry(bad),
+            Some(LocalDataRejection::NotRelative),
+            "{bad:?} 应被判为非相对路径"
+        );
+    }
+
+    let e = manifest_with_localdata(r#"state_files = ['cache\..']"#).expect_err("应被拒");
+    assert!(e.contains("`..`"), "`..` 的文案不对: {e}");
+    assert!(
+        !e.contains("不是相对路径"),
+        "`..` 串到了绝对路径的文案上: {e}"
+    );
+    assert!(e.contains("state_files"), "文案没指出是哪一组: {e}");
+}
+
+/// 合法条目归一化后仍指向作用域根之下的同一个位置——反斜杠、多余的 `./` 与尾分隔符
+/// 都是清单里手写路径的常见形态，归一化漏掉任何一种，那一项就会静默删不掉。
+#[test]
+fn safe_local_data_rel_normalizes_hand_written_paths() {
+    use std::path::PathBuf;
+    use wind_installer::manifest::safe_local_data_rel;
+
+    for (raw, want) in [
+        ("logs", "logs"),
+        (".//logs/", "logs"),
+        ("./logs/./", "logs"),
+        (r"cache\sub", "cache/sub"),
+        ("cache/sub", "cache/sub"),
+    ] {
+        assert_eq!(
+            safe_local_data_rel(raw),
+            Some(want.split('/').collect::<PathBuf>()),
+            "{raw:?} 归一化结果不对"
+        );
+    }
+    // 不安全条目一律 None——运行期兜底只需要这个是非判断。
+    for bad in ["", ".", "cache/..", "C:x"] {
+        assert!(safe_local_data_rel(bad).is_none(), "{bad:?} 不该放行");
+    }
+}

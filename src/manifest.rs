@@ -14,6 +14,8 @@
 // 在 installer/uninstaller 二进制中不构造，故模块级允许 dead_code。
 #![allow(dead_code)]
 
+use std::path::PathBuf;
+
 use serde::{Deserialize, Serialize};
 
 /// 运行期清单：序列化为 TOML 文本存入归档头部，安装/卸载器启动时读取。
@@ -51,6 +53,10 @@ pub struct AppManifest {
     /// 用户数据目录配置落盘。整段缺省 = 不写——普通应用不需要这个约定。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub datadir: Option<DataDirInfo>,
+    /// 本机数据目录（`%LOCALAPPDATA%\{app.id}`）的卸载清理声明。
+    /// 整段缺省 = 卸载完全不碰这个目录。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub localdata: Option<LocalDataInfo>,
 }
 
 /// 应用身份与安装行为。
@@ -346,6 +352,90 @@ pub struct DataDirInfo {
     pub markers: Vec<String>,
 }
 
+/// 本机数据目录（`%LOCALAPPDATA%\{app.id}`）里由**应用运行期**创建的东西。
+///
+/// 安装器往这个目录里只写过一样东西——`[datadir].conf_file`，它有回执、由卸载撤销。
+/// 主程序在同一层写的缓存、日志、本机状态不是安装动作的产物，回执里没有它们，安装器
+/// 也无从猜测它们叫什么——那是应用的内部布局，只能由产品清单声明。
+///
+/// **整段缺省 = 卸载完全不碰这个目录**（保守默认，见 AGENTS.md 规则 4）。
+///
+/// 分成两组而不是一个「都删」开关，是因为卸载向导有两个**语义不同**的勾选，而这个目录
+/// 里两类东西都有：`cache_dirs` 是可重建产物，`state_files` 是删了就没的用户侧状态。
+/// 合成一组的后果是用户只勾了「清除本地缓存」却把状态一并丢了——而他明确没有勾另一个。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LocalDataInfo {
+    /// 可重建产物（缓存、日志……），相对 `%LOCALAPPDATA%\{app.id}`。
+    /// 跟随卸载向导的「清除本地缓存」勾选。
+    #[serde(default)]
+    pub cache_dirs: Vec<String>,
+    /// 本机状态与标记文件，相对同一目录。跟随「删除用户数据」勾选。
+    #[serde(default)]
+    pub state_files: Vec<String>,
+    /// 上面两组清完后，若 `%LOCALAPPDATA%\{app.id}` 已空则连目录一并移除。
+    ///
+    /// 落地用**非递归**的 `remove_dir`：「空才删」由 OS 在删除的同一步里保证。先
+    /// `read_dir` 判一遍再删的话，中间那个窗口足够应用写回一个文件，删掉的就成了
+    /// 「刚才是空的」而不是「现在是空的」。
+    #[serde(default)]
+    pub remove_dir_when_empty: bool,
+}
+
+/// 一个 `[localdata]` 条目被拒的原因。三类分开报——它们要求作者做的修改完全不同。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LocalDataRejection {
+    /// 归一化后一个分量都不剩（`""` / `"."` / `"./"`）：指的是作用域根本身。
+    ResolvesToRoot,
+    /// 含 `..` 分量：能走出 `%LOCALAPPDATA%\{app.id}`。
+    EscapesLocalDir,
+    /// 绝对路径或带盘符：`join` 会**整个替换**掉前缀，落到条目自己写的任意位置。
+    NotRelative,
+}
+
+/// 判定一个 `[localdata]` 条目该不该被拒。`None` 即安全。
+///
+/// 归一化与 [`classify_legacy_dir`] 同法（按分量切、丢空段与 `.` 段），但多守两条
+/// **这里特有的致命形态**：
+///
+/// - **归一化后空分量**。`root.join("")` 得到的是 `%LOCALAPPDATA%\{app.id}` **本身**，
+///   而条目随后要被 `remove_dir_all`——用户只勾了「清除本地缓存」，整个本机数据目录连同
+///   用户状态一起消失，两个勾选各自的语义在这一步全部作废。`legacy_dirs` 里写 `"."`
+///   顶多命中内容目录判定，这里却是一步到位的数据损失。
+/// - **盘符起始**（`C:x`）。它 `is_absolute()` 为 `false`，单看 `Path` 判不出来，
+///   而 `join` 照样丢弃前缀——同一个坑 `guard_shape` 也专门堵过一次。
+pub fn classify_local_data_entry(entry: &str) -> Option<LocalDataRejection> {
+    let raw = entry.replace('\\', "/");
+    if raw.starts_with('/') || raw.chars().nth(1) == Some(':') {
+        return Some(LocalDataRejection::NotRelative);
+    }
+    let parts = local_data_parts(&raw);
+    if parts.iter().any(|p| p == "..") {
+        return Some(LocalDataRejection::EscapesLocalDir);
+    }
+    if parts.is_empty() {
+        return Some(LocalDataRejection::ResolvesToRoot);
+    }
+    None
+}
+
+/// 归一化条目为路径分量。大小写原样保留——Windows 路径不敏感，但拼出来是要给人看的。
+fn local_data_parts(raw: &str) -> Vec<String> {
+    raw.split('/')
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && *s != ".")
+        .map(str::to_string)
+        .collect()
+}
+
+/// 安全条目 → 归一化后的相对路径；不安全 → `None`。运行期清理只需要这个是非判断，
+/// 要给人看的理由走 [`classify_local_data_entry`]。
+pub fn safe_local_data_rel(entry: &str) -> Option<PathBuf> {
+    if classify_local_data_entry(entry).is_some() {
+        return None;
+    }
+    Some(local_data_parts(&entry.replace('\\', "/")).iter().collect())
+}
+
 /// 安装完成后的启动行为。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StartupInfo {
@@ -445,14 +535,6 @@ impl AppManifest {
     /// 开始菜单文件夹名，空则回退到 display_name。
     pub fn start_menu_folder(&self) -> &str {
         non_empty(&self.app.start_menu_folder).unwrap_or(&self.app.display_name)
-    }
-
-    /// 设置程序文件名去掉 .exe 后缀（进程名）。
-    pub fn setting_exe_stem(&self) -> &str {
-        self.app
-            .setting_exe
-            .strip_suffix(".exe")
-            .unwrap_or(&self.app.setting_exe)
     }
 }
 
@@ -586,6 +668,45 @@ impl AppManifest {
                     bad
                 ),
             });
+        }
+
+        // [localdata] 的两组条目：作用域根是 %LOCALAPPDATA%\{app.id}，下游动作是
+        // remove_dir_all。校验放在打包期，是因为这里错的代价不是「装不上」而是「卸载时
+        // 删到别处」——那要等真有人卸载才看得见，且看见时已经删完了。
+        if let Some(local) = &self.localdata {
+            for (field, entries) in [
+                ("cache_dirs", &local.cache_dirs),
+                ("state_files", &local.state_files),
+            ] {
+                let Some((bad, why)) = entries
+                    .iter()
+                    .find_map(|e| classify_local_data_entry(e).map(|why| (e, why)))
+                else {
+                    continue;
+                };
+                return Err(match why {
+                    LocalDataRejection::ResolvesToRoot => format!(
+                        "[localdata].{} 的条目 {:?} 归一化后指向作用域根本身：\
+                         `%LOCALAPPDATA%\\{{app.id}}.join(它)` 就是那个目录，随后的 \
+                         remove_dir_all 会把整个本机数据目录删光——包括另一组条目\
+                         对应的、用户这次并没有勾选删除的东西。请写出具体的子路径",
+                        field, bad
+                    ),
+                    LocalDataRejection::EscapesLocalDir => format!(
+                        "[localdata].{} 不接受含 `..` 的路径 {:?}：它能走出 \
+                         `%LOCALAPPDATA%\\{{app.id}}`，删到的是这一段管不着的地方。\
+                         这与写的是哪个名字无关，`logs/..` 与 `cache/..` 一样",
+                        field, bad
+                    ),
+                    LocalDataRejection::NotRelative => format!(
+                        "[localdata].{} 的条目 {:?} 不是相对路径：`join` 遇到绝对路径或\
+                         盘符会**整个替换**掉前缀，于是删除落到条目自己写的位置，而不是\
+                         `%LOCALAPPDATA%\\{{app.id}}` 之下。注意 `C:x` 这种写法 \
+                         `is_absolute()` 为 false，光看 Path 判不出来",
+                        field, bad
+                    ),
+                });
+            }
         }
         Ok(())
     }

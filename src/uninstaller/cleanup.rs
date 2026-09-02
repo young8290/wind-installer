@@ -10,7 +10,8 @@ pub struct CleanupOptions {
     pub install_dir: PathBuf,
     /// 是否清除用户配置数据（%APPDATA%\AppID）
     pub clean_roaming: bool,
-    /// 是否清除本地缓存（%LOCALAPPDATA%\AppID\cache）
+    /// 是否清除本地缓存 —— 即清单 `[localdata].cache_dirs` 声明的那几项。
+    /// 清单没声明 `[localdata]` 时本开关无事可做（向导也不会显示这个勾选）。
     pub clean_local_cache: bool,
     /// 清除用户配置数据前是否先备份到桌面（仅在 clean_roaming 时生效）
     pub backup_to_desktop: bool,
@@ -64,18 +65,24 @@ impl CleanupOptions {
     pub fn user_data_dir(&self) -> PathBuf {
         resolve_user_data_dir()
     }
+}
 
-    /// 获取本地缓存目录
-    pub fn local_cache_dir(&self) -> PathBuf {
-        let local_app_data = std::env::var("LOCALAPPDATA").unwrap_or_else(|_| {
-            let mut p = PathBuf::from(std::env::var("USERPROFILE").unwrap_or_default());
-            p.push("AppData\\Local");
-            p.to_string_lossy().to_string()
-        });
-        PathBuf::from(local_app_data)
-            .join(meta::app_id())
-            .join("cache")
-    }
+/// 本机数据目录 `%LOCALAPPDATA%\{app.id}` —— 清单 `[localdata]` 条目的作用域根。
+///
+/// 这里**不再拼死 `cache` 子目录**。哪些子路径是可重建的缓存、哪些是删了就没的状态，
+/// 属于应用的内部布局；把 `"cache"` 写进通用安装器等于假定所有应用都按这个名字放缓存，
+/// 而同一层里其余的东西（日志、本机状态标记）则一律看不见——于是卸载之后
+/// `%LOCALAPPDATA%\{app.id}` 连同里面的东西整个留下来，那正是本次要修的残留。
+///
+/// `"cache"` 长得像通用词、不像产品名，所以躲过了 `defaults_are_domain_neutral` 那条
+/// 领域中性测试。判据应当是「换一个应用它还成立吗」，而不是「它看着像不像产品名」。
+pub fn local_data_dir() -> PathBuf {
+    let local_app_data = std::env::var("LOCALAPPDATA").unwrap_or_else(|_| {
+        let mut p = PathBuf::from(std::env::var("USERPROFILE").unwrap_or_default());
+        p.push("AppData\\Local");
+        p.to_string_lossy().to_string()
+    });
+    PathBuf::from(local_app_data).join(meta::app_id())
 }
 
 // ── 用户数据目录删除守卫 ─────────────────────────────────────────────────────
@@ -263,8 +270,6 @@ pub fn cleanup_user_data(options: &CleanupOptions, user_data_dir: &Path) -> Resu
         return Ok(());
     }
 
-    let local_cache_dir = options.local_cache_dir();
-
     // 清除用户配置（删除前可选备份到桌面）
     if options.clean_roaming && user_data_dir.exists() {
         // 守卫在**备份之前**：路径可疑时连拷贝都不做——把一个非本产品的目录整份复制到
@@ -275,8 +280,8 @@ pub fn cleanup_user_data(options: &CleanupOptions, user_data_dir: &Path) -> Resu
             .map(|d| d.markers.as_slice())
             .unwrap_or(&[]);
         match guard_user_data_dir(user_data_dir, markers) {
-            // 守卫失败只跳过这一块，**不中断整个清理**——本地缓存与 WebView2 缓存
-            // 位置由我们自己算出、与这个可疑路径无关，照常清理。
+            // 守卫失败只跳过这一块，**不中断整个清理**——%LOCALAPPDATA% 那一侧的
+            // 路径由 app.id 与清单条目算出，与这个可疑路径无关，照常清理。
             Err(reason) => eprintln!(
                 "Refusing to delete user data directory: {} — 已跳过，请手动确认后自行删除",
                 reason
@@ -300,21 +305,105 @@ pub fn cleanup_user_data(options: &CleanupOptions, user_data_dir: &Path) -> Resu
         }
     }
 
-    // 清除本地缓存
-    if options.clean_local_cache && local_cache_dir.exists() {
-        if let Err(e) = std::fs::remove_dir_all(&local_cache_dir) {
-            eprintln!("Warning: Failed to remove local cache: {}", e);
+    // 清理 %LOCALAPPDATA%\{app.id}：两组条目各自跟随一个勾选，见 cleanup_local_data。
+    //
+    // 这里原先还有一句「始终清理 WebView2 缓存」，删的是 %TEMP%\{setting_exe_stem}。
+    // 那是对某个应用内部布局的硬编码猜测，且已经猜空了：它在本机根本不存在，而设置
+    // 程序也早已不带 WebView2。一段永远删不到东西的清理比没有更糟——它让「这一块已经
+    // 清过了」看起来是真的。应用自己的目录该由 [localdata] 声明，不由安装器猜。
+    cleanup_local_data(options);
+
+    Ok(())
+}
+
+/// 清理 `%LOCALAPPDATA%\{app.id}` 下由**应用运行期**创建的东西。
+///
+/// 安装器自己往那里写的只有 `[datadir].conf_file`，它有回执、已在 `UndoReceipt`
+/// 里删掉了（那一步排在本步之前）。剩下的缓存、日志、本机状态回执里没有，安装器也
+/// 猜不出名字，只能由清单 `[localdata]` 声明——**整段缺省即完全跳过**。
+///
+/// 两组条目跟随**两个不同的勾选**：`cache_dirs` 跟「清除本地缓存」，`state_files`
+/// 跟「删除用户数据」。这是本函数存在的理由——把它们合成一个开关，用户只勾了清缓存
+/// 就会连状态一起丢，而他明确没勾另一个。
+fn cleanup_local_data(options: &CleanupOptions) {
+    remove_local_data_entries(meta::localdata(), &local_data_dir(), options);
+}
+
+/// 真正动手的那一半：清单与作用域根都由调用方注入。
+///
+/// 拆出来是为了能对着一棵临时目录树断言——这是本次改动里唯一会**删除**东西的新路径，
+/// 而它的三条契约（缺省一动不动、两个门控各管一组、空了才收目录）读代码都像是对的，
+/// 只有真的建一棵树、删一遍、再看剩下什么，才分得清「写对了」和「看着像写对了」。
+fn remove_local_data_entries(
+    info: Option<&crate::manifest::LocalDataInfo>,
+    root: &Path,
+    options: &CleanupOptions,
+) {
+    // 清单没声明 [localdata] = 这个目录不归安装器管，一个字节都不碰（AGENTS.md 规则 2）。
+    let Some(info) = info else {
+        return;
+    };
+    if !root.exists() {
+        return;
+    }
+
+    for entry in entries_to_remove(info, options) {
+        // 打包期 `AppManifest::validate` 已经拦过一遍；这里是运行期兜底——归档里的
+        // 清单未必出自本机的打包器。拒绝的代价只是少删一项，放行的代价是
+        // remove_dir_all 落到 %LOCALAPPDATA% 之外。
+        match crate::manifest::safe_local_data_rel(entry) {
+            None => eprintln!("Warning: 跳过不安全的 [localdata] 条目 {:?}", entry),
+            Some(rel) => remove_path(&root.join(rel)),
         }
     }
 
-    // 始终清理 WebView2 缓存
-    let temp_dir = std::env::temp_dir();
-    let setting_cache = temp_dir.join(meta::setting_exe_stem());
-    if setting_cache.exists() {
-        let _ = std::fs::remove_dir_all(&setting_cache);
+    // 目录空了才连它一起收掉。`remove_dir` 对非空目录直接失败，故「空」这个前提由 OS
+    // 在删除的同一步里保证；先 read_dir 判一遍再删的话，中间那个窗口足够应用写回一个
+    // 文件，删掉的就成了「刚才是空的」。这也顺带覆盖了「用户两个勾选都勾了」的常规
+    // 路径——否则一个空目录会永远留在 %LOCALAPPDATA% 里。
+    if info.remove_dir_when_empty {
+        let _ = std::fs::remove_dir(root);
     }
+}
 
-    Ok(())
+/// 本次要删的条目（相对作用域根），按两个勾选各自的门控筛出。
+///
+/// 抽成纯函数是为了能单测：「哪一组跟哪个勾选」是这段逻辑里唯一会出错、且出错后果
+/// 不可逆的地方（把 `state_files` 接到缓存勾选上，用户只想清缓存却丢了状态），而它
+/// 一旦接错，在界面上、在日志里、在任何一次成功的卸载里都看不出来——只有对着两个
+/// 勾选的四种组合逐个断言才抓得住。
+fn entries_to_remove<'a>(
+    info: &'a crate::manifest::LocalDataInfo,
+    options: &CleanupOptions,
+) -> Vec<&'a String> {
+    let mut out = Vec::new();
+    if options.clean_local_cache {
+        out.extend(info.cache_dirs.iter());
+    }
+    if options.clean_roaming {
+        out.extend(info.state_files.iter());
+    }
+    out
+}
+
+/// 删一个条目，不区分文件还是目录——清单作者写 `logs` 时想的是「那一坨日志」，
+/// 不该要求他先知道它在磁盘上是目录才写得对。
+fn remove_path(path: &Path) {
+    // 用 symlink_metadata 而非 `is_dir()`：后者跟随重解析点，遇到 junction 会递归进
+    // 目标目录把**目标**删掉（本仓在 util::reboot 的递归排队里踩过同一个坑）。
+    let Ok(meta) = std::fs::symlink_metadata(path) else {
+        return; // 不存在：本就没什么可删
+    };
+    let r = if meta.file_type().is_dir() {
+        std::fs::remove_dir_all(path)
+    } else {
+        // 普通文件，或指向目录的 junction/符号链接——后者 remove_file 会拒绝访问，
+        // 而 remove_dir 能把链接本身摘掉且不碰目标。
+        std::fs::remove_file(path).or_else(|_| std::fs::remove_dir(path))
+    };
+    if let Err(e) = r {
+        eprintln!("Warning: 删除 {} 失败: {}", path.display(), e);
+    }
 }
 
 /// 当前用户桌面目录（%USERPROFILE%\Desktop）
@@ -437,6 +526,157 @@ mod guard_tests {
         let dir = tmpdir("markers_empty");
         assert!(guard_markers(&dir, &["config.toml".to_string()]).is_ok());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── [localdata] 两组条目各自的门控 ───────────────────────────────────────
+    //
+    // 四种勾选组合逐个断言。只测「都勾」会让一条接错的线照样通过：两组都进结果时，
+    // 无论 state_files 挂在哪个开关上，结果都一样。
+
+    fn localdata() -> crate::manifest::LocalDataInfo {
+        crate::manifest::LocalDataInfo {
+            cache_dirs: vec!["cache".into(), "logs".into()],
+            state_files: vec!["state.toml".into()],
+            remove_dir_when_empty: true,
+        }
+    }
+
+    // 逐字段构造，不走 `..Default::default()`：`CleanupOptions::default()` 会读
+    // `meta::app_id()`，而那是个未初始化就 panic 的全局 OnceLock——单测里没有清单。
+    fn opts(cache: bool, roaming: bool) -> CleanupOptions {
+        CleanupOptions {
+            install_dir: PathBuf::from(r"C:\Program Files\Demo"),
+            clean_local_cache: cache,
+            clean_roaming: roaming,
+            backup_to_desktop: false,
+            keep_user_data: false,
+        }
+    }
+
+    /// 只勾「清除本地缓存」时**绝不能**碰 state_files——用户明确没勾另一个，
+    /// 而那一组删了就没了。这是本模块最不能错的一条。
+    #[test]
+    fn cache_checkbox_never_touches_state_files() {
+        let info = localdata();
+        let got = entries_to_remove(&info, &opts(true, false));
+        assert_eq!(got, vec!["cache", "logs"]);
+    }
+
+    /// 反向同理：只勾「删除用户数据」不该顺手清缓存。缓存删了无害，但界面上没说要删。
+    #[test]
+    fn user_data_checkbox_only_takes_state_files() {
+        let info = localdata();
+        let got = entries_to_remove(&info, &opts(false, true));
+        assert_eq!(got, vec!["state.toml"]);
+    }
+
+    #[test]
+    fn both_unchecked_removes_nothing() {
+        let info = localdata();
+        assert!(entries_to_remove(&info, &opts(false, false)).is_empty());
+    }
+
+    #[test]
+    fn both_checked_takes_every_entry() {
+        let info = localdata();
+        let got = entries_to_remove(&info, &opts(true, true));
+        assert_eq!(got, vec!["cache", "logs", "state.toml"]);
+    }
+
+    // ── 真正落地的删除：对着临时目录树验收 ───────────────────────────────────
+
+    /// 建一棵典型的本机数据树：cache/ 与 logs/ 是缓存，state.toml 是状态。
+    fn local_tree(tag: &str) -> PathBuf {
+        let root = tmpdir(tag);
+        for d in ["cache", "logs"] {
+            std::fs::create_dir_all(root.join(d)).unwrap();
+            std::fs::write(root.join(d).join("x.bin"), b"x").unwrap();
+        }
+        std::fs::write(root.join("state.toml"), b"pos=1").unwrap();
+        root
+    }
+
+    /// **缺省一动不动**（AGENTS.md 规则 2）。清单没声明 [localdata] 时，即便两个勾选
+    /// 都勾上、目录就在那里，也一个字节都不能碰——这个目录不归安装器管。
+    #[test]
+    fn absent_localdata_touches_nothing() {
+        let root = local_tree("absent");
+        remove_local_data_entries(None, &root, &opts(true, true));
+        assert!(root.join("cache").exists(), "缺省时不该删缓存");
+        assert!(root.join("state.toml").exists(), "缺省时不该删状态");
+        assert!(root.exists(), "缺省时连目录本身也不该收");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 只勾「清除本地缓存」：缓存那几项落地消失，状态**必须还在盘上**。
+    /// 门控测试只证明了筛选结果，这一条证明的是「筛完之后删的确实是它们」。
+    #[test]
+    fn cache_gate_leaves_state_files_on_disk() {
+        let root = local_tree("cache_only");
+        remove_local_data_entries(Some(&localdata()), &root, &opts(true, false));
+        assert!(!root.join("cache").exists(), "缓存该被删掉");
+        assert!(
+            !root.join("logs").exists(),
+            "日志也在 cache_dirs 里，该被删掉"
+        );
+        assert!(
+            root.join("state.toml").exists(),
+            "用户没勾「删除用户数据」，状态文件必须留下"
+        );
+        // 还有东西在，remove_dir 会失败，目录因此保留——这正是非递归 remove_dir 的用意。
+        assert!(root.exists(), "目录非空时不该被收掉");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 两个都勾且树被清空 → 目录本身一并收掉。这是「卸载后留一个空目录」那个残留的收口。
+    #[test]
+    fn empty_root_is_removed_after_both_gates() {
+        let root = local_tree("both");
+        remove_local_data_entries(Some(&localdata()), &root, &opts(true, true));
+        assert!(!root.exists(), "清空后目录本身也该没了");
+    }
+
+    /// 目录里还有清单没列到的东西时，绝不能顺手删掉整个目录。`remove_dir` 对非空目录
+    /// 直接失败，这条契约由 OS 保证——测试钉的是「我们没有绕过它去 remove_dir_all」。
+    #[test]
+    fn unlisted_leftovers_keep_the_dir_alive() {
+        let root = local_tree("leftover");
+        std::fs::write(root.join("something_else.dat"), b"user").unwrap();
+        remove_local_data_entries(Some(&localdata()), &root, &opts(true, true));
+        assert!(root.exists(), "还有没列到的文件时不能收掉目录");
+        assert!(
+            root.join("something_else.dat").exists(),
+            "没被声明的东西一律不动"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 运行期兜底：归档里的清单未必出自本机的打包器，故守卫要在删之前再跑一次。
+    /// 用 `..` 逃出作用域根去删兄弟目录——放行的话删的就是 %LOCALAPPDATA% 下的别人。
+    #[test]
+    fn unsafe_entries_are_skipped_at_runtime() {
+        let root = local_tree("unsafe");
+        let sibling = root.parent().unwrap().join("wind_guard_sibling_victim");
+        let _ = std::fs::remove_dir_all(&sibling);
+        std::fs::create_dir_all(&sibling).unwrap();
+        std::fs::write(sibling.join("keep.txt"), b"keep").unwrap();
+
+        let evil = crate::manifest::LocalDataInfo {
+            cache_dirs: vec![
+                "../wind_guard_sibling_victim".into(),
+                ".".into(),
+                "C:x".into(),
+            ],
+            state_files: vec![],
+            remove_dir_when_empty: false,
+        };
+        remove_local_data_entries(Some(&evil), &root, &opts(true, false));
+
+        assert!(sibling.join("keep.txt").exists(), "`..` 条目必须被拒");
+        assert!(root.join("cache").exists(), "`.` 条目被放行就会删光整个根");
+        assert!(root.exists());
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&sibling);
     }
 
     fn tmpdir(tag: &str) -> PathBuf {

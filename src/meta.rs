@@ -12,7 +12,7 @@
 
 use std::sync::OnceLock;
 
-use crate::manifest::AppManifest;
+use crate::manifest::{AppManifest, LocalDataInfo};
 
 static MANIFEST: OnceLock<AppManifest> = OnceLock::new();
 static LOGO: OnceLock<Vec<u8>> = OnceLock::new();
@@ -92,9 +92,6 @@ pub fn portable_marker() -> &'static str {
 pub fn start_menu_folder() -> &'static str {
     manifest().start_menu_folder()
 }
-pub fn setting_exe_stem() -> &'static str {
-    manifest().setting_exe_stem()
-}
 
 /// 向导窗口标题：清单留空则回退到 "<display_name> 安装向导"。
 pub fn window_title() -> String {
@@ -119,6 +116,14 @@ pub fn legacy_files() -> &'static [String] {
 }
 pub fn legacy_dirs() -> &'static [String] {
     &manifest().app.legacy_dirs
+}
+
+/// 本机数据目录（`%LOCALAPPDATA%\{app.id}`）的卸载清理声明。
+///
+/// `None` = 清单没声明 `[localdata]` 段 = 卸载完全不碰那个目录。调用方据此决定
+/// 是否连「清除本地缓存」这个勾选都不显示——勾了什么也不做的复选框比没有更糟。
+pub fn localdata() -> Option<&'static LocalDataInfo> {
+    manifest().localdata.as_ref()
 }
 
 // ── 默认路径模板（`{id}` 替换为 app.id；`%VAR%` 由向导展开）──────────────────
