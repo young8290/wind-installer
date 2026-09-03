@@ -1,8 +1,14 @@
 name: Release
 
 # 触发:
-#   - push tag v*        → 构建全部产物 + SHA256SUMS，创建 Release
-#   - workflow_dispatch  → 只产出 artifact 供人工核对，不创建 Release
+#   - push tag v*                       → 只构建全部产物 + SHA256SUMS，不创建 Release
+#   - workflow_dispatch (publish=true)  → 额外创建 Release（需手动勾选，是"主动 release"的唯一入口）
+#   - workflow_dispatch (publish=false) → 同 push tag，只产出 artifact 供人工核对
+#
+# 本项目当前主要以源码方式被其它项目集成，打 tag 只是标版本，不代表要发二进制 Release；
+# 是否发布交给人工判断，故 release job 不再随 tag push 自动触发。
+# 手动触发时可在 "Use workflow from" 选择目标 tag 作为 ref，若不方便选 ref，
+# 也可以直接填 tag 输入项显式指定要发布的 tag。
 #
 # 产出的二进制供 WindInput 仓的打包流水线消费:
 #   dev.ps1（Windows 本机/CI）  需要 stub + uninstaller + packer(.exe)
@@ -15,6 +21,15 @@ on:
   push:
     tags: ['v*']
   workflow_dispatch:
+    inputs:
+      publish:
+        description: '创建 GitHub Release（默认只构建产物，不发布）'
+        type: boolean
+        default: false
+      tag:
+        description: '要发布的 tag（留空则用当前触发所在的 ref）'
+        type: string
+        default: ''
 
 permissions:
   contents: write     # 创建 Release
@@ -83,7 +98,9 @@ jobs:
 
   release:
     needs: [windows, linux]
-    if: startsWith(github.ref, 'refs/tags/v')
+    # 唯一的发布入口：只有手动触发且显式勾选 publish 才会创建 Release。
+    # push tag 本身不再触发这个 job——tag 只是打版本号，不代表要发布二进制。
+    if: github.event_name == 'workflow_dispatch' && inputs.publish
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -104,9 +121,11 @@ jobs:
       - name: 创建 Release
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG_INPUT: ${{ inputs.tag }}
         run: |
-          gh release create "${GITHUB_REF_NAME}" \
+          TAG="${TAG_INPUT:-${GITHUB_REF_NAME}}"
+          gh release create "${TAG}" \
             --repo "${GITHUB_REPOSITORY}" \
-            --title "${GITHUB_REF_NAME}" \
+            --title "${TAG}" \
             --generate-notes \
             dist/*
