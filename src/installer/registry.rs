@@ -240,6 +240,25 @@ pub fn set_installer_running() -> Result<(), String> {
     Ok(())
 }
 
+/// 写入安装目录，供产品自身回指。
+///
+/// 仅在清单配了 `[ime] system_subdir`（TSF DLL 部署到系统目录）时需要：DLL 搬离安装
+/// 目录后，`GetModuleFileName` 只能取到系统副本路径，产品进程再也推不出安装目录在哪。
+/// 读端在应用侧，不在本仓。
+///
+/// 不单独记回执——`Software\{app_id}` 整个键在卸载时由 [`remove_app_key`] 删除。
+pub fn set_install_dir(install_dir: &Path) -> Result<(), String> {
+    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+    let (key, _) = hklm
+        .create_subkey(format!("Software\\{}", meta::app_id()))
+        .map_err(|e| format!("Failed to create app key: {}", e))?;
+
+    key.set_value("InstallDir", &install_dir.to_string_lossy().to_string())
+        .map_err(|e| format!("Failed to set InstallDir: {}", e))?;
+
+    Ok(())
+}
+
 /// 清除安装器运行标记
 pub fn clear_installer_running() -> Result<(), String> {
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);

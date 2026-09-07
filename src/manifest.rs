@@ -238,6 +238,20 @@ pub struct ImeInfo {
     /// 时才启用。清扫严格按本段 clsid/profile 变体隔离，且只删悬空项，不碰健康注册。
     #[serde(default)]
     pub sweep_residue: bool,
+    /// TSF DLL 的系统目录子路径（如 `"IME/MyIme"`），缺省空。
+    ///
+    /// 空 → 就地注册：对安装目录里的 DLL 跑 regsvr32，`InprocServer32` 指向安装目录。
+    /// 非空 → 把 DLL 复制到 `%WINDIR%\System32\<此路径>\`（x86 到 `SysWOW64\<此路径>\`）
+    /// 并对**系统副本**注册；`DllRegisterServer` 内的 `GetModuleFileName` 取到系统副本
+    /// 路径，`InprocServer32` 自然指向它。
+    ///
+    /// 何时需要：开启 Trusted Mode 的游戏只放行系统目录下的 in-proc DLL，装在
+    /// `Program Files` 的副本连加载都会被拒。该判据同时要求 DLL 已代码签名。
+    ///
+    /// ⚠️ 置了本项，安装器会一并写 `HKLM\Software\{app_id}\InstallDir`——DLL 搬离安装
+    /// 目录后，产品进程只能靠它回指安装目录。
+    #[serde(default)]
+    pub system_subdir: String,
 }
 
 /// 字体安装信息。

@@ -80,6 +80,18 @@ dll_x86      = "demo_tsf_x86.dll"         # 留空则跳过 32 位注册
 # 缺省 false（通用安装器不擅自改注册表）；确有此历史包袱的产品才显式置 true。
 # 只删悬空项，且严格按本段 GUID 隔离——不同 GUID 变体的安装包互不干扰。
 sweep_residue = false
+# TSF DLL 的系统目录子路径。缺省空 = 就地注册（DLL 留在安装目录），普通输入法够用。
+# 置为形如 "IME/MyIme" 后，安装器把 DLL 复制到 %WINDIR%\System32\IME\MyIme\
+# （x86 到 SysWOW64\IME\MyIme\）并对系统副本 regsvr32，InprocServer32 随之指向系统副本。
+#
+# 何时需要：开启 Trusted Mode 的游戏只放行系统目录下的 in-proc DLL，装在 Program Files
+# 的副本连加载都会被拒。该判据同时要求 DLL 已代码签名，两个条件缺一不可。
+#
+# ⚠️ 置了本项，安装器会一并写 HKLM\Software\<[app] id> 的 InstallDir——DLL 搬离安装目录
+#    后，你的产品进程只能靠它回指安装目录（定位自己的 exe、配置、便携标记等）。
+#    卸载时随该键整键删除，无需额外处理。
+# ⚠️ 不接受 ".." 与盘符段，非法值按未配置处理（就地注册）。
+system_subdir = ""
 
 # ── 字体安装：可多条，缺省即跳过。普通应用通常删除本段 ─────────────────────
 [[font]]

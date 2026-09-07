@@ -6,6 +6,7 @@ use windows::core::s;
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
 
 use super::acl;
+use super::registry;
 use crate::manifest::ImeInfo;
 use crate::meta;
 use crate::util::reboot;
@@ -48,9 +49,19 @@ pub fn register_com(install_dir: &Path) -> ComRegistration {
         return out;
     };
 
+    // 安装目录回指。只有系统目录部署才需要——就地注册时 DLL 自己的位置就是安装目录，
+    // 应用侧回退到模块路径即可。必须写在 regsvr32 之前：注册一旦完成，宿主进程可能
+    // 立刻加载 DLL，那一刻键还不存在就会白走一次「拉起服务」。
+    // 写失败只计入 errors，不中断注册：回指缺失会让服务拉不起来，但输入法本身仍可用。
+    if system_deploy_path(ime, &ime.dll_x64, false).is_some() {
+        if let Err(e) = registry::set_install_dir(install_dir) {
+            out.errors.push(e);
+        }
+    }
+
     let x64 = install_dir.join(&ime.dll_x64);
     if x64.exists() {
-        let target = system_deploy_path(&ime.dll_x64, false);
+        let target = system_deploy_path(ime, &ime.dll_x64, false).unwrap_or_else(|| x64.clone());
         match deploy_and_register(&x64, &target, false) {
             Ok(()) => out.registered.push((target, false)),
             Err(e) => out.errors.push(e),
@@ -60,7 +71,7 @@ pub fn register_com(install_dir: &Path) -> ComRegistration {
     if !ime.dll_x86.is_empty() {
         let x86 = install_dir.join(&ime.dll_x86);
         if x86.exists() {
-            let target = system_deploy_path(&ime.dll_x86, true);
+            let target = system_deploy_path(ime, &ime.dll_x86, true).unwrap_or_else(|| x86.clone());
             match deploy_and_register(&x86, &target, true) {
                 Ok(()) => out.registered.push((target, true)),
                 Err(e) => out.errors.push(e),
@@ -76,16 +87,53 @@ pub fn register_com(install_dir: &Path) -> ComRegistration {
 /// 授权放在注册前：走到注册这一步产物才算「做成」并进回执；顺序反过来的话，注册
 /// 成功而授权失败会让这条从回执里丢失，卸载时就撤销不掉已成立的注册。
 fn deploy_and_register(src: &Path, target: &Path, wow64: bool) -> Result<(), String> {
-    copy_to_system_dir(src, target)?;
+    // 就地注册时 src == target，不必自我复制（自我复制在 Windows 上会失败）。
+    if src != target {
+        copy_to_system_dir(src, target)?;
+    }
     acl::grant_app_packages_rx(target)?;
     run_regsvr32(target, wow64, false)
 }
 
-/// 系统目录部署位置：x64 → System32，x86 → SysWOW64，文件名取自清单。
-fn system_deploy_path(file_name: &str, wow64: bool) -> PathBuf {
+/// 把清单的 `system_subdir` 拆成路径段，顺带挡住穿越。
+///
+/// 清单是打包器的输入，不是用户输入，但它最终决定往 `%WINDIR%` 下写什么位置——
+/// 一个 `../../` 就能把 DLL 投到系统任意目录，代价太大而校验极便宜。
+/// 显式拒绝：`..`（上行）、含 `:` 的段（`C:`、`C:name` 这种盘符相对路径）。
+/// 全部段为空（如 `"/"`、`"."`）视同未配置。
+fn subdir_segments(subdir: &str) -> Option<Vec<&str>> {
+    let mut segs = Vec::new();
+    for seg in subdir.split(['/', '\\']) {
+        if seg.is_empty() || seg == "." {
+            continue;
+        }
+        if seg == ".." || seg.contains(':') {
+            return None;
+        }
+        segs.push(seg);
+    }
+    (!segs.is_empty()).then_some(segs)
+}
+
+/// 系统目录部署位置：x64 → `System32\<subdir>\`，x86 → `SysWOW64\<subdir>\`，
+/// 文件名取自清单。
+///
+/// 清单没配 `system_subdir`（或配了非法值）时返回 `None`，调用方据此走「就地注册」——
+/// 通用安装器的原有行为，不因本能力的加入而改变。
+///
+/// ⚠️ 32 位差异：本进程是 64 位（安装器只发 x64），故 `System32`/`SysWOW64` 都是字面
+/// 直达。若将来出 32 位安装器，`System32` 会被 WOW64 文件系统重定向到 `SysWOW64`，
+/// x64 DLL 会被静默装错地方——那时必须改用 `Sysnative` 或临时关闭重定向。
+fn system_deploy_path(ime: &ImeInfo, file_name: &str, wow64: bool) -> Option<PathBuf> {
+    let segs = subdir_segments(&ime.system_subdir)?;
     let windir = std::env::var("WINDIR").unwrap_or_else(|_| r"C:\Windows".to_string());
-    let sub = if wow64 { "SysWOW64" } else { "System32" };
-    Path::new(&windir).join(sub).join(file_name)
+    let root = if wow64 { "SysWOW64" } else { "System32" };
+
+    let mut path = Path::new(&windir).join(root);
+    for seg in segs {
+        path.push(seg);
+    }
+    Some(path.join(file_name))
 }
 
 /// 复制 DLL 到系统目录，覆盖旧副本（升级时安装目录与系统目录都可能已有旧版本）。
@@ -94,6 +142,12 @@ fn system_deploy_path(file_name: &str, wow64: bool) -> PathBuf {
 /// 改名让路 + 排重启删除，再重试复制——与解压让路是同一套路。删不掉的事实经 `reboot`
 /// 账本记账，否则「需要重启」的结论会漏判。
 fn copy_to_system_dir(src: &Path, dst: &Path) -> Result<(), String> {
+    // 目标在 System32\<subdir>\ 这样的子目录里，首次安装时它还不存在。
+    if let Some(parent) = dst.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("创建系统目录 {:?} 失败: {}", parent, e))?;
+    }
+
     match std::fs::copy(src, dst) {
         Ok(_) => Ok(()),
         Err(e) => {
@@ -108,11 +162,34 @@ fn copy_to_system_dir(src: &Path, dst: &Path) -> Result<(), String> {
     }
 }
 
+/// 目录是否就是 `%WINDIR%\System32` / `SysWOW64` 本身（而非其下的自建子目录）。
+///
+/// 收空目录时的安全闸：`system_subdir` 若解析成空，父目录就正好落在系统根目录上，
+/// 那是绝不能删的。取不到名字时一律按「是系统根」处理——宁可漏删一个空目录。
+fn is_system_root_dir(dir: &Path) -> bool {
+    dir.file_name()
+        .and_then(|n| n.to_str())
+        .map(|n| n.eq_ignore_ascii_case("System32") || n.eq_ignore_ascii_case("SysWOW64"))
+        .unwrap_or(true)
+}
+
 /// 删除系统目录里的 DLL 副本。仍被加载删不掉时改名让路 + 排重启删（记账），
 /// 保证卸载/升级后系统目录不滞留旧副本，且「需要重启」不漏判。
+///
+/// 副本位于自建子目录（`System32\<subdir>\`）时，删完文件顺带收掉那个目录，
+/// 否则卸载后系统目录里会留一个空壳。`remove_dir` 只删空目录、非空即失败，
+/// 正是需要的语义（同产品的另一架构副本还在时不会被误删），故不必先判空。
 fn remove_system_copy(path: &Path) {
     if path.exists() && std::fs::remove_file(path).is_err() {
         let _ = reboot::schedule_delete_on_reboot(&reboot::stash_aside(path));
+        // 文件都没删成，目录必然非空，收目录这一步没有意义。
+        return;
+    }
+
+    if let Some(parent) = path.parent() {
+        if !is_system_root_dir(parent) {
+            let _ = std::fs::remove_dir(parent);
+        }
     }
 }
 
@@ -157,20 +234,30 @@ fn run_regsvr32(dll: &Path, wow64: bool, unregister: bool) -> Result<(), String>
 /// 只认系统副本——`InprocServer32` 指向的是上次 regsvr32 实际加载的那份 DLL，即系统
 /// 副本（见 [`register_com`]）；安装目录旧副本不再用于反注册，它由解压正向覆盖。
 /// 尽力而为、不报错：个别失败留给随后的注册覆盖与残留清扫兜底。
-pub fn unregister_old_com(_install_dir: &Path) -> Result<(), String> {
+pub fn unregister_old_com(install_dir: &Path) -> Result<(), String> {
     let Some(ime) = ime_cfg() else {
         return Ok(());
     };
 
-    let x64 = system_deploy_path(&ime.dll_x64, false);
-    if x64.exists() && run_regsvr32(&x64, false, true).is_ok() {
-        remove_system_copy(&x64);
-    }
+    for (name, wow64) in [(&ime.dll_x64, false), (&ime.dll_x86, true)] {
+        if name.is_empty() {
+            continue;
+        }
 
-    if !ime.dll_x86.is_empty() {
-        let x86 = system_deploy_path(&ime.dll_x86, true);
-        if x86.exists() && run_regsvr32(&x86, true, true).is_ok() {
-            remove_system_copy(&x86);
+        // 系统副本：反注册后连文件一起删——它不在安装目录里、`DeleteInstallFiles`
+        // 够不着，且旧映像留着会挡住随后的复制。
+        if let Some(sys) = system_deploy_path(ime, name, wow64) {
+            if sys.exists() && run_regsvr32(&sys, wow64, true).is_ok() {
+                remove_system_copy(&sys);
+            }
+        }
+
+        // 安装目录副本：兜住「上一版是就地注册、这一版改系统目录」的升级路径，
+        // 不然那条 CLSID 会滞留并指向一个随后被覆盖的文件。
+        // 只反注册、不删文件——解压会正向覆盖它，删了反而可能连带收掉安装目录。
+        let local = install_dir.join(name);
+        if local.exists() {
+            let _ = run_regsvr32(&local, wow64, true);
         }
     }
 
