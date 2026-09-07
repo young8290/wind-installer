@@ -402,3 +402,170 @@ fn bundle_exe_with_empty_stub_reads_identically_to_plain_archive() {
     let extracted = std::fs::read(out_dir.join("f.txt")).unwrap();
     assert_eq!(&extracted, content);
 }
+
+// ── Authenticode 共存回归 ────────────────────────────────────────────────────
+
+/// 构造一个「头部合法、其余填充」的最小 PE，用作可被 `sign_in_place` 加签的假 stub。
+///
+/// 只铺到能让 `archive_end` 走完解析所需的字段：DOS 头的 e_lfanew、PE 签名、
+/// Optional Header 的 Magic 与 NumberOfRvaAndSizes、以及第 5 个数据目录项
+/// （IMAGE_DIRECTORY_ENTRY_SECURITY）。其余字节是填充，不参与本测试的判据。
+fn fake_pe_stub(size: usize) -> Vec<u8> {
+    const PE_OFF: usize = 0x80;
+    let opt_off = PE_OFF + 24; // PE 签名(4) + COFF 头(20)
+    let dd_off = opt_off + 112; // PE32+ 的数据目录起点
+    assert!(size > dd_off + 16 * 8, "stub 太小，放不下数据目录");
+
+    let mut b: Vec<u8> = (0u8..=255).cycle().take(size).collect();
+    b[0..2].copy_from_slice(b"MZ");
+    b[0x3C..0x40].copy_from_slice(&(PE_OFF as u32).to_le_bytes());
+    b[PE_OFF..PE_OFF + 4].copy_from_slice(&[b'P', b'E', 0, 0]);
+    b[opt_off..opt_off + 2].copy_from_slice(&0x20Bu16.to_le_bytes()); // PE32+
+    b[dd_off - 4..dd_off].copy_from_slice(&16u32.to_le_bytes()); // NumberOfRvaAndSizes
+                                                                 // Security 目录项（索引 4）先置零 = 未签名
+    b[dd_off + 32..dd_off + 40].copy_from_slice(&[0u8; 8]);
+    b
+}
+
+/// 模拟 signtool：把证书表追加到 PE 物理末尾，并把它的**文件偏移**与长度写进
+/// IMAGE_DIRECTORY_ENTRY_SECURITY。返回归档末尾（= 补齐填充之前的文件长度）。
+///
+/// ⚠️ 必须复现 **8 字节对齐填充**：证书表要求 8 字节对齐，signtool 会先把原文件补齐
+/// 到边界再追加。省掉这一步的话，测试只覆盖「原大小恰为 8 的倍数」这七分之一情形，
+/// 通过了也说明不了什么 —— 本仓真实的 Setup.exe 就是补了 7 字节，而当时全绿的测试
+/// 一个都没拦住（21997457 % 8 == 1）。
+fn sign_in_place(path: &Path, cert_size: usize) -> u64 {
+    let mut b = std::fs::read(path).expect("读取待签文件失败");
+    let archive_end = b.len() as u64;
+
+    // 对齐填充：原文件末尾补 0..=7 字节，让证书表落在 8 字节边界上
+    let pad = (8 - (b.len() % 8)) % 8;
+    b.extend(std::iter::repeat_n(0u8, pad));
+    let cert_off = b.len() as u32;
+
+    let pe_off = u32::from_le_bytes(b[0x3C..0x40].try_into().unwrap()) as usize;
+    let dd_off = pe_off + 24 + 112;
+    let sec = dd_off + 32;
+    b[sec..sec + 4].copy_from_slice(&cert_off.to_le_bytes());
+    b[sec + 4..sec + 8].copy_from_slice(&(cert_size as u32).to_le_bytes());
+
+    b.extend(std::iter::repeat_n(0xC7u8, cert_size)); // 假证书表内容，不参与判据
+    std::fs::write(path, &b).expect("写回已签文件失败");
+    archive_end
+}
+
+/// 核心回归测试：**签名后的安装包仍能解包**。
+///
+/// Authenticode 把证书表追加在 PE 末尾，Footer 因此不再位于文件尾部。修复前
+/// `ArchiveReader::open` 从物理末尾往回读 16 字节，读到的是证书表尾巴，
+/// magic 校验直接失败 —— 表现为「安装包一签名就报 Invalid footer magic」。
+///
+/// 实测佐证（自签名证书 + signtool /fd SHA256）：
+///   签名前 size=1195024，末 16 字节 = ...57494e44454e4400 ("WINDEND\0")
+///   签名后 size=1196440，末 16 字节 = 39dbc8839121f206... (证书表数据)
+/// 逐个走完 8 种对齐余数。**必须遍历**：只测一种的话有 7/8 的概率恰好落在
+/// 「原大小已是 8 的倍数、无需填充」这条最简单的路径上而全绿，真包照样打不开。
+#[test]
+fn signed_installer_still_extractable() {
+    let content_a = vec![0xAAu8; 4096];
+    let content_b = b"hello from file B".as_slice();
+
+    for k in 0..8usize {
+        let dir = TempDir::new(&format!("signed{}", k));
+        let archive = pack(
+            &dir,
+            "data.bin",
+            &[("a.dat", &content_a), ("b.txt", content_b)],
+            CompressionType::Zstd,
+        );
+        // 逐字节加长 stub，把归档末尾推过 8 种对齐余数
+        let stub_path = dir.write_file("stub.exe", &fake_pe_stub(8192 + k));
+        let installer = dir.path().join("installer.exe");
+        archive::bundle_exe(&stub_path, &archive, &installer).expect("bundle_exe 应成功");
+
+        // 签名前先确认这份包本来是好的，免得测试在「本就打不开」上假绿
+        extract_all_to(&installer, &dir.path().join("out_unsigned"));
+
+        let archive_end = sign_in_place(&installer, 1416);
+        let signed_len = std::fs::metadata(&installer).unwrap().len();
+        assert!(signed_len > archive_end, "签名应当让文件变长 (k={})", k);
+
+        let out_dir = dir.path().join("out_signed");
+        extract_all_to(&installer, &out_dir);
+        assert_eq!(
+            std::fs::read(out_dir.join("a.dat")).expect("读取 a.dat 失败"),
+            content_a,
+            "签名后 a.dat 内容不一致 (对齐余数 k={}, 填充 {} 字节)",
+            k,
+            (8 - (archive_end % 8)) % 8
+        );
+        assert_eq!(
+            std::fs::read(out_dir.join("b.txt")).expect("读取 b.txt 失败"),
+            content_b,
+            "签名后 b.txt 内容不一致 (k={})",
+            k
+        );
+    }
+}
+
+/// 清单/logo 走的是同一条 Footer→Header 寻址路径，签名后同样必须读得出来
+/// （卸载器 UI 的品牌信息全靠它）。
+#[test]
+fn signed_installer_still_exposes_manifest_and_logo() {
+    let dir = TempDir::new("signed_meta");
+    let manifest = b"[app]\nname = \"WindInput\"\n".as_slice();
+    let logo = vec![0x89u8; 512];
+
+    let archive_path = dir.path().join("meta.bin");
+    let mut writer =
+        ArchiveWriter::new(&archive_path, CompressionType::Zstd).expect("创建 writer 失败");
+    writer.set_manifest(manifest.to_vec(), logo.clone());
+    let src = dir.write_file("f.txt", b"x");
+    writer.add_file(&src, "f.txt").expect("add_file 失败");
+    writer.finish().expect("finish 失败");
+
+    let stub_path = dir.write_file("stub.exe", &fake_pe_stub(8192));
+    let installer = dir.path().join("installer.exe");
+    archive::bundle_exe(&stub_path, &archive_path, &installer).unwrap();
+    sign_in_place(&installer, 2048);
+
+    let reader = ArchiveReader::open(&installer).expect("签名后应仍能打开归档");
+    assert_eq!(reader.header().manifest, manifest, "签名后清单字节不一致");
+    assert_eq!(reader.header().logo, logo, "签名后 logo 字节不一致");
+}
+
+/// 反向判据：Security 目录项存在、但证书表没有恰好占满文件尾部（offset+size != 文件长度）
+/// 时，必须回落到物理末尾，而不是拿这个不自洽的偏移去读 Footer。
+///
+/// 这一支保护的是「未签名的正常包」：某些 PE 的 Security 项残留非零值，若无条件相信它，
+/// 本来好好的安装包反而会被读坏。
+#[test]
+fn inconsistent_security_directory_falls_back_to_physical_end() {
+    let dir = TempDir::new("bad_secdir");
+    let content = b"payload stays readable".as_slice();
+    let archive = pack(
+        &dir,
+        "data.bin",
+        &[("c.txt", content)],
+        CompressionType::Zstd,
+    );
+    let stub_path = dir.write_file("stub.exe", &fake_pe_stub(8192));
+    let installer = dir.path().join("installer.exe");
+    archive::bundle_exe(&stub_path, &archive, &installer).unwrap();
+
+    // 写入一个「指向文件中间、且 offset+size 对不上文件长度」的伪证书表，不追加任何字节
+    let mut b = std::fs::read(&installer).unwrap();
+    let pe_off = u32::from_le_bytes(b[0x3C..0x40].try_into().unwrap()) as usize;
+    let sec = pe_off + 24 + 112 + 32;
+    b[sec..sec + 4].copy_from_slice(&4096u32.to_le_bytes());
+    b[sec + 4..sec + 8].copy_from_slice(&16u32.to_le_bytes());
+    std::fs::write(&installer, &b).unwrap();
+
+    let out_dir = dir.path().join("out");
+    extract_all_to(&installer, &out_dir);
+    assert_eq!(
+        std::fs::read(out_dir.join("c.txt")).expect("读取 c.txt 失败"),
+        content,
+        "不自洽的 Security 目录项应被忽略，归档仍按物理末尾解析"
+    );
+}

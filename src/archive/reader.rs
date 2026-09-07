@@ -8,6 +8,117 @@ static BACKUP_SEQ: AtomicU32 = AtomicU32::new(0);
 use super::format::{ArchiveEntry, ArchiveFooter, ArchiveHeader};
 use crate::archive::CompressionType;
 
+/// 归档数据的逻辑末尾偏移 —— Footer 的右边界，不一定是文件的物理末尾。
+///
+/// Authenticode 代码签名把证书表**追加在 PE 文件末尾**，并把它的文件偏移与长度写进
+/// Optional Header 的第 5 个数据目录项（`IMAGE_DIRECTORY_ENTRY_SECURITY`）。于是一个
+/// 签过名的自解压 exe 布局变成：
+///
+/// ```text
+///   [stub][压缩块][Header][Footer 16B][证书表]
+///                              ↑           ↑
+///                         archive_end   file_len
+/// ```
+///
+/// 若仍按物理末尾往回读 16 字节，读到的是证书表的尾巴，magic 校验必然失败
+/// （"Invalid footer magic"）—— 也就是「安装包一签名就打不开」。故这里先把证书表
+/// 的起始偏移解析出来当作归档末尾。
+///
+/// ⚠️ `IMAGE_DIRECTORY_ENTRY_SECURITY` 是全部 16 个数据目录项里**唯一**一个
+/// `VirtualAddress` 存的是文件偏移而非 RVA 的特例，可以直接 seek，不需要按节表换算。
+///
+/// 未签名文件、以及任何解析不下去的情况（非 PE、目录项缺失、数值不自洽），一律回落到
+/// `file_len`，行为与加入本函数之前完全一致。
+fn archive_end(file: &mut File, file_len: u64) -> Result<u64, String> {
+    /// PE 头最小可解析长度：e_lfanew(0x3C) 之后还要够 PE 签名 + COFF 头 + 可选头。
+    const MIN_PE_LEN: u64 = 0x40;
+
+    if file_len < MIN_PE_LEN {
+        return Ok(file_len);
+    }
+
+    fn read_u32(file: &mut File, off: u64) -> Option<u32> {
+        file.seek(SeekFrom::Start(off)).ok()?;
+        let mut b = [0u8; 4];
+        file.read_exact(&mut b).ok()?;
+        Some(u32::from_le_bytes(b))
+    }
+    fn read_u16(file: &mut File, off: u64) -> Option<u16> {
+        file.seek(SeekFrom::Start(off)).ok()?;
+        let mut b = [0u8; 2];
+        file.read_exact(&mut b).ok()?;
+        Some(u16::from_le_bytes(b))
+    }
+
+    // DOS 头 e_lfanew → PE 签名 "PE\0\0"
+    let pe_off = match read_u32(file, 0x3C) {
+        Some(v) => v as u64,
+        None => return Ok(file_len),
+    };
+    if pe_off + 24 + 112 > file_len {
+        return Ok(file_len);
+    }
+    if read_u32(file, pe_off) != Some(0x0000_4550) {
+        return Ok(file_len); // 不是 PE，按裸文件处理
+    }
+
+    // Optional Header 的 Magic 决定数据目录的起点：PE32 偏移 96，PE32+ 偏移 112。
+    let opt_off = pe_off + 24;
+    let dd_off = match read_u16(file, opt_off) {
+        Some(0x10B) => opt_off + 96,  // PE32
+        Some(0x20B) => opt_off + 112, // PE32+
+        _ => return Ok(file_len),
+    };
+
+    // NumberOfRvaAndSizes 紧邻数据目录之前，必须 > 4 才有 Security 项（索引 4）。
+    if read_u32(file, dd_off - 4).is_none_or(|n| n <= 4) {
+        return Ok(file_len);
+    }
+
+    let sec_off = dd_off + 4 * 8;
+    let (cert_off, cert_size) = match (read_u32(file, sec_off), read_u32(file, sec_off + 4)) {
+        (Some(o), Some(s)) => (o as u64, s as u64),
+        _ => return Ok(file_len),
+    };
+
+    // 判据：证书表必须恰好占满文件尾部。Authenticode 本就要求如此（尾部多一个字节，
+    // 签名即被判定为 "No signature found"），故这个等式不成立就说明目录项不可信，
+    // 宁可回落到物理末尾也不要拿一个错的偏移去读 Footer。
+    if cert_off == 0 || cert_size == 0 || cert_off >= file_len || cert_off + cert_size != file_len {
+        return Ok(file_len);
+    }
+
+    // ⚠️ Footer 未必紧挨着证书表：证书表要求 8 字节对齐，signtool 会在原文件末尾补
+    // 0..=7 字节填充再追加它。故归档末尾是 cert_off 减去那段填充，而填充长度不写在
+    // 任何头里，只能按 magic 反查。
+    //
+    // 实测（本仓 21997457 字节的 Setup.exe，21997457 % 8 == 1 → 补 7 字节）：
+    //   cert_off-16 处读到 00 57494e44454e4400 00000000000000
+    //                       ↑ "WINDEND\0" 落在 [1..9] 而非 [8..16]
+    // 若不补这一步，只有「原大小恰为 8 的倍数」的包能打开，其余七分之六在签名后照样
+    // 报 Invalid footer magic —— 而且是随构建产物大小随机复现，最难查的那种。
+    for pad in 0..=7u64 {
+        let end = match cert_off.checked_sub(pad) {
+            Some(v) if v >= 16 => v,
+            _ => break,
+        };
+        if file.seek(SeekFrom::Start(end - 8)).is_err() {
+            break;
+        }
+        let mut m = [0u8; 8];
+        if file.read_exact(&mut m).is_err() {
+            break;
+        }
+        if &m == super::format::MAGIC_FOOTER {
+            return Ok(end);
+        }
+    }
+
+    // 证书表在、但它前面找不到 Footer：这不是我们打的包（例如一个普通的已签名 exe）。
+    // 回落物理末尾，让后续的 magic 校验给出「不是归档」这个正确结论。
+    Ok(file_len)
+}
+
 /// 归档读取器（Solid 压缩 v2）
 ///
 /// 打开时仅解析 Header/Footer，不立即解压。首次调用 `prepare()` 或 `extract_entry()`
@@ -44,8 +155,15 @@ impl ArchiveReader {
             return Err("File too small to contain footer".into());
         }
 
-        // 读取尾部 Footer（最后 16 字节）
-        file.seek(SeekFrom::End(-16))
+        // 归档数据的末尾未必是文件的物理末尾：Authenticode 签名会把证书表追加在 PE
+        // 之后，Footer 于是被顶到证书表前面（详见 archive_end）。
+        let archive_end = archive_end(&mut file, file_len)?;
+        if archive_end < 16 {
+            return Err("File too small to contain footer".into());
+        }
+
+        // 读取尾部 Footer（归档末尾的 16 字节）
+        file.seek(SeekFrom::Start(archive_end - 16))
             .map_err(|e| format!("Failed to seek to footer: {}", e))?;
         let mut footer_bytes = [0u8; 16];
         file.read_exact(&mut footer_bytes)
@@ -53,7 +171,10 @@ impl ArchiveReader {
         let footer = ArchiveFooter::from_bytes(&footer_bytes)?;
 
         // 读取 Header（footer.header_offset 到 footer 之间）
-        let header_size = file_len - 16 - footer.header_offset;
+        let header_size = archive_end
+            .checked_sub(16)
+            .and_then(|v| v.checked_sub(footer.header_offset))
+            .ok_or("Invalid archive: header_size underflow")?;
         file.seek(SeekFrom::Start(footer.header_offset))
             .map_err(|e| format!("Failed to seek to header: {}", e))?;
         let mut header_bytes = vec![0u8; header_size as usize];
