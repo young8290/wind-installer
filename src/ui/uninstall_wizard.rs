@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use windui::app::App;
 use windui::core::EventCtx;
-use windui::geometry::Color;
+use windui::geometry::{Color, Insets};
 use windui::signal::signal;
 use windui::spec::Align;
 use windui::ui::Element;
@@ -69,6 +69,22 @@ pub fn state_files_clause() -> String {
         files.join("、")
     )
 }
+
+/// 勾选行下方的灰色附注（路径、"还会一并删什么"）。
+///
+/// 左缩进 [`CHECKBOX_LABEL_INDENT`] 与它所属那个勾选的**标签文字**左对齐——附注是那一行
+/// 的下挂信息，齐到方框上会读成并列的第二项。
+fn note_row(text: String) -> Element {
+    Element::label(text)
+        .width_match()
+        .padding_edges(Insets::new(CHECKBOX_LABEL_INDENT, 0, 0, 0))
+        .font_size(11.0)
+        .fg(Color::hex(theme::text_muted()))
+}
+
+/// windui 复选框「方框 18 + 间距 8」，附注按此缩进才与标签文字齐头。
+/// 库没有导出这个量，改了这里对不上只是错位，不会有任何报错。
+const CHECKBOX_LABEL_INDENT: i32 = 26;
 
 pub fn run_uninstall_wizard() {
     // ---- 运行期窗口尺寸（来自清单；非无边框模式高度 -40 补偿系统标题栏）----
@@ -163,26 +179,28 @@ pub fn run_uninstall_wizard() {
             state_clause
         )
     };
+    // 本机实际生效的用户数据目录（自定义过就是自定义路径），与确认对话框、与真正删除
+    // 的目录同出一次解析。
+    let user_data_path = crate::uninstaller::cleanup::resolve_user_data_dir()
+        .display()
+        .to_string();
+    let cache_note = format!("{} 下的 {}", local_root, cache_dirs.join("、"));
 
     // 删除用户数据：危险勾选行（受控 on_toggle：未勾时弹应用内确认对话框，已勾时直接取消）
-    // 括号内是本机实际生效的数据目录（自定义过就显示自定义路径），与确认对话框、
-    // 与真正删除的目录同出一次解析。
-    let delete_data_row = Element::checkbox(
-        format!(
-            "{}（{}）",
-            meta::s_user_data_label(),
-            crate::uninstaller::cleanup::resolve_user_data_dir().display()
-        ),
-        clean_roaming,
-    )
-    .danger()
-    .on_toggle(move |_ctx: &mut EventCtx| {
-        if clean_roaming.get() {
-            clean_roaming.set(false); // 已勾 → 直接取消
-        } else {
-            show_delete_confirm.set(true); // 未勾 → 弹确认，确认后才勾
-        }
-    });
+    //
+    // 路径**不进勾选标签**，另起一行灰字（见 `note_row`）。规则 5 要求「界面上说会删
+    // 什么」，但没要求挤在同一行：完整的用户目录路径动辄四五十个字符，塞进标签必然把
+    // 勾选行撑成两行，而窗口只有 480dp 宽。拆开之后每一行都短，且路径与它下面那条
+    // 「还会一并删什么」的说明并排，读起来本就是同一层信息。
+    let delete_data_row = Element::checkbox(meta::s_user_data_label(), clean_roaming)
+        .danger()
+        .on_toggle(move |_ctx: &mut EventCtx| {
+            if clean_roaming.get() {
+                clean_roaming.set(false); // 已勾 → 直接取消
+            } else {
+                show_delete_confirm.set(true); // 未勾 → 弹确认，确认后才勾
+            }
+        });
 
     // ============================================================
     //  PAGE 0：确认页
@@ -202,13 +220,15 @@ pub fn run_uninstall_wizard() {
             .fg(Color::hex(theme::text_secondary()))
             .width_match(),
         )
-        .child(delete_data_row)
+        // 勾选连同它的附注包成一组（组内 4、组间 12）：附注是那一行的下挂说明，
+        // 跟着外层 spacing 走会散成三条并列的独立行，读不出从属关系。
         .child(
-            Element::label(state_note.clone())
+            Element::col()
                 .width_match()
-                .font_size(11.0)
-                .fg(Color::hex(theme::text_muted()))
-                .visible_when(move || !state_note.is_empty()),
+                .spacing(4)
+                .child(delete_data_row)
+                .child(note_row(user_data_path))
+                .child(note_row(state_note.clone()).visible_when(move || !state_note.is_empty())),
         )
         .child(
             // 0.12 的启用轴分三形态，绑 Signal 走 `_signal` 后缀那一支
@@ -217,16 +237,14 @@ pub fn run_uninstall_wizard() {
                 .enabled_signal(clean_roaming),
         )
         .child(
-            Element::checkbox(
-                format!(
-                    "{}（{} 下的 {}）",
-                    meta::s_cache_label(),
-                    local_root,
-                    cache_dirs.join("、")
-                ),
-                clean_cache,
-            )
-            .visible_when(move || has_cache_entries),
+            // 显隐提到组上：清单没声明 [localdata].cache_dirs 时，勾选与它的路径附注
+            // 必须一起消失——只藏勾选会留下一行没有主人的路径。
+            Element::col()
+                .width_match()
+                .spacing(4)
+                .visible_when(move || has_cache_entries)
+                .child(Element::checkbox(meta::s_cache_label(), clean_cache))
+                .child(note_row(cache_note)),
         )
         .child(Element::leaf().weight(1.0))
         .child(Element::checkbox("我已确认，继续卸载", confirmed))
