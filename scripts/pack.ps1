@@ -92,7 +92,8 @@ foreach ($exe in @($StubExe, $PackerExe, $UninstallerExe)) {
 
 # --- Step 2: 注入卸载器到源目录（打包时一并压缩，安装后解压到安装目录）---
 # 每次都从 target\ 重新复制未加工的 stub 覆盖上一轮的产物 —— 加工是不可逆的
-# （写完版本信息又追加了 overlay），拿加工过的再加工一次会撞上幂等判据而静默沿用旧版本号。
+# （写完版本信息又追加了 overlay），已加工的文件不能就地更新: 重写 PE 会毁掉可能已经
+# 打上的签名。不复制的话, 打包器会发现 overlay 与本轮配置对不上而报错退出。
 $UninstallerDest = Join-Path $SourceDir "uninstall.exe"
 if (-not $SkipPrep) {
     Copy-Item -Path $UninstallerExe -Destination $UninstallerDest -Force
@@ -122,7 +123,15 @@ if (-not $SkipPrep) {
 try {
     # --- Step 3: pack + bundle（含写图标）---
     Write-Step "打包（wind-packer build）..."
-    & $PackerExe build --config $Config --stub $StubExe
+    # -SkipPrep 时要求卸载器【已经加工过】, 而不只是「文件在」。差别在于: 源目录里躺着
+    # 一个未加工的裸 stub 时, 打包器默认会就地补加工 —— 而签名夹在 prep 与打包之间,
+    # 补加工出来的卸载器【没签名】, 调用方却以为签过了。上面那个 Test-Path 只挡得住
+    # 「文件不在」, 挡不住「文件在但没加工」。
+    # 整段参数走一个数组再 splat: 只把开关单独放进 @() 去 splat 的话, 空数组会被
+    # 展开成一个裸 "-" 传给 exe (实测 clap 报 unexpected argument '-')。
+    $packerArgs = @("build", "--config", $Config, "--stub", $StubExe)
+    if ($SkipPrep) { $packerArgs += "--require-prepared-uninstaller" }
+    & $PackerExe @packerArgs
     if ($LASTEXITCODE -ne 0) { Write-Err "打包失败"; exit 1 }
 }
 finally {

@@ -48,6 +48,13 @@ enum Command {
         /// 输出 .bin（默认 <output_dir>/<output_name>-<version>.bin）
         #[arg(short, long)]
         output: Option<PathBuf>,
+        /// 要求源目录里的 uninstall.exe **已经**加工过（配合 `prep-uninstaller` 使用）
+        ///
+        /// 不给这个开关时，遇到未加工的卸载器会就地补做。但当调用方在 prep 与打包之间
+        /// 夹了一次代码签名，补做出来的卸载器是**没签名**的，而调用方以为签过了 ——
+        /// 给上这个开关就把那种情形变成报错。
+        #[arg(long)]
+        require_prepared_uninstaller: bool,
     },
     /// 给 stub 写图标后拼接 .bin 为最终安装程序
     Bundle {
@@ -87,12 +94,21 @@ enum Command {
         /// 输出安装程序（默认 <output_dir>/<output_name>-<version>.exe）
         #[arg(short, long)]
         output: Option<PathBuf>,
+        /// 要求源目录里的 uninstall.exe **已经**加工过（配合 `prep-uninstaller` 使用）
+        ///
+        /// 不给这个开关时，遇到未加工的卸载器会就地补做。但当调用方在 prep 与打包之间
+        /// 夹了一次代码签名，补做出来的卸载器是**没签名**的，而调用方以为签过了 ——
+        /// 给上这个开关就把那种情形变成报错。
+        #[arg(long)]
+        require_prepared_uninstaller: bool,
     },
     /// 把源目录里的 uninstall.exe 加工成终态（版本信息 + 图标 + 清单 overlay）
     ///
     /// 单独暴露这一步，是为了给代码签名腾出位置：`prep-uninstaller` → 签名 → `pack`。
     /// 卸载器一旦签名就不能再被任何人改动，而 `pack` 之后它已经封进压缩块，补签够不着。
-    /// 幂等，可重复调用。
+    ///
+    /// 同一份配置下幂等，可重复调用；配置变了则报错而非重做 —— 已加工的文件不能就地
+    /// 更新（重写 PE 会毁签名），只能拿未加工的 stub 覆盖后重来。
     PrepUninstaller {
         /// app.toml 配置文件
         #[arg(short, long, default_value = "app.toml")]
@@ -121,13 +137,14 @@ fn main() {
             source_dir,
             compression,
             output,
+            require_prepared_uninstaller,
         } => {
             let ov = Overrides {
                 version,
                 source_dir,
                 compression,
             };
-            cmd_pack(&config, ov, output).map(|_| ())
+            cmd_pack(&config, ov, output, require_prepared_uninstaller).map(|_| ())
         }
         Command::Bundle {
             config,
@@ -150,13 +167,14 @@ fn main() {
             compression,
             stub,
             output,
+            require_prepared_uninstaller,
         } => {
             let ov = Overrides {
                 version,
                 source_dir,
                 compression,
             };
-            cmd_build(&config, ov, &stub, output)
+            cmd_build(&config, ov, &stub, output, require_prepared_uninstaller)
         }
         Command::PrepUninstaller {
             config,
@@ -321,7 +339,11 @@ impl Loaded {
 /// `set_pe_version_info` 改的是 PE 内容，签名当场作废；而且资源节放不下时 editpe 会
 /// **新增一个节**插在尾部数据之前，把已有 overlay 整体后移，Footer 里记的绝对偏移
 /// 随即对不上，归档从此打不开（见 `docs/DESIGN.md` 打包管线那段）。
-fn prepare_uninstaller(l: &Loaded, source: &Path) -> Result<PrepOutcome, String> {
+fn prepare_uninstaller(
+    l: &Loaded,
+    source: &Path,
+    require_prepared: bool,
+) -> Result<PrepOutcome, String> {
     let uninstaller_path = source.join("uninstall.exe");
     if !uninstaller_path.exists() {
         return Ok(PrepOutcome::NoUninstaller);
@@ -330,17 +352,35 @@ fn prepare_uninstaller(l: &Loaded, source: &Path) -> Result<PrepOutcome, String>
     let manifest = l.manifest_bytes()?;
     let logo = l.logo_bytes();
 
-    if let Some((have_manifest, have_logo)) = archive::read_manifest_overlay(&uninstaller_path) {
-        if have_manifest == manifest && have_logo == logo {
+    match classify_overlay(
+        archive::read_manifest_overlay(&uninstaller_path),
+        &manifest,
+        &logo,
+    ) {
+        OverlayState::Matches => {
             println!("  卸载器已按当前配置加工过，跳过 —— 重复加工会毁掉已有签名");
             return Ok(PrepOutcome::AlreadyPrepared);
         }
-        return Err(format!(
-            "{:?} 是**上一轮**的产物：它内嵌的清单/logo 与本次配置不一致。\n\
-             已加工的文件不能就地更新（重写 PE 会毁掉可能已经打上的签名），\n\
-             请先用未加工的 stub 覆盖它再重试（pack.ps1 每轮会自动做这件事）。",
-            uninstaller_path
-        ));
+        OverlayState::Drift => {
+            return Err(format!(
+                "{:?} 是**上一轮**的产物：它内嵌的清单/logo 与本次配置不一致。\n\
+                 已加工的文件不能就地更新（重写 PE 会毁掉可能已经打上的签名），\n\
+                 请先用未加工的 stub 覆盖它再重试（pack.ps1 每轮会自动做这件事）。",
+                uninstaller_path
+            ));
+        }
+        // 调用方声明「卸载器应当已经加工好了」时，就地补加工是错的：那说明前一步的
+        // prep 根本没跑到（或跑失败了），而**签名夹在 prep 与本步之间** —— 补加工出来的
+        // 卸载器是没签名的，调用方却以为签过了。这正是本次改动要消灭的那类静默失败。
+        OverlayState::Absent if require_prepared => {
+            return Err(format!(
+                "{:?} 还是未加工的 stub，但本次调用要求它已经加工好。\n\
+                 这通常意味着前一步的 prep-uninstaller 没有跑成功 —— 就地补加工会\n\
+                 得到一个【没签名】的卸载器（签名夹在 prep 与打包之间），故拒绝继续。",
+                uninstaller_path
+            ));
+        }
+        OverlayState::Absent => {}
     }
 
     let uninst_res_info = version_info::derive_version_info(&l.cfg, true);
@@ -369,6 +409,37 @@ enum PrepOutcome {
     NoUninstaller,
 }
 
+/// 源目录里那个 `uninstall.exe` 相对于**本轮配置**处于什么状态。
+///
+/// 抽成纯函数是为了能把三条决策路径钉在测试里 —— 它们各自对应一种截然不同的处置
+/// （加工 / 跳过 / 报错），而走错任何一条的后果都是静默的坏包。
+#[derive(Debug, PartialEq, Eq)]
+enum OverlayState {
+    /// 没有 overlay：未加工的裸 stub。
+    Absent,
+    /// overlay 与本轮配置逐字节一致：已经加工好了。
+    Matches,
+    /// overlay 存在但内容对不上：**上一轮**的产物。
+    Drift,
+}
+
+fn classify_overlay(
+    existing: Option<(Vec<u8>, Vec<u8>)>,
+    manifest: &[u8],
+    logo: &[u8],
+) -> OverlayState {
+    match existing {
+        None => OverlayState::Absent,
+        Some((have_manifest, have_logo)) => {
+            if have_manifest == manifest && have_logo == logo {
+                OverlayState::Matches
+            } else {
+                OverlayState::Drift
+            }
+        }
+    }
+}
+
 fn cmd_prep_uninstaller(config: &Path, ov: Overrides) -> Result<(), String> {
     let mut l = load(config)?;
     l.apply_overrides(ov);
@@ -378,7 +449,7 @@ fn cmd_prep_uninstaller(config: &Path, ov: Overrides) -> Result<(), String> {
     }
     println!("Wind Packer · prep-uninstaller");
     println!("  源目录: {:?}", source);
-    if prepare_uninstaller(&l, &source)? == PrepOutcome::NoUninstaller {
+    if prepare_uninstaller(&l, &source, false)? == PrepOutcome::NoUninstaller {
         // 退 0 会让「路径配错了」一路无人报警：调用方（pack.ps1 -PrepOnly）接着去签
         // 一个不存在的文件，而签名脚本对不存在的目标也是静默放过的。
         return Err(format!("源目录内没有 uninstall.exe: {:?}", source));
@@ -388,15 +459,24 @@ fn cmd_prep_uninstaller(config: &Path, ov: Overrides) -> Result<(), String> {
 
 // ── pack ────────────────────────────────────────────────────────────────────
 
-fn cmd_pack(config: &Path, ov: Overrides, output: Option<PathBuf>) -> Result<PathBuf, String> {
+fn cmd_pack(
+    config: &Path,
+    ov: Overrides,
+    output: Option<PathBuf>,
+    require_prepared: bool,
+) -> Result<PathBuf, String> {
     let mut l = load(config)?;
     l.apply_overrides(ov);
-    cmd_pack_inner(&l, output)
+    cmd_pack_inner(&l, output, require_prepared)
 }
 
 /// 对已加载并应用过覆盖项的 `Loaded` 执行打包。
 /// `cmd_build` 复用此函数，避免二次加载配置文件。
-fn cmd_pack_inner(l: &Loaded, output: Option<PathBuf>) -> Result<PathBuf, String> {
+fn cmd_pack_inner(
+    l: &Loaded,
+    output: Option<PathBuf>,
+    require_prepared: bool,
+) -> Result<PathBuf, String> {
     let output = output.unwrap_or_else(|| l.default_bin());
     if let Some(dir) = output.parent() {
         std::fs::create_dir_all(dir).ok();
@@ -432,8 +512,10 @@ fn cmd_pack_inner(l: &Loaded, output: Option<PathBuf>) -> Result<PathBuf, String
     // 而这里已经来不及了：pack 会把它封进压缩块，之后再签只能签到外壳。
     // 这一句是给「不签名、直接 `wind-packer build`」那条路保底的：那时没人提前
     // prep 过，加工必须在这里发生，否则装出来的卸载器读不到清单、启动即失败。
-    // 已 prep 过（含 overlay）时函数自己跳过，不会碰已签名的文件。
-    prepare_uninstaller(l, &source)?;
+    // 已按本轮配置 prep 过时函数自己跳过，不会碰已签名的文件；而 overlay 与本轮配置
+    // **对不上**时（源目录留着上一轮的产物）它返回 `Err`，整次 build 就此失败 ——
+    // 那种情况下静默沿用旧卸载器比失败更糟。
+    prepare_uninstaller(l, &source, require_prepared)?;
 
     let mut writer = ArchiveWriter::new(&output, compression)?;
     writer.set_manifest(manifest_bytes, logo_bytes);
@@ -533,11 +615,12 @@ fn cmd_build(
     ov: Overrides,
     stub: &Path,
     output: Option<PathBuf>,
+    require_prepared: bool,
 ) -> Result<(), String> {
     let mut l = load(config)?;
     l.apply_overrides(ov);
     let output = output.unwrap_or_else(|| l.default_exe());
-    let bin = cmd_pack_inner(&l, None)?;
+    let bin = cmd_pack_inner(&l, None, require_prepared)?;
     bundle_inner(&l, stub, &bin, &output)
 }
 
@@ -736,4 +819,44 @@ fn set_pe_version_info(
         .write_file(exe_path)
         .map_err(|e| format!("写出 PE 失败: {}", e))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{classify_overlay, OverlayState};
+
+    /// 三条决策路径各自对应一种截然不同的处置，走错任何一条都是静默的坏包：
+    /// 该加工的没加工 → 装机端读不到清单、启动即失败；该跳过的又加工了一遍 → 毁掉
+    /// 刚打上的签名；该报错的当成一致 → 上一版卸载器原样封进包，验签还照样通过。
+    #[test]
+    fn overlay_classification_covers_three_decisions() {
+        let manifest = b"[app]\nversion = \"1.0.0\"\n".as_slice();
+        let logo = b"PNG-A".as_slice();
+
+        assert_eq!(
+            classify_overlay(None, manifest, logo),
+            OverlayState::Absent,
+            "裸 stub 该加工"
+        );
+        assert_eq!(
+            classify_overlay(Some((manifest.to_vec(), logo.to_vec())), manifest, logo),
+            OverlayState::Matches,
+            "逐字节一致才算已加工好"
+        );
+        assert_eq!(
+            classify_overlay(
+                Some((b"[app]\nversion = \"0.9.0\"\n".to_vec(), logo.to_vec())),
+                manifest,
+                logo
+            ),
+            OverlayState::Drift,
+            "清单变了就是上一轮的产物"
+        );
+        // logo 单独变化同样算漂移 —— 它和清单一起进 overlay，只比清单会漏掉换图标那一类。
+        assert_eq!(
+            classify_overlay(Some((manifest.to_vec(), b"PNG-B".to_vec())), manifest, logo),
+            OverlayState::Drift,
+            "只有 logo 变也是漂移"
+        );
+    }
 }
