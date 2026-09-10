@@ -4,7 +4,10 @@
 //! 同一个预编译 stub（wind-installer.exe）配不同 app.toml 即可生成不同应用的安装包，
 //! 无需重新编译。
 //!
-//! 三个子命令：
+//! 子命令：
+//! - `prep-uninstaller` 把源目录里的 uninstall.exe 加工成终态（版本信息 + 图标 + 清单
+//!   overlay）。`pack` 会在需要时自己做这一步，单独暴露只为给代码签名腾位置：
+//!   卸载器必须在**进归档之前**签，签完就不能再被改动。
 //! - `pack`   压缩源目录为 .bin（含 manifest + logo，慢，仅需一次）
 //! - `bundle` 给 stub 写图标后拼接 .bin 为安装程序（快，可反复执行）
 //! - `build`  pack + bundle 一步到位
@@ -85,6 +88,22 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// 把源目录里的 uninstall.exe 加工成终态（版本信息 + 图标 + 清单 overlay）
+    ///
+    /// 单独暴露这一步，是为了给代码签名腾出位置：`prep-uninstaller` → 签名 → `pack`。
+    /// 卸载器一旦签名就不能再被任何人改动，而 `pack` 之后它已经封进压缩块，补签够不着。
+    /// 幂等，可重复调用。
+    PrepUninstaller {
+        /// app.toml 配置文件
+        #[arg(short, long, default_value = "app.toml")]
+        config: PathBuf,
+        /// 版本号（覆盖 app.toml 中的 app.version）
+        #[arg(short = 'V', long)]
+        version: Option<String>,
+        /// 源目录（覆盖 app.toml 中的 package.source_dir；相对路径以当前工作目录为基准）
+        #[arg(short = 'd', long)]
+        source_dir: Option<PathBuf>,
+    },
     /// 读取已生成的安装程序（或 .bin），打印其嵌入的清单摘要
     Inspect {
         /// 安装程序 .exe 或归档 .bin
@@ -138,6 +157,18 @@ fn main() {
                 compression,
             };
             cmd_build(&config, ov, &stub, output)
+        }
+        Command::PrepUninstaller {
+            config,
+            version,
+            source_dir,
+        } => {
+            let ov = Overrides {
+                version,
+                source_dir,
+                compression: None,
+            };
+            cmd_prep_uninstaller(&config, ov)
         }
         Command::Inspect { file } => cmd_inspect(&file),
     };
@@ -231,6 +262,128 @@ impl Loaded {
         self.resolve(&self.cfg.package.output_dir)
             .join(format!("{}.exe", self.output_base()))
     }
+
+    /// 运行期清单（TOML 文本字节）。
+    fn manifest_bytes(&self) -> Result<Vec<u8>, String> {
+        self.cfg.manifest.to_toml_bytes()
+    }
+
+    /// logo 字节（可选）。读不到只警告并回退到空——stub 内置了默认 logo，
+    /// 这里失败不该让整次打包中断。
+    fn logo_bytes(&self) -> Vec<u8> {
+        if self.cfg.package.logo.is_empty() {
+            return Vec::new();
+        }
+        let logo_path = self.resolve(&self.cfg.package.logo);
+        match std::fs::read(&logo_path) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!(
+                    "警告: 无法读取 logo {:?}: {}（将使用空 logo）",
+                    logo_path, e
+                );
+                Vec::new()
+            }
+        }
+    }
+
+    /// 打包期需要写进 PE 的图标路径；`package.icon` 为空表示不写图标。
+    fn icon_path(&self) -> Result<Option<PathBuf>, String> {
+        if self.cfg.package.icon.is_empty() {
+            return Ok(None);
+        }
+        let p = self.resolve(&self.cfg.package.icon);
+        if !p.exists() {
+            return Err(format!("图标文件不存在: {:?}", p));
+        }
+        Ok(Some(p))
+    }
+}
+
+// ── prep-uninstaller ────────────────────────────────────────────────────────
+
+/// 把 `<source>/uninstall.exe` 从裸 stub 加工成**终态**卸载器：写版本信息与图标，
+/// 再把清单 overlay 追加到尾部。
+///
+/// 为什么必须在打包期做完，而不是像早先那样留到安装期在用户机器上追加：
+/// Authenticode 要求证书表是 PE 的最后一段，尾部多一个字节签名即失效。只要装机端
+/// 还会改这个文件，它就永远签不了。而 overlay 的内容全部来自 `app.toml`，本就没有
+/// 任何安装期输入，前移不丢信息。前移之后的顺序是
+/// `prep-uninstaller` → 签名 → 进归档 → 装机端只解压，签名一路完好。
+///
+/// **本函数幂等**，但判据问的不是「有没有 overlay」而是「overlay 是不是**本轮配置**产的」。
+/// 这两件事只在「一次干净构建」里等价：源目录留着上一轮的产物时（`wind-packer build`
+/// 自己不删 `uninstall.exe`，只有 `pack.ps1` 的 `finally` 删），只问前者就会把**上一版**
+/// 的卸载器原样封进包 —— 包能装、验签也过，只有卸载器按旧清单走，是最难发现的那种坏包。
+/// 配置对不上时只能报错、不能覆盖：文件可能已经签名，重写 PE 就把签名毁了。
+///
+/// 判据也要挡在「写版本信息」和「追加 overlay」两件事**之前**，不能夹在中间：
+/// `set_pe_version_info` 改的是 PE 内容，签名当场作废；而且资源节放不下时 editpe 会
+/// **新增一个节**插在尾部数据之前，把已有 overlay 整体后移，Footer 里记的绝对偏移
+/// 随即对不上，归档从此打不开（见 `docs/DESIGN.md` 打包管线那段）。
+fn prepare_uninstaller(l: &Loaded, source: &Path) -> Result<PrepOutcome, String> {
+    let uninstaller_path = source.join("uninstall.exe");
+    if !uninstaller_path.exists() {
+        return Ok(PrepOutcome::NoUninstaller);
+    }
+
+    let manifest = l.manifest_bytes()?;
+    let logo = l.logo_bytes();
+
+    if let Some((have_manifest, have_logo)) = archive::read_manifest_overlay(&uninstaller_path) {
+        if have_manifest == manifest && have_logo == logo {
+            println!("  卸载器已按当前配置加工过，跳过 —— 重复加工会毁掉已有签名");
+            return Ok(PrepOutcome::AlreadyPrepared);
+        }
+        return Err(format!(
+            "{:?} 是**上一轮**的产物：它内嵌的清单/logo 与本次配置不一致。\n\
+             已加工的文件不能就地更新（重写 PE 会毁掉可能已经打上的签名），\n\
+             请先用未加工的 stub 覆盖它再重试（pack.ps1 每轮会自动做这件事）。",
+            uninstaller_path
+        ));
+    }
+
+    let uninst_res_info = version_info::derive_version_info(&l.cfg, true);
+    println!("  加工卸载程序:");
+    println!("    描述:     {}", uninst_res_info.file_description);
+    println!("    文件版本: {}", uninst_res_info.file_version);
+
+    let icon_path = l.icon_path()?;
+    set_pe_version_info(&uninstaller_path, &uninst_res_info, icon_path.as_deref())?;
+
+    archive::append_manifest_overlay(&uninstaller_path, &manifest, &logo)?;
+    let size = std::fs::metadata(&uninstaller_path)
+        .map(|m| m.len())
+        .unwrap_or(0);
+    println!("    → 版本信息与清单 overlay 已写入（{} 字节）", size);
+    Ok(PrepOutcome::Prepared)
+}
+
+/// [`prepare_uninstaller`] 的三种结局。「没有加工对象」对 `pack` 是正常的（普通应用
+/// 可以不带卸载器），对 `prep-uninstaller` 却是失败 —— 那是个专门用来加工卸载器的
+/// 子命令，没有对象就说明路径配错了。区分开才能让后者报错而不是静默退 0。
+#[derive(Debug, PartialEq, Eq)]
+enum PrepOutcome {
+    Prepared,
+    AlreadyPrepared,
+    NoUninstaller,
+}
+
+fn cmd_prep_uninstaller(config: &Path, ov: Overrides) -> Result<(), String> {
+    let mut l = load(config)?;
+    l.apply_overrides(ov);
+    let source = l.resolve(&l.cfg.package.source_dir);
+    if !source.exists() {
+        return Err(format!("源目录不存在: {:?}", source));
+    }
+    println!("Wind Packer · prep-uninstaller");
+    println!("  源目录: {:?}", source);
+    if prepare_uninstaller(&l, &source)? == PrepOutcome::NoUninstaller {
+        // 退 0 会让「路径配错了」一路无人报警：调用方（pack.ps1 -PrepOnly）接着去签
+        // 一个不存在的文件，而签名脚本对不存在的目标也是静默放过的。
+        return Err(format!("源目录内没有 uninstall.exe: {:?}", source));
+    }
+    Ok(())
 }
 
 // ── pack ────────────────────────────────────────────────────────────────────
@@ -259,25 +412,8 @@ fn cmd_pack_inner(l: &Loaded, output: Option<PathBuf>) -> Result<PathBuf, String
         _ => CompressionType::Zstd,
     };
 
-    // 运行期清单（TOML 文本字节）
-    let manifest_bytes = l.cfg.manifest.to_toml_bytes()?;
-
-    // logo 字节（可选）
-    let logo_bytes = if l.cfg.package.logo.is_empty() {
-        Vec::new()
-    } else {
-        let logo_path = l.resolve(&l.cfg.package.logo);
-        match std::fs::read(&logo_path) {
-            Ok(b) => b,
-            Err(e) => {
-                eprintln!(
-                    "警告: 无法读取 logo {:?}: {}（将使用空 logo）",
-                    logo_path, e
-                );
-                Vec::new()
-            }
-        }
-    };
+    let manifest_bytes = l.manifest_bytes()?;
+    let logo_bytes = l.logo_bytes();
 
     println!("Wind Packer · pack");
     println!(
@@ -290,28 +426,14 @@ fn cmd_pack_inner(l: &Loaded, output: Option<PathBuf>) -> Result<PathBuf, String
     println!("  清单:   {} 字节", manifest_bytes.len());
     println!("  logo:   {} 字节", logo_bytes.len());
 
-    // 注入卸载程序版本属性（如果存在）
-    let uninstaller_path = source.join("uninstall.exe");
-    if uninstaller_path.exists() {
-        let uninst_res_info = version_info::derive_version_info(&l.cfg, true);
-        println!("  检测到卸载程序，注入版本信息:");
-        println!("    描述:     {}", uninst_res_info.file_description);
-        println!("    文件版本: {}", uninst_res_info.file_version);
-
-        let icon_path = if l.cfg.package.icon.is_empty() {
-            None
-        } else {
-            let p = l.resolve(&l.cfg.package.icon);
-            if p.exists() {
-                Some(p)
-            } else {
-                return Err(format!("图标文件不存在: {:?}", p));
-            }
-        };
-
-        set_pe_version_info(&uninstaller_path, &uninst_res_info, icon_path.as_deref())?;
-        println!("    → 成功注入");
-    }
+    // 卸载器加工（版本信息 + 图标 + 清单 overlay）。
+    //
+    // 想签卸载器就必须**先 `prep-uninstaller`、签完再 pack**——签名夹在这两步之间，
+    // 而这里已经来不及了：pack 会把它封进压缩块，之后再签只能签到外壳。
+    // 这一句是给「不签名、直接 `wind-packer build`」那条路保底的：那时没人提前
+    // prep 过，加工必须在这里发生，否则装出来的卸载器读不到清单、启动即失败。
+    // 已 prep 过（含 overlay）时函数自己跳过，不会碰已签名的文件。
+    prepare_uninstaller(l, &source)?;
 
     let mut writer = ArchiveWriter::new(&output, compression)?;
     writer.set_manifest(manifest_bytes, logo_bytes);

@@ -569,3 +569,117 @@ fn inconsistent_security_directory_falls_back_to_physical_end() {
         "不自洽的 Security 目录项应被忽略，归档仍按物理末尾解析"
     );
 }
+
+// ── 卸载器清单 overlay 与签名共存 ────────────────────────────────────────────
+
+/// 裸 stub 上 `has_manifest_overlay` 必须为假 —— 否则打包期会跳过加工，
+/// 装出来的卸载器读不到清单，启动即失败。
+#[test]
+fn bare_stub_has_no_manifest_overlay() {
+    let dir = TempDir::new("overlay_bare");
+    let stub = dir.write_file("uninstall.exe", &fake_pe_stub(8192));
+    assert!(
+        !archive::has_manifest_overlay(&stub),
+        "未加工的裸 stub 不该被判定为已带 overlay"
+    );
+}
+
+/// 核心回归：**卸载器带 overlay 之后再签名，仍读得回清单，且判据仍为真**。
+///
+/// 这两条断言各自守着一个「会静默出坏包」的失败模式：
+/// - 读不回清单 → 卸载器启动即报「无法载入卸载清单」，而安装包本身验签通过，
+///   从外面完全看不出来；
+/// - 判据为假 → 安装期的 `AppendUninstallerOverlay` 会再追加一次，把证书表顶到
+///   文件中间，Authenticode 判定为"No signature found"，签名白签。
+///
+/// 遍历 8 种对齐余数：signtool 追加证书表前会把原文件补 0..=7 字节对齐到 8 边界，
+/// 只测一种的话有 7/8 概率落在「无需填充」那条最简单的路径上而假绿（本仓真实的
+/// Setup.exe 就补了 7 字节，当时全绿的测试一个都没拦住）。
+#[test]
+fn signed_uninstaller_overlay_stays_readable() {
+    let manifest = b"[app]\nid = \"WindInput\"\nversion = \"1.2.3\"\n".as_slice();
+    let logo = vec![0x89u8; 777];
+
+    for k in 0..8usize {
+        let dir = TempDir::new(&format!("overlay_signed{}", k));
+        // 逐字节加长 stub，把 overlay 末尾推过 8 种对齐余数
+        let uninst = dir.write_file("uninstall.exe", &fake_pe_stub(8192 + k));
+
+        archive::append_manifest_overlay(&uninst, manifest, &logo).expect("追加 overlay 失败");
+        assert!(
+            archive::has_manifest_overlay(&uninst),
+            "追加后判据应为真 (k={})",
+            k
+        );
+
+        let archive_end = sign_in_place(&uninst, 1416);
+        let signed_len = std::fs::metadata(&uninst).unwrap().len();
+        assert!(signed_len > archive_end, "签名应当让文件变长 (k={})", k);
+
+        assert!(
+            archive::has_manifest_overlay(&uninst),
+            "签名后判据仍须为真, 否则安装期会重复追加并毁掉签名 (k={}, 填充 {} 字节)",
+            k,
+            (8 - (archive_end % 8)) % 8
+        );
+
+        let reader = ArchiveReader::open(&uninst).expect("签名后应仍能打开 overlay");
+        assert_eq!(
+            reader.header().manifest,
+            manifest,
+            "清单字节不一致 (k={})",
+            k
+        );
+        assert_eq!(reader.header().logo, logo, "logo 字节不一致 (k={})", k);
+        assert_eq!(
+            reader.header().entry_count,
+            0,
+            "overlay 不含文件条目 (k={})",
+            k
+        );
+    }
+}
+
+/// overlay 里没有清单时判据为假 —— `has_manifest_overlay` 问的是「清单在不在」，
+/// 不是「尾部有没有归档结构」。空清单的 overlay 等于没加工，必须允许补一次。
+#[test]
+fn empty_manifest_overlay_is_not_treated_as_prepared() {
+    let dir = TempDir::new("overlay_empty");
+    let uninst = dir.write_file("uninstall.exe", &fake_pe_stub(8192));
+    archive::append_manifest_overlay(&uninst, b"", &[]).expect("追加空 overlay 失败");
+    assert!(
+        !archive::has_manifest_overlay(&uninst),
+        "空清单不该被当成已加工"
+    );
+}
+
+/// `read_manifest_overlay` 必须把 overlay 的**内容**交出来，不能只回答有无。
+///
+/// 打包器据此判断「这个卸载器是不是本轮配置产的」——只问有无的话，源目录里留着上一轮
+/// 的产物就会被当成已就绪，上一版的卸载器原样封进包：包能装、验签也过，只有卸载器按
+/// 旧清单走。签名后仍要读得准，因为判据发生在签名之后（prep → 签名 → pack）。
+#[test]
+fn manifest_overlay_content_is_readable_for_drift_check() {
+    let dir = TempDir::new("overlay_drift");
+    let v1 = b"[app]\nversion = \"1.0.0\"\n".as_slice();
+    let logo = vec![0x42u8; 64];
+
+    let uninst = dir.write_file("uninstall.exe", &fake_pe_stub(8192));
+    assert_eq!(
+        archive::read_manifest_overlay(&uninst),
+        None,
+        "裸 stub 读不出 overlay"
+    );
+
+    archive::append_manifest_overlay(&uninst, v1, &logo).expect("追加 overlay 失败");
+    sign_in_place(&uninst, 1416);
+
+    let (got_manifest, got_logo) =
+        archive::read_manifest_overlay(&uninst).expect("签名后仍应读得出 overlay");
+    assert_eq!(got_manifest, v1, "清单字节要能原样取回来才谈得上比对");
+    assert_eq!(got_logo, logo, "logo 换了同样算配置漂移，故也要能取回");
+
+    // 换一版配置：比对结果必须是「不一致」，让打包器有机会报错而不是静默沿用旧包。
+    let v2 = b"[app]\nversion = \"1.0.1\"\n".as_slice();
+    assert_ne!(got_manifest, v2, "版本号变了应判为不一致");
+}

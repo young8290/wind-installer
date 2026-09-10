@@ -54,6 +54,34 @@ pub fn append_manifest_overlay(
     Ok(())
 }
 
+/// 读回 exe 尾部 overlay 里的 `(清单, logo)` 字节；没有 overlay（或清单为空）返回 `None`。
+///
+/// 打包器用它回答一个比「有没有 overlay」更细的问题：**这个 overlay 是不是本轮配置产的**。
+/// 两者只在「一次干净构建」里等价，源目录留着上一轮产物时就分道扬镳 —— 而那种情况下
+/// 已加工的文件**不能就地更新**（重写 PE 会毁掉可能已经打上的签名），只能报错。
+///
+/// `ArchiveReader::open` 自带证书表偏移解析，已签名的文件同样读得出。任何打不开的
+/// 情况（裸 stub、非 PE、损坏）都返回 `None` —— 「读不出 overlay」与「没有 overlay」
+/// 在这里是同一个决定：当作未加工，补一次。
+pub fn read_manifest_overlay(exe_path: &Path) -> Option<(Vec<u8>, Vec<u8>)> {
+    let r = ArchiveReader::open(exe_path).ok()?;
+    let manifest = r.manifest_bytes().to_vec();
+    if manifest.is_empty() {
+        return None;
+    }
+    Some((manifest, r.logo_bytes().to_vec()))
+}
+
+/// exe 尾部是否已带清单 overlay。
+///
+/// 安装期用：那里只需要知道「要不要补追加」，不关心 overlay 的内容是哪一版 ——
+/// 装机端本就没有第二份配置可比。而幂等在这里不是锦上添花，是**保护签名**：
+/// overlay 现在由打包器在构建机上追加、随后立刻签名，装机端若再追加一次，证书表就
+/// 不再是文件最后一段，Authenticode 直接判定为「没有签名」。
+pub fn has_manifest_overlay(exe_path: &Path) -> bool {
+    read_manifest_overlay(exe_path).is_some()
+}
+
 /// 将 stub EXE 和归档 .bin 捆绑为最终安装程序。
 ///
 /// Solid 格式下 entry.offset 是解压后流中的偏移，与 stub 大小无关，

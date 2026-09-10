@@ -189,6 +189,14 @@ impl Step<InstallCtx<'_>> for ExtractFiles {
 }
 
 /// 给解压出的卸载器追加清单 overlay，使其自包含——安装目录不留散落文件。
+///
+/// **正常情况下这一步什么也不做。** overlay 的内容（清单 + logo）全部来自 `app.toml`，
+/// 没有一个字节依赖安装期，因此现在由打包器在构建机上就追加好、随后签名，装机端拿到的
+/// 卸载器已经是终态。本步只为旧包保底：用老版打包器（无 `prep-uninstaller`）产出的
+/// 安装包里，uninstall.exe 仍是裸 stub，装完读不到清单会直接启动失败。
+///
+/// ⚠️ 判据不能省。已带 overlay 的卸载器是**签过名的**，再追加一次就把证书表顶到文件
+/// 中间，Authenticode 要求证书表必须是最后一段，多一个字节即"No signature found"。
 pub struct AppendUninstallerOverlay;
 
 impl Step<InstallCtx<'_>> for AppendUninstallerOverlay {
@@ -198,6 +206,9 @@ impl Step<InstallCtx<'_>> for AppendUninstallerOverlay {
     fn run(&self, ctx: &mut InstallCtx, _r: &mut dyn Reporter) -> Result<(), String> {
         let uninstaller = ctx.config.install_dir.join(UNINSTALLER_NAME);
         if !uninstaller.exists() {
+            return Ok(());
+        }
+        if crate::archive::has_manifest_overlay(&uninstaller) {
             return Ok(());
         }
         crate::archive::append_manifest_overlay(

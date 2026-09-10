@@ -52,10 +52,18 @@
 └─────────────────────────┘  ← 文件结束
 ```
 
-> **打包管线**：`wind-packer build` 先用 `editpe` 给**干净 stub**写入图标（此时无尾部
-> overlay，规避 PE 重建丢弃 overlay 的风险），再压缩源目录、嵌入 manifest/logo 到头部，
-> 最后拼接 `stub + 压缩块 + Header + Footer`。卸载器是被解压到安装目录的裸 stub（无附加
-> 归档），故安装时会把清单与 logo 另存为安装目录下的 `.manifest` / `.logo` 供其读取。
+> **打包管线**：`wind-packer build` 先用 `editpe` 给**干净 stub**写入图标，再压缩源目录、
+> 嵌入 manifest/logo 到头部，最后拼接 `stub + 压缩块 + Header + Footer`。
+>
+> ⚠️ 「写图标」必须在「有尾部 overlay」**之前**。`editpe` 并不会丢弃 overlay（它原地改
+> 字节数组、`write_file` 直接写出），但资源节放不下时会**新增一个节**，插在所有节之后、
+> 尾部数据之前 —— overlay 于是被整体后移，而 Footer 里的 `header_offset` 是**绝对偏移**，
+> 一挪就对不上，归档从此打不开。顺序反了不会有任何报错，只有「装到一半读不出清单」。
+>
+> 卸载器走同一套结构、但只有头部：`wind-packer prep-uninstaller` 在**进归档之前**给它写
+> 版本信息与图标、并追加一个「0 条目、只含 manifest + logo」的 overlay，于是它自包含，
+> 安装目录不需要任何散落的配置文件。这一步单独暴露成子命令是为了给代码签名腾位置——
+> 加工完即为终态，签完就不能再改（见 §5.2.1）。`build` 在没人提前 prep 时会自己补做。
 
 ## 3. 归档格式详细规范
 
@@ -147,7 +155,8 @@ app.toml ──► AppManifest ──► plan::plan_install(manifest, mode) ─�
 3. **反注册旧 COM**（含 `[ime]`）
 4. **清理旧版遗留文件**（`legacy_files`/`legacy_dirs` 非空）
 5. **解压数据 + 释放文件**：致命步骤，失败即中止
-6. **追加卸载器清单 overlay**：使 uninstall.exe 自包含
+6. **追加卸载器清单 overlay**（uninstall.exe 尚未自带 overlay 时）：旧包保底，
+   见 §5.2.1
 7. **设置权限**（`acl_dlls` 非空）：ALL APPLICATION PACKAGES 读取执行
 8. **安装字体**（含 `[[font]]`）
 9. **注册 COM + 注册输入法**（含 `[ime]`）
@@ -161,6 +170,21 @@ app.toml ──► AppManifest ──► plan::plan_install(manifest, mode) ─�
 
 「是否首次安装」按**机器**判定（注册表 `DisplayVersion`），而非按安装目录——
 `datadir.conf` 写在 `%LOCALAPPDATA%` 是机器全局的，两者维度必须对齐。
+
+#### 5.2.1 第 6 步为什么带门控：卸载器要能签名
+
+overlay 的内容（清单 + logo）全部来自 `app.toml`，没有一个字节依赖安装期，因此它现在
+由**打包器在构建机上**追加（`wind-packer prep-uninstaller`），第 6 步正常情况下什么
+都不做。
+
+前移的理由是代码签名：Authenticode 要求证书表是 PE 的最后一段（`offset + size == 文件
+长度`），装机端只要往尾部追加一个字节，签名就变成 "No signature found"。只要 overlay
+还在安装期追加，`uninstall.exe` 就**永远签不了**。前移之后顺序变成
+`prep-uninstaller → 签名 → 进归档 → 装机端只解压`，签名一路完好。
+
+第 6 步保留下来只为**旧包**：老版打包器产出的安装包里，`uninstall.exe` 仍是裸 stub，
+不补一次就读不到清单、启动即失败。门控判据是 `archive::has_manifest_overlay()`——
+它必须挡在追加之前，否则会把打包期签好的名毁掉。
 
 ### 5.3 便携安装
 

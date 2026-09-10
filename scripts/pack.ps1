@@ -9,6 +9,17 @@
     app.toml 路径，默认项目根目录下的 app.toml
 .PARAMETER SkipBuild
     跳过 cargo 编译，使用已有 release 二进制
+.PARAMETER PrepOnly
+    只做到「注入并加工卸载器」为止就返回，且把 uninstall.exe 留在源目录。
+    给代码签名腾位置用：卸载器一旦签名就不能再改，而 build 会把它封进压缩块，
+    补签够不着。调用方在两次调用之间签它：
+        pack.ps1 -PrepOnly          → 加工 uninstall.exe
+        <签 uninstall.exe>
+        pack.ps1 -SkipPrep          → 打包
+.PARAMETER SkipPrep
+    跳过「注入并加工卸载器」，直接打包。**只能与前一次 -PrepOnly 配对使用** ——
+    源目录里没有加工好的卸载器时直接报错退出，不会打出一个不含卸载器的包
+    （那种包装完没有卸载入口，是比失败更糟的结果）。
 .EXAMPLE
     .\scripts\pack.ps1
     .\scripts\pack.ps1 -Config app.toml -SkipBuild
@@ -16,7 +27,9 @@
 
 param(
     [string]$Config = "",
-    [switch]$SkipBuild
+    [switch]$SkipBuild,
+    [switch]$PrepOnly,
+    [switch]$SkipPrep
 )
 
 $ErrorActionPreference = "Stop"
@@ -33,6 +46,13 @@ Write-Host "  Wind Installer 打包（app.toml 驱动）" -ForegroundColor Cyan
 Write-Host "============================================" -ForegroundColor Cyan
 
 if (-not (Test-Path $Config)) { Write-Err "配置不存在: $Config"; exit 1 }
+
+# 两个开关是同一次打包的前后两段，同时给出没有任何合理语义。不校验的话 -SkipPrep
+# 会胜出、-PrepOnly 被静默忽略并直接打包 —— 调用方以为只做了 prep, 实际包已经出了。
+if ($PrepOnly -and $SkipPrep) {
+    Write-Err "-PrepOnly 与 -SkipPrep 互斥: 它们是同一次打包的前后两段, 请分两次调用。"
+    exit 1
+}
 
 # --- 从 app.toml 解析 source_dir（用于注入卸载器；相对 app.toml 所在目录）---
 $ConfigDir = Split-Path -Parent (Resolve-Path $Config)
@@ -71,9 +91,33 @@ foreach ($exe in @($StubExe, $PackerExe, $UninstallerExe)) {
 }
 
 # --- Step 2: 注入卸载器到源目录（打包时一并压缩，安装后解压到安装目录）---
+# 每次都从 target\ 重新复制未加工的 stub 覆盖上一轮的产物 —— 加工是不可逆的
+# （写完版本信息又追加了 overlay），拿加工过的再加工一次会撞上幂等判据而静默沿用旧版本号。
 $UninstallerDest = Join-Path $SourceDir "uninstall.exe"
-Copy-Item -Path $UninstallerExe -Destination $UninstallerDest -Force
-Write-OK "已注入卸载器: $UninstallerDest"
+if (-not $SkipPrep) {
+    Copy-Item -Path $UninstallerExe -Destination $UninstallerDest -Force
+    Write-OK "已注入卸载器: $UninstallerDest"
+
+    # --- Step 2.5: 加工卸载器（版本信息 + 图标 + 清单 overlay）---
+    # 必须在 pack 之前完成：pack 会把它封进压缩块，之后再改就够不着了。
+    # 这一步之后卸载器即为终态，可以签名——签名也只能夹在这里与 Step 3 之间。
+    Write-Step "加工卸载器（wind-packer prep-uninstaller）..."
+    & $PackerExe prep-uninstaller --config $Config
+    if ($LASTEXITCODE -ne 0) { Write-Err "卸载器加工失败"; exit 1 }
+
+    if ($PrepOnly) {
+        # 有意不删 uninstall.exe：调用方接下来要签它，然后带 -SkipPrep 回来打包。
+        Write-Host "`n============================================" -ForegroundColor Green
+        Write-Host "  卸载器已就绪（-PrepOnly）: $UninstallerDest" -ForegroundColor Green
+        Write-Host "  下一步: 签名该文件, 再以 -SkipPrep 重新调用本脚本打包" -ForegroundColor Green
+        Write-Host "============================================" -ForegroundColor Green
+        exit 0
+    }
+} elseif (-not (Test-Path $UninstallerDest)) {
+    Write-Err "-SkipPrep 要求源目录内已有加工好的卸载器, 但未找到: $UninstallerDest"
+    Write-Err "请先以 -PrepOnly 调用一次本脚本。"
+    exit 1
+}
 
 try {
     # --- Step 3: pack + bundle（含写图标）---
