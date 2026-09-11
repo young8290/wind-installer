@@ -683,3 +683,44 @@ fn manifest_overlay_content_is_readable_for_drift_check() {
     let v2 = b"[app]\nversion = \"1.0.1\"\n".as_slice();
     assert_ne!(got_manifest, v2, "版本号变了应判为不一致");
 }
+
+/// 三条决策路径各自对应一种截然不同的处置，走错任何一条都是静默的坏包：
+/// 该加工的没加工 → 装机端读不到清单、启动即失败；该跳过的又加工了一遍 → 毁掉刚打上
+/// 的签名；该报错的当成一致 → 上一版卸载器原样封进包，而验签还照样通过。
+///
+/// 判据住在 lib 而不是 `wind-packer` 里，是因为那个 bin 有 `required-features = ["packer"]`，
+/// 而 CI 跑的是 `cargo test --locked --tests` —— 不带 feature 就不构建它，测试连同它要守的
+/// 判据一起静默失效。
+#[test]
+fn overlay_classification_covers_three_decisions() {
+    use wind_installer::archive::OverlayState;
+
+    let manifest = b"[app]\nversion = \"1.0.0\"\n".as_slice();
+    let logo = b"PNG-A".as_slice();
+
+    assert_eq!(
+        archive::classify_overlay(None, manifest, logo),
+        OverlayState::Absent,
+        "裸 stub 该加工"
+    );
+    assert_eq!(
+        archive::classify_overlay(Some((manifest.to_vec(), logo.to_vec())), manifest, logo),
+        OverlayState::Matches,
+        "逐字节一致才算已加工好"
+    );
+    assert_eq!(
+        archive::classify_overlay(
+            Some((b"[app]\nversion = \"0.9.0\"\n".to_vec(), logo.to_vec())),
+            manifest,
+            logo
+        ),
+        OverlayState::Drift,
+        "清单变了就是上一轮的产物"
+    );
+    // logo 单独变化同样算漂移 —— 它和清单一起进 overlay，只比清单会漏掉换图标那一类。
+    assert_eq!(
+        archive::classify_overlay(Some((manifest.to_vec(), b"PNG-B".to_vec())), manifest, logo),
+        OverlayState::Drift,
+        "只有 logo 变也是漂移"
+    );
+}

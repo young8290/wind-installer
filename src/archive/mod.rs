@@ -72,6 +72,41 @@ pub fn read_manifest_overlay(exe_path: &Path) -> Option<(Vec<u8>, Vec<u8>)> {
     Some((manifest, r.logo_bytes().to_vec()))
 }
 
+/// 源目录里那个 `uninstall.exe` 相对于**本轮配置**处于什么状态。
+///
+/// 抽成纯函数是为了能把三条决策路径钉在测试里 —— 它们各自对应一种截然不同的处置
+/// （加工 / 跳过 / 报错），而走错任何一条的后果都是静默的坏包。
+// 只有打包器用得到；`archive` 在 bin 与 lib 里各编一份，bin 那份用不到它
+// （同 `bundle_exe`）。
+#[allow(dead_code)]
+#[derive(Debug, PartialEq, Eq)]
+pub enum OverlayState {
+    /// 没有 overlay：未加工的裸 stub。
+    Absent,
+    /// overlay 与本轮配置逐字节一致：已经加工好了。
+    Matches,
+    /// overlay 存在但内容对不上：**上一轮**的产物。
+    Drift,
+}
+
+#[allow(dead_code)]
+pub fn classify_overlay(
+    existing: Option<(Vec<u8>, Vec<u8>)>,
+    manifest: &[u8],
+    logo: &[u8],
+) -> OverlayState {
+    match existing {
+        None => OverlayState::Absent,
+        Some((have_manifest, have_logo)) => {
+            if have_manifest == manifest && have_logo == logo {
+                OverlayState::Matches
+            } else {
+                OverlayState::Drift
+            }
+        }
+    }
+}
+
 /// exe 尾部是否已带清单 overlay。
 ///
 /// 安装期用：那里只需要知道「要不要补追加」，不关心 overlay 的内容是哪一版 ——

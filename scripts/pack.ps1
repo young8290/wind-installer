@@ -127,8 +127,8 @@ try {
     # 一个未加工的裸 stub 时, 打包器默认会就地补加工 —— 而签名夹在 prep 与打包之间,
     # 补加工出来的卸载器【没签名】, 调用方却以为签过了。上面那个 Test-Path 只挡得住
     # 「文件不在」, 挡不住「文件在但没加工」。
-    # 整段参数走一个数组再 splat: 只把开关单独放进 @() 去 splat 的话, 空数组会被
-    # 展开成一个裸 "-" 传给 exe (实测 clap 报 unexpected argument '-')。
+    # 整段参数走一个数组再 splat, 而不是只把开关单独 splat: 条件追加更直观, 且带空格的
+    # 路径经数组传参不需要手工加引号。
     $packerArgs = @("build", "--config", $Config, "--stub", $StubExe)
     if ($SkipPrep) { $packerArgs += "--require-prepared-uninstaller" }
     & $PackerExe @packerArgs

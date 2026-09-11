@@ -346,22 +346,31 @@ fn prepare_uninstaller(
 ) -> Result<PrepOutcome, String> {
     let uninstaller_path = source.join("uninstall.exe");
     if !uninstaller_path.exists() {
+        // 声明「卸载器应当已经加工好了」而它压根不在，多半是 source_dir 配错了。
+        // 放过去就打出一个**没有卸载入口**的包 —— 比失败更糟，而且装完才发现。
+        if require_prepared {
+            return Err(format!(
+                "{:?} 不存在，但本次调用要求卸载器已经加工好。\n\
+                 请核对 package.source_dir 是否指向真正的产物目录。",
+                uninstaller_path
+            ));
+        }
         return Ok(PrepOutcome::NoUninstaller);
     }
 
     let manifest = l.manifest_bytes()?;
     let logo = l.logo_bytes();
 
-    match classify_overlay(
+    match archive::classify_overlay(
         archive::read_manifest_overlay(&uninstaller_path),
         &manifest,
         &logo,
     ) {
-        OverlayState::Matches => {
+        archive::OverlayState::Matches => {
             println!("  卸载器已按当前配置加工过，跳过 —— 重复加工会毁掉已有签名");
             return Ok(PrepOutcome::AlreadyPrepared);
         }
-        OverlayState::Drift => {
+        archive::OverlayState::Drift => {
             return Err(format!(
                 "{:?} 是**上一轮**的产物：它内嵌的清单/logo 与本次配置不一致。\n\
                  已加工的文件不能就地更新（重写 PE 会毁掉可能已经打上的签名），\n\
@@ -372,7 +381,7 @@ fn prepare_uninstaller(
         // 调用方声明「卸载器应当已经加工好了」时，就地补加工是错的：那说明前一步的
         // prep 根本没跑到（或跑失败了），而**签名夹在 prep 与本步之间** —— 补加工出来的
         // 卸载器是没签名的，调用方却以为签过了。这正是本次改动要消灭的那类静默失败。
-        OverlayState::Absent if require_prepared => {
+        archive::OverlayState::Absent if require_prepared => {
             return Err(format!(
                 "{:?} 还是未加工的 stub，但本次调用要求它已经加工好。\n\
                  这通常意味着前一步的 prep-uninstaller 没有跑成功 —— 就地补加工会\n\
@@ -380,7 +389,7 @@ fn prepare_uninstaller(
                 uninstaller_path
             ));
         }
-        OverlayState::Absent => {}
+        archive::OverlayState::Absent => {}
     }
 
     let uninst_res_info = version_info::derive_version_info(&l.cfg, true);
@@ -407,37 +416,6 @@ enum PrepOutcome {
     Prepared,
     AlreadyPrepared,
     NoUninstaller,
-}
-
-/// 源目录里那个 `uninstall.exe` 相对于**本轮配置**处于什么状态。
-///
-/// 抽成纯函数是为了能把三条决策路径钉在测试里 —— 它们各自对应一种截然不同的处置
-/// （加工 / 跳过 / 报错），而走错任何一条的后果都是静默的坏包。
-#[derive(Debug, PartialEq, Eq)]
-enum OverlayState {
-    /// 没有 overlay：未加工的裸 stub。
-    Absent,
-    /// overlay 与本轮配置逐字节一致：已经加工好了。
-    Matches,
-    /// overlay 存在但内容对不上：**上一轮**的产物。
-    Drift,
-}
-
-fn classify_overlay(
-    existing: Option<(Vec<u8>, Vec<u8>)>,
-    manifest: &[u8],
-    logo: &[u8],
-) -> OverlayState {
-    match existing {
-        None => OverlayState::Absent,
-        Some((have_manifest, have_logo)) => {
-            if have_manifest == manifest && have_logo == logo {
-                OverlayState::Matches
-            } else {
-                OverlayState::Drift
-            }
-        }
-    }
 }
 
 fn cmd_prep_uninstaller(config: &Path, ov: Overrides) -> Result<(), String> {
@@ -819,44 +797,4 @@ fn set_pe_version_info(
         .write_file(exe_path)
         .map_err(|e| format!("写出 PE 失败: {}", e))?;
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{classify_overlay, OverlayState};
-
-    /// 三条决策路径各自对应一种截然不同的处置，走错任何一条都是静默的坏包：
-    /// 该加工的没加工 → 装机端读不到清单、启动即失败；该跳过的又加工了一遍 → 毁掉
-    /// 刚打上的签名；该报错的当成一致 → 上一版卸载器原样封进包，验签还照样通过。
-    #[test]
-    fn overlay_classification_covers_three_decisions() {
-        let manifest = b"[app]\nversion = \"1.0.0\"\n".as_slice();
-        let logo = b"PNG-A".as_slice();
-
-        assert_eq!(
-            classify_overlay(None, manifest, logo),
-            OverlayState::Absent,
-            "裸 stub 该加工"
-        );
-        assert_eq!(
-            classify_overlay(Some((manifest.to_vec(), logo.to_vec())), manifest, logo),
-            OverlayState::Matches,
-            "逐字节一致才算已加工好"
-        );
-        assert_eq!(
-            classify_overlay(
-                Some((b"[app]\nversion = \"0.9.0\"\n".to_vec(), logo.to_vec())),
-                manifest,
-                logo
-            ),
-            OverlayState::Drift,
-            "清单变了就是上一轮的产物"
-        );
-        // logo 单独变化同样算漂移 —— 它和清单一起进 overlay，只比清单会漏掉换图标那一类。
-        assert_eq!(
-            classify_overlay(Some((manifest.to_vec(), b"PNG-B".to_vec())), manifest, logo),
-            OverlayState::Drift,
-            "只有 logo 变也是漂移"
-        );
-    }
 }
