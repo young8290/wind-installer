@@ -45,8 +45,11 @@ pub fn request_elevation() -> Result<(), String> {
     //    发生在「控制面板点卸载 → 请求提权」这条路上。`uninstaller::args` 里有一条
     //    `lone_surrogate_does_not_panic` 钉着解析那一侧，但它管不到这里，
     //    保证只覆盖半条路等于没有保证。
-    // 2. 也**不能**用 `to_string_lossy` 绕开：那会把非法码位换成 U+FFFD，等于悄悄
-    //    改写转发给子进程的参数 —— 提权后的实例拿到的路径与用户给的不是同一个。
+    // 2. 也**不能**用 `to_string_lossy` 绕开。`uninstaller::args::parse` 里用了它、而且
+    //    是对的，但那是**读端**：解析只需要「U+FFFD 不等于任何 flag 字面量」，替换掉的
+    //    东西本来就要被丢弃。这里是**转发端**，同一个替换的性质完全变了 —— 它会悄悄
+    //    改写交给子进程的参数，提权后的实例拿到的路径与用户给的不是同一个，而且没有
+    //    任何地方会报错。别照着 args.rs 的先例把 lossy 抄到这儿。
     //    `OsString` 一路带到 `encode_wide`，原样进 `ShellExecuteW`。
     let mut params = std::ffi::OsString::new();
     for a in std::env::args_os().skip(1) {

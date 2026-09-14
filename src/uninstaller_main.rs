@@ -35,8 +35,12 @@ fn main() {
         std::process::exit(exitcode::FAILURE);
     }
 
-    // 检查单实例。必须排在 bootstrap 之后：被挡住时要报出应用名，清单没载入就会 panic
-    // ——而 UninstallString 指的正是本程序，那会让「控制面板点卸载」变成一次无提示崩溃。
+    // 检查单实例。排在 bootstrap 之后是为了**提示框里能报出应用名**。
+    //
+    // ⚠️ 这里曾经是一条硬约束（「清单没载入就 panic」），现在不是了：`busy_title()`
+    // 被抽出来改用不 panic 的 `try_app_display_name()` 之后，即便排在前面也只会退化成
+    // 通用标题「安装程序」。注释保留这段历史，是因为**约束确实松过一档**——
+    // 别再照着「会崩」去推断别处的顺序有多不可动。
     if let Some(pid) = util::single::another_instance_pid() {
         util::single::report_busy_and_exit(pid, args.silent);
     }
@@ -48,6 +52,14 @@ fn main() {
     }
 
     ui::uninstall_wizard::run_uninstall_wizard();
+    // ⚠️ **这一行在 GUI 路径上永远执行不到**，看着会执行而已：向导内部有三个
+    // `process::exit`（完成页按钮、关窗，以及 `trigger_self_delete` 成功时那个），
+    // 没有一条会 return 回来。后果是 `%TEMP%\wind_installer.lock` 留在盘上。
+    //
+    // 不修是权衡后的决定：锁是新格式 `"<pid>|<创建时间>"`，下次读到时主人早已不在，
+    // `lock_blocks` 判 `alive == false` 直接放行——它是**不再挡人的垃圾文件**，
+    // 不是僵尸锁。而修它要动向导那三个 exit 点，其中自删除那个紧跟在「副本已启动」
+    // 之后，往中间插任何东西都是给自删除时序平添风险。
     util::single::release_lock();
 }
 
