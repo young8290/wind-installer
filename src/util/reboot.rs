@@ -129,7 +129,8 @@ pub fn pending_summary() -> String {
 ///
 /// 之所以是 `pub` 而非 `#[cfg(test)]`：本 crate 的 `--lib` 单测二进制名含 "install"，
 /// 会命中 Windows UAC 安装器检测启发式而无法在普通权限下启动（见 `ui::theme` 末注），
-/// 账本的测试只能放在 `tests/` 集成测试里，那里链接的是非 test 编译的 lib。
+/// **账本**的测试因此只能放在 `tests/` 集成测试里，那里链接的是非 test 编译的 lib。
+/// （本文件末尾那组走查单测不碰账本 —— 排队动作是注入的 —— 故可以内联。）
 #[doc(hidden)]
 #[allow(dead_code)] // 只被 tests/ 引用；bin target 看不到那边的用法
 pub fn reset_ledger() {
@@ -154,17 +155,55 @@ pub fn reset_ledger() {
 ///    在此之前就重装到同一目录。排原路径 = 让上一次卸载的遗留指令删掉新装的同名
 ///    文件（重启后「词库莫名消失」）；排一个随机后缀名则永不与新装产物撞名。
 ///    这与解压让路、卸载删二进制是同一套路。
-/// 3. **正在运行的自身可执行文件一概不碰。** 改名后 `current_exe()` 仍返回旧路径
-///    （`GetModuleFileNameW` 在加载时固化），卸载器的自删除流程会因此复制不到自己而
-///    静默失效；排队它的原路径又会在重装后删掉新的 `uninstall.exe`，把 ARP 条目
-///    指向不存在的程序。它由 `uninstaller::selfdelete` 负责，这里让开。
+/// 3. **正在运行的自身可执行文件一概不碰，连装着它的目录也不排队。** 改名后
+///    `current_exe()` 仍返回旧路径（`GetModuleFileNameW` 在加载时固化），卸载器的
+///    自删除流程会因此复制不到自己而静默失效；排队它的原路径又会在重装后删掉新的
+///    `uninstall.exe`，把 ARP 条目指向不存在的程序。它由 `uninstaller::selfdelete`
+///    负责，这里让开。
+///
+///    「连目录也让开」这半句是后加的，修的是一个每次卸载都会犯的错：GUI 卸载走到
+///    这里时安装目录里正剩着运行中的 `uninstall.exe`，跳过它之后 `remove_dir(dir)`
+///    必然因非空而失败，于是目录被排进队列、账本非空 —— `is_reboot_pending()` 为真，
+///    完成页于是**每次**都提示「部分文件正被占用，需重启电脑才能彻底清除」。而自删除
+///    副本随后就把整棵树删了，那条队列条目成了空转，提示也从头到尾是假的。
+///    每次都出现的假提示，效果等于训练用户忽略它。
+///    目录的归宿和那个 exe 是同一件事，一起让给自删除流程才自洽；自删除真失败时，
+///    副本会在**自己不在树里**的身份下重跑本函数，那时 exe 与目录都会被正常排队。
+///
+///    这条豁免对其余调用方（`installer::legacy` 的遗留目录、`uninstaller::cleanup`
+///    的 `%LOCALAPPDATA%` 条目）同样生效。那两棵树里没有自删除兜底，但也从不会命中
+///    ——安装器跑在 `%TEMP%`/下载目录，卸载器不在 `%LOCALAPPDATA%`；而且即便命中，
+///    被豁免掉的那条目录条目**本来就是空转**：`MoveFileExW` 对非空目录无效，而自身
+///    exe 按本不变量从不排队，重启那一刻目录必然还非空。换言之这条豁免不会让任何
+///    调用方少清理一个字节，它只是不再把一条注定空转的记录算进「需要重启」。
 pub fn schedule_dir_on_reboot(dir: &Path) {
+    schedule_dir_on_reboot_impl(dir, &is_current_exe, &schedule_delete_on_reboot);
+}
+
+/// [`schedule_dir_on_reboot`] 的本体。返回 true 表示这棵树里留着正在运行的自身 exe，
+/// 目录的最终清理**已让给自删除流程**，本次没有排队它。
+///
+/// `is_self` 与 `schedule` 都由调用方注入。
+///
+/// - `is_self`：判据本身（`is_current_exe`）已有子进程测试守着，而「接线对不对」
+///   用注入就能直接测，不必每次都去起一个住在被测目录里的子进程。
+/// - `schedule`：真的那个会往 `HKLM\…\PendingFileRenameOperations` 写真条目 ——
+///   那是个全局共享值、开机由会话管理器无条件执行，测试每跑一次加一条不可接受。
+fn schedule_dir_on_reboot_impl(
+    dir: &Path,
+    is_self: &dyn Fn(&Path) -> bool,
+    schedule: &dyn Fn(&Path) -> Result<(), String>,
+) -> bool {
     let Ok(entries) = std::fs::read_dir(dir) else {
         // 连列目录都做不到（权限/句柄问题）：至少把目录本身记一笔，
         // 让「需要重启」的结论不会因为这里读不到而丢失。
         record_pending(dir, false);
-        return;
+        return false;
     };
+
+    // 这棵树（含子树）里留着自身 exe 吗？留着的话目录删不掉是**预期**的，
+    // 不该记成一笔重启账。
+    let mut deferred_to_self_delete = false;
 
     for entry in entries.flatten() {
         let path = entry.path();
@@ -173,23 +212,31 @@ pub fn schedule_dir_on_reboot(dir: &Path) {
         // 于是链接按「文件」处理——删的是链接本身，不是它指向的东西。
         let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
         if is_dir {
-            schedule_dir_on_reboot(&path);
-        } else if !is_current_exe(&path) && std::fs::remove_file(&path).is_err() {
+            deferred_to_self_delete |= schedule_dir_on_reboot_impl(&path, is_self, schedule);
+        } else if is_self(&path) {
+            // 不删、不改名、不排队 —— 只记下「这个目录删不掉是应该的」。
+            deferred_to_self_delete = true;
+        } else if std::fs::remove_file(&path).is_err() {
             // 走到这里的「非目录」除了普通文件，还有指向目录的重解析点（junction /
             // 目录符号链接）——对它们 `remove_file` 恒为「拒绝访问」，而 `remove_dir`
             // 直接成功且**只摘掉链接、目标目录安然无恙**。不先试这一下的话，安装目录
             // 里只要有一个 junction，每次卸载都会白白多一条重启账、完成页无端提示
             // 「需要重启」，还留下一个改了名的链接。
             if std::fs::remove_dir(&path).is_err() {
-                let _ = schedule_delete_on_reboot(&stash_aside(&path));
+                let _ = schedule(&stash_aside(&path));
             }
         }
     }
 
     // 子项清空后目录本身通常就能删掉——能删就删，别往队列里塞无谓的条目（不变量 1）。
-    if std::fs::remove_dir(dir).is_err() {
-        let _ = schedule_delete_on_reboot(dir);
+    //
+    // 删不掉且树里留着自身 exe：那正是自删除流程要收拾的局面，不记账（不变量 3）。
+    // 注意此时**别的**删不掉的文件仍各自排过队、记过账，「需要重启」该真就真。
+    if std::fs::remove_dir(dir).is_err() && !deferred_to_self_delete {
+        let _ = schedule(dir);
     }
+
+    deferred_to_self_delete
 }
 
 /// 把删不掉的文件改名让路，返回**实际要排队的路径**；改名失败则原路返回。
@@ -268,4 +315,193 @@ pub fn is_current_exe(path: &Path) -> bool {
         return false;
     }
     std::fs::canonicalize(path).as_deref().unwrap_or(path) == self_real.as_path()
+}
+
+// 以下为测试，须置于文件末尾：`#[cfg(test)] mod` 在非测试编译下整块消失，
+// 把真实代码排在它后面会让人误以为文件到此为止。
+#[cfg(test)]
+mod dir_walk_tests {
+    use super::*;
+    use std::cell::RefCell;
+
+    // 变异检验已做（每条都实跑过，归因是跑出来的不是推出来的）：
+    //   · 去掉 `&& !deferred_to_self_delete`（退回修复前：自身 exe 在场也排目录）
+    //     → self_exe_in_tree_defers_the_directory 变红
+    //   · `is_self` 恒 true（矫枉过正：每个文件都当自身 exe，真残留也不排了）
+    //     → other_locked_files_are_still_queued 变红
+    //   · `deferred_to_self_delete` 初始化成 true（没有自身 exe 也豁免目录）
+    //     → plain_tree_is_deleted_and_queues_nothing 变红
+    //   · 子目录的 deferred 不向上传播（`|=` 改成丢弃）
+    //     → self_exe_in_a_subdir_defers_the_whole_chain 变红
+    //   · 把 deferred 这个 gate **下放到文件分支**（`remove_dir(&path).is_err()
+    //     && !deferred_to_self_delete`）→ other_locked_files_are_still_queued 变红。
+    //     这条是后人最容易写出来的过度抑制（读起来像「整棵树都让给自删除了，
+    //     那就都别排了」），而它能不能被抓**取决于 read_dir 的枚举顺序** ——
+    //     实测：只放一个 `held.bin` 时变异**逃逸**（NTFS 按文件名给，它排在
+    //     `uninstall.exe` 之前，处理它时 deferred 还是 false），加上 `zz_held.bin`
+    //     两边夹住之后稳定变红。两次都实跑过。
+    //
+    // ⚠️ 上面第二、三条容易被写成同一条，但它们**抓手不同**：`deferred` 只在末尾
+    // 那一处被读，对循环里 `schedule(&stash_aside(&path))` 没有任何 gate，所以
+    // 「初始化成 true」不会让锁定文件漏排，`other_locked_files_are_still_queued`
+    // 对它是绿的（实测），抓住它的是对照组那条的 `assert!(!deferred)`。
+    // 本轮初稿把两者的描述与测试名配错了 —— 账本写错比没写更坏，它会让人以为
+    // 某条性质有守卫。归因必须来自实跑。
+    //
+    // 这些测试一个字节都不落进注册表：排队动作是注入的。真的那个会往全局的
+    // PendingFileRenameOperations 里写，开机时无条件执行。
+    //
+    // ⚠️ 做变异检验时替换文本必须在文件里唯一，命中多处一律视为无效 ——
+    // 否则会连测试一起改、得到一次假绿（教训出处见 uninstaller/selfdelete.rs）。
+
+    /// 记下被要求排队的路径，一律报成功；不碰注册表。
+    struct FakeQueue(RefCell<Vec<PathBuf>>);
+
+    impl FakeQueue {
+        fn new() -> Self {
+            Self(RefCell::new(Vec::new()))
+        }
+        fn schedule(&self, p: &Path) -> Result<(), String> {
+            self.0.borrow_mut().push(p.to_path_buf());
+            Ok(())
+        }
+        /// 被排队的文件名（只看名字，临时目录前缀无关紧要）
+        fn names(&self) -> Vec<String> {
+            self.0
+                .borrow()
+                .iter()
+                .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+                .collect()
+        }
+    }
+
+    fn tree(tag: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("wind_walk_{}_{}", tag, std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    /// 独占打开一个文件，让它既删不掉也改不了名。
+    fn lock(path: &Path) -> std::fs::File {
+        use std::os::windows::fs::OpenOptionsExt;
+        std::fs::write(path, b"x").unwrap();
+        std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(path)
+            .expect("独占打开失败")
+    }
+
+    #[test]
+    fn plain_tree_is_deleted_and_queues_nothing() {
+        // 对照组：没有自身 exe、也没有占用 —— 一路当场删掉，账本与队列都该是空的。
+        let root = tree("plain");
+        std::fs::create_dir_all(root.join("data")).unwrap();
+        std::fs::write(root.join("data/dict.wdat"), b"x").unwrap();
+
+        let q = FakeQueue::new();
+        let deferred = schedule_dir_on_reboot_impl(&root, &|_| false, &|p| q.schedule(p));
+
+        assert!(!deferred, "没有自身 exe，不该说「让给自删除」");
+        assert!(q.names().is_empty(), "白排了队: {:?}", q.names());
+        assert!(!root.exists(), "能删掉的树没被删掉");
+    }
+
+    /// 本次修的那条：树里留着正在运行的自身 exe 时，**目录本身也不排队**。
+    ///
+    /// 从前会排 —— 于是账本非空、`is_reboot_pending()` 为真、完成页每次卸载都提示
+    /// 「需重启电脑才能彻底清除」，而自删除副本随后就把整棵树删了，提示从头到尾是假的。
+    #[test]
+    fn self_exe_in_tree_defers_the_directory() {
+        let root = tree("self");
+        let me = root.join("uninstall.exe");
+        std::fs::write(&me, b"x").unwrap();
+        std::fs::write(root.join("readme.txt"), b"x").unwrap();
+
+        let q = FakeQueue::new();
+        let deferred = schedule_dir_on_reboot_impl(&root, &|p| p == me, &|p| q.schedule(p));
+
+        assert!(deferred, "该说「让给自删除」");
+        assert!(
+            q.names().is_empty(),
+            "目录或自身 exe 被排了队: {:?}",
+            q.names()
+        );
+        assert!(me.exists(), "自身 exe 被动了");
+        assert!(!root.join("readme.txt").exists(), "其余文件该照删");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 不能矫枉过正：自身 exe 在场只豁免**目录自己**，别的删不掉的文件照排、
+    /// 「需要重启」该真就真。
+    ///
+    /// ⚠️ 两个锁定文件一前一后夹住 `uninstall.exe`，这是**刻意**的，别精简成一个。
+    ///
+    /// 要防的回归形态是把 `deferred` 这个 gate 下放到文件分支：
+    /// `if remove_dir(&path).is_err() && !deferred_to_self_delete { schedule(...) }`
+    /// —— 它读起来很像「整棵树都让给自删除了，那就都别排了」，是后人最容易写出来的
+    /// 过度抑制。而 `read_dir` 在 NTFS 上按文件名（UTF-16 大写）顺序给，只放一个
+    /// `held.bin` 的话它排在 `uninstall.exe` **之前**，处理它时 `deferred` 还是 false、
+    /// 照样排队，测试全绿、变异逃逸 —— 那条断言等于押在枚举顺序上，而且押输。
+    /// 夹住之后，无论先给谁，总有一个是在 `deferred` 已置真之后才处理的。
+    #[test]
+    fn other_locked_files_are_still_queued() {
+        let root = tree("mixed");
+        let me = root.join("uninstall.exe");
+        std::fs::write(&me, b"x").unwrap();
+        // 名字一前一后夹住 "uninstall.exe"
+        let held_a = root.join("aa_held.bin");
+        let held_z = root.join("zz_held.bin");
+        let guard_a = lock(&held_a);
+        let guard_z = lock(&held_z);
+
+        let q = FakeQueue::new();
+        let deferred = schedule_dir_on_reboot_impl(&root, &|p| p == me, &|p| q.schedule(p));
+
+        assert!(deferred);
+        let names = q.names();
+        assert_eq!(
+            names.len(),
+            2,
+            "两个锁定文件都该排队，与枚举顺序无关: {names:?}"
+        );
+        // share_mode(0) 连 rename 都挡，stash_aside 原路返回，故名字不带 .old_ 后缀；
+        // 用 starts_with 兼容两种情形。
+        for stem in ["aa_held.bin", "zz_held.bin"] {
+            assert!(
+                names.iter().any(|n| n.starts_with(stem)),
+                "{stem} 没被排队: {names:?}"
+            );
+        }
+        assert!(
+            !names.iter().any(|n| n == "uninstall.exe"),
+            "自身 exe 被排队了: {names:?}"
+        );
+
+        drop(guard_a);
+        drop(guard_z);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 自身 exe 在子目录里时，豁免要一路传到根 —— 否则根目录照样被排队，
+    /// 假提示原样回来。
+    #[test]
+    fn self_exe_in_a_subdir_defers_the_whole_chain() {
+        let root = tree("subdir");
+        let sub = root.join("bin");
+        std::fs::create_dir_all(&sub).unwrap();
+        let me = sub.join("uninstall.exe");
+        std::fs::write(&me, b"x").unwrap();
+
+        let q = FakeQueue::new();
+        let deferred = schedule_dir_on_reboot_impl(&root, &|p| p == me, &|p| q.schedule(p));
+
+        assert!(deferred, "子目录的豁免没传上来");
+        assert!(q.names().is_empty(), "链条上有东西被排队: {:?}", q.names());
+        assert!(me.exists());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

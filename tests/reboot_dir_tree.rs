@@ -126,6 +126,8 @@ fn current_executable_is_recognized_across_spellings() {
 
 /// 子进程模式开关：值是要遍历的目录。
 const CHILD_DIR_ENV: &str = "WIND_REBOOT_CHILD_WALK_DIR";
+/// 子进程退出码：走查在「只剩自身 exe」的树上留下了重启账目。
+const CHILD_EXIT_LEDGER_DIRTY: i32 = 2;
 /// 子进程模式开关：值是睡眠毫秒数（把自己变成一个「正在运行故删不掉」的文件）。
 const CHILD_SLEEP_ENV: &str = "WIND_REBOOT_CHILD_SLEEP_MS";
 
@@ -135,7 +137,27 @@ const CHILD_SLEEP_ENV: &str = "WIND_REBOOT_CHILD_SLEEP_MS";
 /// 必须是每个 spawn 型测试的第一句：子进程不该跑真正的测试体。
 fn child_mode_or_continue() {
     if let Ok(dir) = std::env::var(CHILD_DIR_ENV) {
-        reboot::schedule_dir_on_reboot(Path::new(&dir));
+        let root = PathBuf::from(&dir);
+        reboot::schedule_dir_on_reboot(&root);
+        // 走查放过自身 exe 之后，**装着它的那个目录也不该进队列**。
+        //
+        // 只能在子进程里断言：只有在这里 `is_current_exe` 才真的命中。
+        //
+        // ⚠️ 判据是「**这个目录**在不在账本里」，不是「账本空不空」。树里另有真的
+        // 删不掉的文件时（`already_stashed_names_are_not_renamed_twice` 就是那样），
+        // 账本非空是**合理**的 —— 那些文件确实要等重启。写成「账本空不空」会把那条
+        // 合理的账目一并禁掉，本次第一版就是这么写的，跑全套时被那条测试抓了出来。
+        // 覆盖边界：只看**根**。自身 exe 种在根（见 `plant_walk_target`），所以
+        // 「自身 exe 在子目录 + 真 is_current_exe」这个组合本文件不覆盖 —— 那条由
+        // `util::reboot` 里注入版的 self_exe_in_a_subdir_defers_the_whole_chain 守。
+        // 现实里 uninstall.exe 确实在根，这个分工是有意的。
+        if reboot::pending_items().iter().any(|i| i.path == root) {
+            eprintln!(
+                "子进程：装着自身 exe 的目录被排进了队列 {:?}",
+                reboot::pending_items()
+            );
+            std::process::exit(CHILD_EXIT_LEDGER_DIRTY);
+        }
         std::process::exit(0);
     }
     if let Ok(ms) = std::env::var(CHILD_SLEEP_ENV) {
@@ -204,10 +226,11 @@ fn spawn_at(launch: &Path, role: (&str, &str)) -> std::process::Child {
 /// 用长路径就守得住；只有「M1 那个具体修法」才必须短路径，那部分拆在
 /// [`self_executable_is_recognized_via_short_path`]。
 ///
-/// 注：子进程收尾时会对临时根目录调一次 `MoveFileExW(DELAY_UNTIL_REBOOT)`（根目录里
-/// 还剩着它自己，删不掉）。非管理员下该调用直接失败、什么也不写；管理员/CI 下会往
-/// `PendingFileRenameOperations` 里留一条指向临时目录的记录，而那个目录在重启前早已
-/// 被本测试删掉，重启时是一条空转指令。
+/// 注：本测试**不再**往 `PendingFileRenameOperations` 里留那条指向临时根目录的记录。
+/// 从前子进程收尾时会对它调一次 `MoveFileExW(DELAY_UNTIL_REBOOT)`（根目录里还剩着
+/// 它自己，删不掉），在管理员/CI 下留下一条空转指令。那条指令本身无害，但它同时让
+/// 账本非空、完成页每次卸载都无端提示「需要重启」—— 现在走查会把这个目录一并让给
+/// 自删除流程，子进程也顺带断言了它没进队列（见 `child_mode_or_continue`）。
 #[test]
 fn self_executable_is_not_touched_by_the_walk() {
     child_mode_or_continue();
@@ -250,7 +273,7 @@ fn self_executable_is_recognized_via_short_path() {
     let status = spawn_at(&launch, (CHILD_DIR_ENV, &tree.path().to_string_lossy()))
         .wait()
         .expect("等待子进程失败");
-    assert!(status.success(), "子进程异常退出: {status:?}");
+    assert_child_ok(status);
     assert_self_survived(&child_exe, tree.path());
 }
 
@@ -271,6 +294,18 @@ fn run_walk_child(launch: &Path, root: &Path) {
     let status = spawn_at(launch, (CHILD_DIR_ENV, &root.to_string_lossy()))
         .wait()
         .expect("等待子进程失败");
+    assert_child_ok(status);
+}
+
+/// 子进程的退出码就是断言结果，这里把它翻译成人话。
+fn assert_child_ok(status: std::process::ExitStatus) {
+    if status.code() == Some(CHILD_EXIT_LEDGER_DIRTY) {
+        panic!(
+            "走查把「只剩自身 exe 的目录」排进了重启队列 —— \
+             完成页会因此每次都提示「需重启电脑才能彻底清除」，\
+             而自删除副本随后就把整棵树删了，那条提示从头到尾是假的"
+        );
+    }
     assert!(status.success(), "子进程异常退出: {status:?}");
 }
 
