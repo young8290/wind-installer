@@ -22,17 +22,91 @@ pub struct CleanupOptions {
 
 impl Default for CleanupOptions {
     fn default() -> Self {
-        let program_files =
-            std::env::var("ProgramFiles").unwrap_or_else(|_| r"C:\Program Files".to_string());
-
         Self {
-            install_dir: PathBuf::from(program_files).join(meta::app_id()),
+            // ⚠️ 不要改回「拼 %ProgramFiles%」：那个硬猜曾让静默卸载删错地方，
+            // 详见 `resolve_install_dir` 的注释。
+            install_dir: resolve_install_dir(),
             clean_roaming: false,
             clean_local_cache: true,
             backup_to_desktop: true,
             keep_user_data: false,
         }
     }
+}
+
+/// 解析本机**实际的**安装目录。
+///
+/// ── 这里出过什么事 ──────────────────────────────────────────────────────
+/// 从前有两个真相来源，而且只有 GUI 那条用对了：向导读注册表 ARP 的
+/// `InstallLocation`（安装时亲手写下的那个目录），静默路径却走
+/// `CleanupOptions::default()` —— 那是**硬猜** `%ProgramFiles%\<app.id>`。
+///
+/// 装在非默认目录时（向导允许改、`--dir` 能改、清单的 `paths.install` 模板本身
+/// 就是每个应用可配的），静默卸载的结局是最糟的那种半成品：`DeleteInstallFiles`
+/// 对着一个不存在的路径跑，而里面每一步都是 `let _ =` / `if exists()`，**一条
+/// warning 都不产生**；与此同时 `UndoReceipt` 用的是回执里的绝对路径、
+/// `RemoveOwnUninstallInfo` 用的是注册表键，**照常清得干干净净**。
+/// 于是 ARP 条目没了（用户在「应用和功能」里再也找不到它、无法重试卸载），
+/// 程序文件一个没删，`success == true`，退出码 0 —— winget 记成一次干净的卸载。
+///
+/// ── 三级来源 ────────────────────────────────────────────────────────────
+/// 1. **ARP 的 `InstallLocation`**：安装时亲手写下的，最权威。
+/// 2. **自身所在目录**：仅当它看起来确实是安装目录（旁边有 `uninstall.exe` 或
+///    清单声明的主程序）。对 `uninstall.exe` 而言这按定义必然成立 —— 它就躺在
+///    安装目录里；对 `wind-installer.exe uninstall` 则通常不成立（安装器可能在
+///    任何地方），那道存在性检查正是用来把这种情形挡掉的。
+/// 3. 猜：`%ProgramFiles%\<app.id>`。留着是因为总得有个兜底，但它是最后一档。
+pub fn resolve_install_dir() -> PathBuf {
+    pick_install_dir(
+        install_dir_from_arp(),
+        self_dir_if_it_looks_installed(),
+        default_install_dir(),
+    )
+}
+
+/// 三级来源的**判据**，与取数分开 —— 否则这段逻辑要靠摆注册表才能验。
+fn pick_install_dir(arp: Option<PathBuf>, self_dir: Option<PathBuf>, fallback: PathBuf) -> PathBuf {
+    arp.or(self_dir).unwrap_or(fallback)
+}
+
+/// 读 ARP 的 `InstallLocation`。空串按「没有」处理 —— 一个空的
+/// `InstallLocation` 会被 `PathBuf::from("")` 变成当前工作目录，那是灾难性的删除目标。
+fn install_dir_from_arp() -> Option<PathBuf> {
+    use winreg::enums::*;
+    use winreg::RegKey;
+
+    let key_path = format!(
+        r"Software\Microsoft\Windows\CurrentVersion\Uninstall\{}",
+        meta::app_display_name()
+    );
+    let key = RegKey::predef(HKEY_LOCAL_MACHINE)
+        .open_subkey_with_flags(&key_path, KEY_READ)
+        .ok()?;
+    let dir: String = key.get_value("InstallLocation").ok()?;
+    if dir.trim().is_empty() {
+        return None;
+    }
+    Some(PathBuf::from(dir))
+}
+
+/// 本进程所在目录，当它看起来确实是一个安装目录时。
+fn self_dir_if_it_looks_installed() -> Option<PathBuf> {
+    let dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
+    looks_like_install_dir(&dir).then_some(dir)
+}
+
+/// 判据：目录里有 `uninstall.exe` 或清单声明的主程序。
+///
+/// 只看「自己叫不叫 uninstall.exe」是不够的：`wind-installer.exe` 被改名成
+/// `xxx_uninstall.exe` 分发也是支持的用法（`main.rs` 就按文件名里含 "uninstall"
+/// 来切模式），那种 exe 可以躺在下载目录里，它的 parent 绝不是安装目录。
+fn looks_like_install_dir(dir: &Path) -> bool {
+    dir.join(crate::installer::UNINSTALLER_NAME).exists() || dir.join(meta::main_exe()).exists()
+}
+
+fn default_install_dir() -> PathBuf {
+    let pf = std::env::var("ProgramFiles").unwrap_or_else(|_| r"C:\Program Files".to_string());
+    PathBuf::from(pf).join(meta::app_id())
 }
 
 /// 解析本机实际生效的用户数据目录：优先读清单 `[datadir]` 声明的配置文件，其次默认位置。
@@ -833,5 +907,49 @@ mod guard_tests {
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+}
+
+/// 安装目录三级来源的测试。
+///
+/// 测的是**判据**（`pick_install_dir`），不是取数：读注册表那半边要摆 ARP 状态才能验，
+/// 单测够不着。但真正出过事的正是判据——静默路径当初压根没问过前两级。
+#[cfg(test)]
+mod install_dir_tests {
+    use super::pick_install_dir;
+    use std::path::PathBuf;
+
+    fn p(s: &str) -> PathBuf {
+        PathBuf::from(s)
+    }
+
+    /// ARP 里有就用 ARP —— 那是安装时亲手写下的目录，比任何推断都硬。
+    #[test]
+    fn arp_wins_over_everything() {
+        let got = pick_install_dir(Some(p(r"D:\Apps\Demo")), Some(p(r"C:\elsewhere")), p(r"C:\PF\Demo"));
+        assert_eq!(got, p(r"D:\Apps\Demo"));
+    }
+
+    /// ARP 读不到（键被上一次半截卸载删了、或压根是便携安装）时退到自身所在目录。
+    /// 对 `uninstall.exe` 而言这一级按定义必然正确。
+    #[test]
+    fn self_dir_is_the_second_source() {
+        let got = pick_install_dir(None, Some(p(r"D:\Apps\Demo")), p(r"C:\PF\Demo"));
+        assert_eq!(got, p(r"D:\Apps\Demo"));
+    }
+
+    /// 两级都没有才猜。**这一级从前是唯一的一级**，静默卸载因此去删了一个猜出来的目录。
+    #[test]
+    fn guessing_is_the_last_resort() {
+        let got = pick_install_dir(None, None, p(r"C:\PF\Demo"));
+        assert_eq!(got, p(r"C:\PF\Demo"));
+    }
+
+    /// 顺序不能倒：自身目录再像，也压不过 ARP 记录的那个。
+    /// （升级换过目录时，旧目录里可能还躺着一个 uninstall.exe。）
+    #[test]
+    fn self_dir_never_overrides_arp() {
+        let got = pick_install_dir(Some(p(r"D:\new")), Some(p(r"C:\old")), p(r"C:\PF\Demo"));
+        assert_ne!(got, p(r"C:\old"), "自身目录压过了 ARP");
     }
 }

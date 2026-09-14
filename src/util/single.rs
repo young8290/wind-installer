@@ -26,6 +26,10 @@ use windows::Win32::System::Threading::{
     PROCESS_QUERY_LIMITED_INFORMATION,
 };
 
+// `ERROR_INSTALL_ALREADY_RUNNING`(1618)。定义在 `util::exitcode`：退出码是对外契约，
+// 集中一处，免得两个二进制的 main 里各长出一套。
+use crate::util::exitcode::ALREADY_RUNNING as EXIT_ALREADY_RUNNING;
+
 /// 全局单实例标志
 static INSTANCE_RUNNING: AtomicBool = AtomicBool::new(false);
 
@@ -37,12 +41,6 @@ static INSTANCE_RUNNING: AtomicBool = AtomicBool::new(false);
 /// 取 24 小时：任何真实的安装/卸载都远在其内，它要防的不是慢安装，而是把
 /// 「永久挡死」变成「有界挡死」。与 InstallerGuard 的硬兜底同一个量级、同一个理由。
 const STALE_AFTER: Duration = Duration::from_secs(24 * 60 * 60);
-
-/// Windows 的 `ERROR_INSTALL_ALREADY_RUNNING`。
-///
-/// 沿用系统既有约定而不自造一个码：MSI 系的调用方本来就认得它，含义也正好是
-/// 「另一个安装正在进行，这次什么都没做」。与 `EXIT_REBOOT_REQUIRED`(3010) 同源。
-pub const EXIT_ALREADY_RUNNING: i32 = 1618;
 
 /// 另一个实例是否正持锁。
 ///

@@ -38,17 +38,32 @@ pub fn request_elevation() -> Result<(), String> {
     // 应用内自动升级会静默退化成交互式向导（用户看到的是"升级时路径居然可以改"）。
     // 含空格的参数补引号；路径以反斜杠结尾的极端情况未处理（会转义掉结尾引号），
     // 但安装目录不会以反斜杠结尾，实际不构成问题。
-    let params: String = std::env::args()
-        .skip(1)
-        .map(|a| {
-            if a.contains(' ') && !a.starts_with('"') {
-                format!("\"{a}\"")
-            } else {
-                a
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ");
+    //
+    // ⚠️ 全程走 `OsString`，两个理由，缺一不可：
+    // 1. `std::env::args()` 撞上非法 Unicode（Windows 命令行允许孤立代理）会 **panic**，
+    //    而 release 是 `panic = "abort"` + GUI 子系统 —— 那是一次无提示崩溃，
+    //    发生在「控制面板点卸载 → 请求提权」这条路上。`uninstaller::args` 里有一条
+    //    `lone_surrogate_does_not_panic` 钉着解析那一侧，但它管不到这里，
+    //    保证只覆盖半条路等于没有保证。
+    // 2. 也**不能**用 `to_string_lossy` 绕开：那会把非法码位换成 U+FFFD，等于悄悄
+    //    改写转发给子进程的参数 —— 提权后的实例拿到的路径与用户给的不是同一个。
+    //    `OsString` 一路带到 `encode_wide`，原样进 `ShellExecuteW`。
+    let mut params = std::ffi::OsString::new();
+    for a in std::env::args_os().skip(1) {
+        if !params.is_empty() {
+            params.push(" ");
+        }
+        // 判「要不要补引号」只看得懂的那部分：非法码位既不是空格也不是引号，
+        // 看漏它不影响判断，而拼接用的仍是原始的 `a`。
+        let lossy = a.to_string_lossy();
+        if lossy.contains(' ') && !lossy.starts_with('"') {
+            params.push("\"");
+            params.push(&a);
+            params.push("\"");
+        } else {
+            params.push(&a);
+        }
+    }
 
     let verb: Vec<u16> = "runas\0".encode_utf16().collect();
     let path: Vec<u16> = current_exe
@@ -56,7 +71,10 @@ pub fn request_elevation() -> Result<(), String> {
         .encode_utf16()
         .chain(std::iter::once(0))
         .collect();
-    let params_w: Vec<u16> = params.encode_utf16().chain(std::iter::once(0)).collect();
+    let params_w: Vec<u16> = {
+        use std::os::windows::ffi::OsStrExt;
+        params.encode_wide().chain(std::iter::once(0)).collect()
+    };
 
     let result = unsafe {
         ShellExecuteW(

@@ -63,6 +63,17 @@ wind-packer build --config app.toml --stub wind-installer.exe
 
 安装过程中每个有系统副作用的步骤都会写入一条回执，卸载时读取回执逐条撤销，不重新解析清单。因此用户升级过多个版本、清单已经变化时，卸载撤销的仍是当初安装的内容。
 
+卸载器是独立的二进制 `uninstall.exe`，安装时写进注册表 ARP 键：
+
+| 值 | 内容 | 行为 |
+|---|---|---|
+| `UninstallString` | `"<安装目录>\uninstall.exe"` | 交互式向导（控制面板 / 设置里点「卸载」走这条） |
+| `QuietUninstallString` | `"<安装目录>\uninstall.exe" --silent` | 无人值守，无任何界面（winget / SCCM 走这条） |
+
+`uninstall.exe` 认两个参数：`--silent`、`--keep-user-data`（静默时保留 `%APPDATA%\<app.id>`）。
+不认识的参数**只跳过它自己**，后面的照常解析 —— 存量机器的 ARP 条目是老版本安装器写的，
+里面有一个已经废弃的 `--uninstall`，新卸载器必须能被那些条目正常调起。
+
 ## 文件占用与重启
 
 升级时旧文件常被占用。此时安装器将其改名让路，并用 `MoveFileEx(DELAY_UNTIL_REBOOT)` 排队删除，新版本照常安装。这种情况下安装已完成，但需要重启才能清理干净：交互式向导会显示提示，`--silent` 模式以 3010 退出。
@@ -75,10 +86,19 @@ wind-packer build --config app.toml --stub wind-installer.exe
 |---|---|
 | 0 | 成功 |
 | 1 | 失败 |
+| 5 | 什么都没做：需要管理员权限（`ERROR_ACCESS_DENIED`）。**只有静默卸载**会返回它 |
 | 1618 | 什么都没做：另一个安装/卸载实例正在运行（`ERROR_INSTALL_ALREADY_RUNNING`） |
 | 3010 | 成功，但需重启以完成清理（`ERROR_SUCCESS_REBOOT_REQUIRED`） |
 
 3010 表示安装成功，取值与 MSI、NSIS 一致。调用方若只判断 `exit == 0`，会把需要重启的情况误判为安装失败。
+
+5 同样表示**本次没有做任何改动**。`--silent` 的语义是「不产生任何 UI」，而 UAC 提示框
+就是 UI —— 静默调用未提权时弹它，等于把一个无人值守的部署任务挂在那里等人点。
+
+它的适用范围是**静默卸载**（`uninstall.exe --silent` 与 `wind-installer.exe uninstall --silent`），
+不含静默**安装**：`wind-installer.exe --silent` 未提权时照旧弹 UAC 并以 0 退出。那不是遗漏——
+应用内自动升级依赖这个行为（`request_elevation` 会转发原始参数给提权后的新实例），
+改成 5 会当场打断升级。交互式路径全都照常弹 UAC。
 
 1618 表示**本次没有做任何改动**，重试即可。它取代了从前那个「被单实例锁挡住就以 0 退出」的行为
 ——那个行为会让批量部署脚本把「什么都没干」记成一次成功的安装。被挡时的详情

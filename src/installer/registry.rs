@@ -133,6 +133,54 @@ pub fn unregister_url_protocol_named(protocol: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// ARP 的 `UninstallString`：控制面板 / 设置里点「卸载」执行的那条命令行。
+///
+/// **不带任何参数**。`uninstall.exe` 本身就是卸载器，不需要模式 flag —— 从前这里
+/// 写的是 `--uninstall`，而那个 flag **全仓没有任何定义**（安装器那边的卸载模式是
+/// 裸词子命令 `uninstall`，不是 flag）。
+pub fn uninstall_command(uninstall_exe: &str) -> String {
+    format!("\"{}\"", uninstall_exe)
+}
+
+/// ARP 的 `QuietUninstallString`：winget / SCCM / 无人值守脚本按 ARP 约定调的那条。
+///
+/// 它承诺的是「不产生任何 UI 地卸完」。此前这条承诺是**假的**，两个原因叠在一起：
+/// 1. `uninstall.exe` 整体不解析参数，`--silent` 落地就没人看，一路跌进 GUI 向导；
+/// 2. 前面还挂着一个无定义的 `--uninstall`，而安装器的 clap 开着
+///    `ignore_errors = true`，那个 flag 的语义是**从出错处截断** —— 就算哪天把
+///    `--silent` 接上，也会被它一起吃掉。
+///
+/// 两头都已修：解析见 [`crate::uninstaller::args`]，静默路径见
+/// [`crate::uninstaller::run_silent`]。下面 `arp_command_tests` 里有一条测试把这条
+/// 命令行原样喂回解析器 —— 光断言字符串「长得对」是不够的，从前那条也长得很对。
+pub fn quiet_uninstall_command(uninstall_exe: &str) -> String {
+    format!("\"{}\" --silent", uninstall_exe)
+}
+
+/// ARP 里那两条命令行，连值名一起。
+///
+/// 值名跟着值一起走，是因为值名本身也是契约的一部分：winget 与控制面板按
+/// `UninstallString` / `QuietUninstallString` 这两个名字去找卸载入口，名字写错了，
+/// 命令行再对也没人会去执行它。放进同一个数组，改名就会被
+/// `both_arp_values_are_present_under_their_documented_names` 抓住（实测：把
+/// `QuietUninstallString` 改成 `QuietUninstall`，4 条测试变红）。
+///
+/// ⚠️ **它挡不住「调用点绕过本函数」**。实测过：把 [`write_uninstall_info`] 里那个
+/// 循环换回两条内联的 `set_value(… &format!("\"{}\" --uninstall --silent", …))`
+/// —— 也就是历史缺陷一字不差的形状 —— **6 条测试全绿**。原因是测试断言的始终是本函数的
+/// 返回值，而内联的那份压根不经过它。单测在这里能做到的上限就是「构造这两个值的地方
+/// 只剩一处」；越过这一处的改动只有 code review 和真写注册表的测试拦得住。
+/// 别因为这里绿着就以为那个形状回不来了。
+pub fn arp_uninstall_values(uninstall_exe: &str) -> [(&'static str, String); 2] {
+    [
+        ("UninstallString", uninstall_command(uninstall_exe)),
+        (
+            "QuietUninstallString",
+            quiet_uninstall_command(uninstall_exe),
+        ),
+    ]
+}
+
 /// 写入卸载信息到注册表
 pub fn write_uninstall_info(config: &InstallConfig) -> Result<(), String> {
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
@@ -156,18 +204,11 @@ pub fn write_uninstall_info(config: &InstallConfig) -> Result<(), String> {
     uninst_key
         .set_value("InstallLocation", &install_dir_str)
         .map_err(|e| format!("Failed to set InstallLocation: {}", e))?;
-    uninst_key
-        .set_value(
-            "UninstallString",
-            &format!("\"{}\" --uninstall", uninstall_exe_str),
-        )
-        .map_err(|e| format!("Failed to set UninstallString: {}", e))?;
-    uninst_key
-        .set_value(
-            "QuietUninstallString",
-            &format!("\"{}\" --uninstall --silent", uninstall_exe_str),
-        )
-        .map_err(|e| format!("Failed to set QuietUninstallString: {}", e))?;
+    for (name, value) in arp_uninstall_values(&uninstall_exe_str) {
+        uninst_key
+            .set_value(name, &value)
+            .map_err(|e| format!("Failed to set {}: {}", name, e))?;
+    }
 
     // 图标（使用安装器主程序图标，第一个图标资源）
     let icon_str = format!("\"{}\",0", uninstall_exe_str);
@@ -450,5 +491,127 @@ mod owner_format_tests {
         // 真实进程不会是 0，这条是为了钉住「两端对 pid==0 的处置一致」：
         // 写端若哪天真写出 0，读端会判非法并回落年龄兜底，而不是永久挡住。
         assert_eq!(parse_owner_like_reader(&format_owner(0, 123)), None);
+    }
+}
+
+/// ARP 那两条命令行的测试。
+///
+/// ⚠️ **覆盖边界（实测，别推断）**：这里测的是 `arp_uninstall_values` 的返回值。
+/// 把 `write_uninstall_info` 里那个循环换成两条内联的 `set_value(…)` —— 历史缺陷
+/// 一字不差的形状 —— 本模块 6 条**全绿**。单测够不着「绕过被测函数」这种改动。
+///
+/// **口径**：不测「字符串长什么样」——从前那条 `"…" --uninstall --silent` 也长得
+/// 完全正确，看上去就该是静默卸载，可它一次都没静默过。这里测的是**把生成的命令行
+/// 原样切回 argv、喂给卸载器真正用的那个解析器**，看它究竟进不进静默路径。
+/// 两端任何一端改坏，这里都会红。
+#[cfg(test)]
+mod arp_command_tests {
+    use super::arp_uninstall_values;
+    use crate::uninstaller::args;
+
+    /// 按 Windows 的规矩把一条命令行切成 argv：引号内的空格不算分隔符。
+    ///
+    /// 只够用于本测试（不处理 `\"` 转义——ARP 命令行里不会有）。它自己也被下面
+    /// `splitter_handles_spaces_in_path` 钉住，否则一个切错的 helper 会让所有断言假绿。
+    fn split_command_line(s: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut cur = String::new();
+        let mut in_quotes = false;
+        let mut started = false;
+        for c in s.chars() {
+            match c {
+                '"' => {
+                    in_quotes = !in_quotes;
+                    started = true;
+                }
+                ' ' if !in_quotes => {
+                    if started {
+                        out.push(std::mem::take(&mut cur));
+                        started = false;
+                    }
+                }
+                _ => {
+                    cur.push(c);
+                    started = true;
+                }
+            }
+        }
+        if started {
+            out.push(cur);
+        }
+        out
+    }
+
+    const EXE: &str = r"C:\Program Files\Demo App\uninstall.exe";
+
+    /// 按值名取**注册表真正会写进去的那个字符串**。断言不经过构造函数，
+    /// 于是「调用点绕过 helper 内联一个 format!」同样会被抓住。
+    fn arp(name: &str) -> String {
+        arp_uninstall_values(EXE)
+            .into_iter()
+            .find(|(n, _)| *n == name)
+            .unwrap_or_else(|| panic!("ARP 里没有 {name} 这个值"))
+            .1
+    }
+
+    fn uninstall_command(exe: &str) -> String {
+        assert_eq!(exe, EXE);
+        arp("UninstallString")
+    }
+
+    fn quiet_uninstall_command(exe: &str) -> String {
+        assert_eq!(exe, EXE);
+        arp("QuietUninstallString")
+    }
+
+    /// 两个值名一个都不能少、也不能改名 —— winget / 控制面板按名字找它们。
+    #[test]
+    fn both_arp_values_are_present_under_their_documented_names() {
+        let names: Vec<_> = arp_uninstall_values(EXE).iter().map(|(n, _)| *n).collect();
+        assert_eq!(names, vec!["UninstallString", "QuietUninstallString"]);
+    }
+
+    #[test]
+    fn splitter_handles_spaces_in_path() {
+        let v = split_command_line(&format!("\"{EXE}\" --silent"));
+        assert_eq!(v, vec![EXE.to_string(), "--silent".to_string()]);
+    }
+
+    /// 本次修复的核心断言：`QuietUninstallString` 被原样调起时，卸载器真的进静默路径。
+    #[test]
+    fn quiet_uninstall_string_actually_goes_silent() {
+        let argv = split_command_line(&quiet_uninstall_command(EXE));
+        let parsed = args::parse(&argv[1..]);
+        assert!(
+            parsed.silent,
+            "QuietUninstallString 没能让卸载器进静默路径：{:?}",
+            argv
+        );
+    }
+
+    /// 反面：`UninstallString`（控制面板点卸载）必须**留在交互式**。
+    /// 静默卸载是不可逆且无提示的，绝不能让人点一下就没了。
+    #[test]
+    fn uninstall_string_stays_interactive() {
+        let argv = split_command_line(&uninstall_command(EXE));
+        assert_eq!(argv.len(), 1, "UninstallString 不该带参数：{:?}", argv);
+        assert!(!args::parse(&argv[1..]).silent);
+    }
+
+    /// 那个无定义的 flag 不能再出现在任何一条里——它会被安装器的 clap
+    /// （`ignore_errors = true`）当成截断点，把后面的参数一并吃掉。
+    #[test]
+    fn neither_command_carries_the_undefined_flag() {
+        assert!(!uninstall_command(EXE).contains("--uninstall"));
+        assert!(!quiet_uninstall_command(EXE).contains("--uninstall"));
+    }
+
+    /// 路径带空格必须被引号包住，否则 `Program` 会被当成 exe、`Files\…` 当成参数。
+    #[test]
+    fn exe_path_is_quoted() {
+        for cmd in [uninstall_command(EXE), quiet_uninstall_command(EXE)] {
+            assert!(cmd.starts_with('"') , "exe 路径没加引号: {cmd}");
+            assert!(cmd[1..].contains('"'), "引号没闭合: {cmd}");
+        }
     }
 }

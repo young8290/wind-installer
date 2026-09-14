@@ -57,10 +57,35 @@ wind-packer build --config <app.toml> --stub wind-installer.exe
 > **调用方契约**：`--silent` 的 `3010` 是**成功**，不是失败。宿主（wind-setting）若只判 `exit == 0` 会把「装好了但请重启」误报成安装失败。
 >
 > 另有 **1618**（`ERROR_INSTALL_ALREADY_RUNNING`）：被单实例锁挡住，**什么都没做**，重试即可。
+> 以及 **5**（`ERROR_ACCESS_DENIED`）：**静默卸载**未提权。它**不弹 UAC**——那是 UI，
+> 会把无人值守的部署挂在那里等人点；从前这条路是「弹 UAC + `exit(0)`」，一次连开始都没
+> 开始的卸载被记成了成功。
+>
+> ⚠️ **静默安装不在此列**：`wind-installer.exe --silent` 未提权时仍弹 UAC 并以 0 退出，
+> 因为 wind-setting 的应用内自动升级依赖它（`request_elevation` 转发原始 argv 给新实例）。
+> 这个不对称是有意的，改动前先看 `uninstaller::require_admin_or_exit` 的注释。
 > 从前这条路是 `exit(0)`——静默、无提示、退出码还在说「成功」，于是一个残留的锁能让
 > 批量部署把「一次都没装上」记成全部成功。
 
 安装器**只提示、不代劳重启**：它无从判断用户手头有没有没保存的工作。提示用 `theme::warning()` 而非 `error()`——红色会让用户以为装失败而去重装，而重装解决不了任何问题。
+
+## 静默卸载与 ARP
+
+`uninstall.exe` 是独立二进制（`src/uninstaller_main.rs`），**不用 clap**。参数解析在
+`uninstaller::args`，静默路径的退出码收场在 `uninstaller::run_silent`——后者与
+`wind-installer.exe uninstall --silent` 共用同一份，退出码是对外契约，分两处写会分叉。
+
+改 ARP 那两条命令行时注意：
+
+- 字符串由 `installer::registry::{uninstall_command, quiet_uninstall_command}` 构造，
+  `registry.rs` 的 `arp_command_tests` 把生成的命令行**原样切回 argv 喂给解析器**再断言。
+  只断言「字符串长得对」是不够的——从前那条 `"…" --uninstall --silent` 长得完全正确，
+  却一次都没静默过。
+- **别往里加未定义的 flag**。安装器那边 clap 开着 `ignore_errors = true`，语义是
+  **从出错处截断**：一个不认识的参数会把它自己和它之后的全部丢掉。历史上的
+  `--uninstall` 正是这么把 `--silent` 吃掉的。
+- 新加 flag 要同时管两条路：`uninstaller::args`（`uninstall.exe`）与 `main.rs` 的 clap
+  `Args`（`wind-installer.exe`）。
 
 ## 变体隔离（dev / release）
 

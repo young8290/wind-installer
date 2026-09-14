@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 
 use windui::app::App;
 use windui::core::EventCtx;
@@ -115,7 +114,9 @@ pub fn run_uninstall_wizard() {
     // 卸载完了但有文件删不掉（已排重启删除队列）——完成页据此提示重启。
     let finish_reboot = signal(false);
     let status_text = signal(String::from("正在准备卸载..."));
-    let install_dir = signal(detect_install_dir());
+    // 与静默路径共用同一个来源。这两条从前各有一份实现，而只有这边是对的
+    // —— 那道分叉让 `uninstall.exe --silent` 去删一个猜出来的目录。
+    let install_dir = signal(crate::uninstaller::cleanup::resolve_install_dir());
     let show_delete_confirm = signal(false);
 
     // ---- 跨线程进度通道（on_message 在 UI 线程调用，可直接写 Signal）----
@@ -607,27 +608,6 @@ pub fn run_uninstall_wizard() {
     let app = app.frameless();
 
     app.run();
-}
-
-/// 从注册表读取安装目录；找不到时回退到默认路径。
-fn detect_install_dir() -> PathBuf {
-    use winreg::enums::*;
-    use winreg::RegKey;
-
-    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
-    let key_path = format!(
-        r"Software\Microsoft\Windows\CurrentVersion\Uninstall\{}",
-        meta::app_display_name()
-    );
-    if let Ok(key) = hklm.open_subkey_with_flags(&key_path, KEY_READ) {
-        if let Ok(dir) = key.get_value::<String, _>("InstallLocation") {
-            if !dir.is_empty() {
-                return PathBuf::from(dir);
-            }
-        }
-    }
-    let pf = std::env::var("ProgramFiles").unwrap_or_else(|_| r"C:\Program Files".to_string());
-    PathBuf::from(pf).join(meta::app_id())
 }
 
 /// 把没干成的那些事渲染成完成页上的一段话。

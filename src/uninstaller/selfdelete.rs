@@ -87,6 +87,16 @@ fn self_delete_args() -> (Option<PathBuf>, Option<u32>) {
 /// 卸载完成后调用：将自身复制到 %TEMP%，以 `--self-delete <install_dir> <pid>` 启动副本，
 /// 然后立即退出当前进程（不返回）。副本负责删除安装目录并自我清除。
 pub fn trigger_self_delete(install_dir: &Path) -> Result<(), String> {
+    trigger_self_delete_with_code(install_dir, 0)
+}
+
+/// 同上，但指定本进程的退出码。
+///
+/// 静默路径需要它：那条路上「装成功了但请重启」要靠 **3010** 交给调用方，而
+/// 原先这里写死 `exit(0)` —— 自删除一触发，退出码就被抹成 0，调用方再也看不到
+/// 该重启这回事。GUI 那条没有这个问题（它有完成页可以显示提示），所以
+/// `trigger_self_delete` 保持原样。
+pub fn trigger_self_delete_with_code(install_dir: &Path, exit_code: i32) -> Result<(), String> {
     // ⚠️ 这一侧的每个失败都必须落盘。调用方是 `let _ = trigger_self_delete(&dir);`
     // 紧接 exit(0)，而本函数成功时根本不返回 —— 返回值只在失败时有意义，却没人看。
     // 最现实的失败是往 %TEMP% 拷一个 exe 并立刻执行：那是杀毒软件最常见的拦截规则之一。
@@ -129,7 +139,7 @@ pub fn trigger_self_delete(install_dir: &Path) -> Result<(), String> {
         temp_exe,
         install_dir.display()
     ));
-    std::process::exit(0);
+    std::process::exit(exit_code);
 }
 
 /// 自删除模式执行体（在 %TEMP% 副本中运行）：

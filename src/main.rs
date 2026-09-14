@@ -12,6 +12,8 @@ mod ui;
 mod uninstaller;
 mod util;
 
+use util::exitcode;
+
 /// Wind Installer - 轻量级 Windows 安装管理器
 #[derive(Parser, Debug)]
 #[command(name = "wind-installer")]
@@ -58,15 +60,6 @@ enum Mode {
     Uninstall,
 }
 
-/// 操作成功，但有文件被占用、需重启系统才能清理干净。
-///
-/// 取值沿用 Windows 的 `ERROR_SUCCESS_REBOOT_REQUIRED`——MSI 与 NSIS 都用它表达
-/// 「装成功了，但请重启」。仅用于完全无界面的 `--silent`：那条路径没有窗口可以
-/// 留给用户看提示，退出码是唯一能把这个事实交给调用方的通道。
-///
-/// **调用方须知**：把 `3010` 当作成功而非失败处理，再自行提示用户重启。
-const EXIT_REBOOT_REQUIRED: i32 = 3010;
-
 fn main() {
     let args = Args::parse();
 
@@ -103,7 +96,7 @@ fn log_startup(tag: &str, args: &Args) {
         args.dir,
         args.datadir,
         util::admin::is_admin(),
-        std::env::args().collect::<Vec<_>>(),
+        std::env::args_os().collect::<Vec<_>>(),
     ));
 }
 
@@ -113,7 +106,8 @@ fn log_startup(tag: &str, args: &Args) {
 /// 用户只会看到「安装器返回了 3010」而无从知道是哪些文件卡住了。
 fn log_reboot_required(tag: &str) {
     util::log::append_startup_line(&format!(
-        "{tag}: exit={EXIT_REBOOT_REQUIRED} reboot_required {}\n",
+        "{tag}: exit={} reboot_required {}\n",
+        exitcode::REBOOT_REQUIRED,
         util::reboot::pending_summary()
     ));
 }
@@ -160,13 +154,17 @@ fn run_install(args: Args) {
 
         let result = installer::perform_install(&config, installer::InstallMode::Standard);
         if !result.success {
-            std::process::exit(1);
+            // 隔壁 need_reboot 那条一直配着 release_lock，这条从前没有 —— 持锁退出
+            // 会在 %TEMP% 留下一个锁文件。它不会挡住下一次（主人已死，`lock_blocks`
+            // 判 alive=false 就放行），但那是兜底在替它擦屁股，不是本该如此。
+            util::single::release_lock();
+            std::process::exit(exitcode::FAILURE);
         }
         if result.need_reboot {
             // 无界面模式没有「让用户看到提示再关闭」的余地，只能靠退出码传信。
             log_reboot_required("install");
             util::single::release_lock();
-            std::process::exit(EXIT_REBOOT_REQUIRED);
+            std::process::exit(exitcode::REBOOT_REQUIRED);
         }
     } else {
         ui::install_wizard::run_install_wizard(ui::install_wizard::WizardOptions {
@@ -180,9 +178,12 @@ fn run_install(args: Args) {
 
 /// 运行卸载
 fn run_uninstall(args: Args) {
+    log_startup("uninstall", &args);
+    // 与 `uninstall.exe` 共用同一份收场：静默卸载未提权时报 5，不弹 UAC。
+    // 这两条是同一个功能的两个实现，提权判定分成两套就已经分叉过一次
+    // ——文档写着「`--silent` 未提权返回 5」，而这边照旧弹 UAC + exit(0)。
     if !util::admin::is_admin() {
-        util::admin::request_elevation().ok();
-        std::process::exit(0);
+        uninstaller::require_admin_or_exit(args.silent);
     }
 
     if uninstaller::selfdelete::is_self_delete_mode() {
@@ -204,34 +205,15 @@ fn run_uninstall(args: Args) {
     }
 
     if args.silent {
-        let options = uninstaller::cleanup::CleanupOptions {
-            keep_user_data: args.keep_user_data,
-            ..Default::default()
-        };
-
-        let result = uninstaller::perform_uninstall(&options);
-
-        // ⚠️ 「有产物没清掉」**不是失败**，不能让它变成非 0 退出码：
-        // 卸载已经跑完，ARP 条目多半也已移除，调用方重试没有意义 —— 报成失败只会让
-        // 批量部署把它当成待重试项反复跑。详情写在卸载日志里，这里留一行指路。
-        // 也**不能**排在 need_reboot 之前：那会让 3010 不可达，而 3010 是写在
-        // README 退出码表与 AGENTS.md 调用方契约里的对外承诺。
-        if !result.success {
-            util::log::append_startup_line(&format!(
-                "uninstall: exit=0 residue={} log={}\n",
-                result.warnings.len(),
-                result.log_path
-            ));
-        }
-        if result.need_reboot {
-            log_reboot_required("uninstall");
-            util::single::release_lock();
-            std::process::exit(EXIT_REBOOT_REQUIRED);
-        }
-    } else {
-        ui::uninstall_wizard::run_uninstall_wizard();
+        // 退出码的三条出口（残留不算失败 / 3010 必须可达 / 其余为 0）都在
+        // `uninstaller::run_silent` 里，与 `uninstall.exe --silent` 共用同一份——
+        // 那边才是 ARP `QuietUninstallString` 真正调起的二进制。
+        let code = uninstaller::run_silent(args.keep_user_data);
+        util::single::release_lock();
+        std::process::exit(code);
     }
 
+    ui::uninstall_wizard::run_uninstall_wizard();
     util::single::release_lock();
 }
 
