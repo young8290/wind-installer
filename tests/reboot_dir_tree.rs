@@ -138,7 +138,15 @@ const CHILD_SLEEP_ENV: &str = "WIND_REBOOT_CHILD_SLEEP_MS";
 fn child_mode_or_continue() {
     if let Ok(dir) = std::env::var(CHILD_DIR_ENV) {
         let root = PathBuf::from(&dir);
-        reboot::schedule_dir_on_reboot(&root);
+        // ⚠️ 走可注入版：真的那个会往 `PendingFileRenameOperations` 写。
+        // `already_stashed_names_are_not_renamed_twice` 在树里种了一个**正在运行的**
+        // exe，走查删不掉它 → `stash_aside` → 真排进队列，而那条队列指向
+        // `%TEMP%\wind_reboot_stash_<pid>\…`，PID 会被系统复用、PFRO 开机时无条件执行。
+        // 本文件的判据全在文件系统与账本上，排队只是副作用，换掉不损失任何强度。
+        reboot::schedule_dir_on_reboot_with_queue(&root, &|p| {
+            reboot::record_pending(p, true);
+            Ok(())
+        });
         // 走查放过自身 exe 之后，**装着它的那个目录也不该进队列**。
         //
         // 只能在子进程里断言：只有在这里 `is_current_exe` 才真的命中。

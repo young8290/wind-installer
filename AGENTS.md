@@ -69,6 +69,36 @@ wind-packer build --config <app.toml> --stub wind-installer.exe
 
 安装器**只提示、不代劳重启**：它无从判断用户手头有没有没保存的工作。提示用 `theme::warning()` 而非 `error()`——红色会让用户以为装失败而去重装，而重装解决不了任何问题。
 
+## 测试不许碰真的 `PendingFileRenameOperations`
+
+`schedule_delete_on_reboot` / `schedule_dir_on_reboot` 写的是
+`HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\PendingFileRenameOperations`
+——**进程外的全局状态**，开机时由会话管理器**无条件执行**。测试里调到它们，等于在跑
+测试的人机器上留下真实的开机删除指令。
+
+这不是假想。2026-09-14 在编译机上实测：一轮 `cargo test --bins` 往注册表写 2 对条目，
+**攒到 36 对才被发现**。排的都是 `%TEMP%\wind_guard_<pid>_…`，而 PID 会被系统复用。
+污染完全静默，不会有任何东西变红。
+
+**凡是可能走到排队分支的代码，排队动作必须可注入。** 现有的注入口：
+
+| 入口 | 可注入版本 |
+|---|---|
+| `cleanup::remove_path_with` | 收 `schedule_file` / `schedule_dir` 两个 `&dyn Fn` |
+| `cleanup::remove_local_data_entries_with` | 同上 |
+| `cleanup::delete_install_files_with` | 同上 |
+| `reboot::schedule_dir_on_reboot_impl` | 收 `is_self` + `schedule` |
+| `reboot::schedule_dir_on_reboot_with_queue` | 只换排队、保留真 `is_current_exe`（给 `tests/` 用） |
+| `font::remove_or_schedule_with` | 收 `schedule` |
+
+**注入不损失任何测试强度**：这些测试断言的是**账本**，而 `schedule_delete_on_reboot`
+里是 `record_pending(path, result.is_ok())` —— 无论 `MoveFileExW` 成没成功都记账。
+所以断言从来不依赖那次真实调用（非提权环境下它本来就会失败，测试照样绿），
+假的排队函数自己 `record_pending` 一笔就够了。
+
+新增删除逻辑时：先开注入口，**再**写测试。顺序反过来，中间那段时间测试已经在写真
+注册表而没人注意。
+
 ## 静默卸载与 ARP
 
 `uninstall.exe` 是独立二进制（`src/uninstaller_main.rs`），**不用 clap**。参数解析在

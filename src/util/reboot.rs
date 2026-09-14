@@ -189,6 +189,28 @@ pub fn schedule_dir_on_reboot(dir: &Path) {
 ///   用注入就能直接测，不必每次都去起一个住在被测目录里的子进程。
 /// - `schedule`：真的那个会往 `HKLM\…\PendingFileRenameOperations` 写真条目 ——
 ///   那是个全局共享值、开机由会话管理器无条件执行，测试每跑一次加一条不可接受。
+/// [`schedule_dir_on_reboot`] 的可注入版本，**给测试用**。
+///
+/// 只换掉「往注册表写」那一步，`is_self` 仍是真的 `is_current_exe` —— 需要它的测试
+/// （`tests/reboot_dir_tree.rs` 里那些 spawn 子进程的）正是要验「走查放过自身 exe」，
+/// 把它也假掉就没什么可验的了。
+///
+/// 为什么要有这个入口：真的 [`schedule_delete_on_reboot`] 往
+/// `HKLM\…\PendingFileRenameOperations` 写，那是进程外全局状态、开机时无条件执行。
+/// 集成测试里 `already_stashed_names_are_not_renamed_twice` 会在树里种一个正在运行的
+/// exe，走查删不掉它 → `stash_aside` → **真的排进队列**。那条测试的判据是文件系统
+/// （名字有没有被改第二次），排队只是副作用，所以换掉不损失任何强度。
+///
+/// `#[doc(hidden)]`：这不是给生产代码用的入口，生产代码用 [`schedule_dir_on_reboot`]。
+#[doc(hidden)]
+#[allow(dead_code)] // 只有 tests/ 里的集成测试用它，编译 bin target 时就是「未使用」
+pub fn schedule_dir_on_reboot_with_queue(
+    dir: &Path,
+    schedule: &dyn Fn(&Path) -> Result<(), String>,
+) -> bool {
+    schedule_dir_on_reboot_impl(dir, &is_current_exe, schedule)
+}
+
 fn schedule_dir_on_reboot_impl(
     dir: &Path,
     is_self: &dyn Fn(&Path) -> bool,

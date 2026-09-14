@@ -265,6 +265,30 @@ pub fn guard_user_data_dir(dir: &Path, markers: &[String]) -> Result<(), String>
 
 /// 删除安装文件
 pub fn delete_install_files(install_dir: &PathBuf, r: &mut dyn Reporter) -> Result<(), String> {
+    delete_install_files_with(
+        install_dir,
+        r,
+        &reboot::schedule_delete_on_reboot,
+        &reboot::schedule_dir_on_reboot,
+    )
+}
+
+/// 同上，排队动作可注入。理由见 [`remove_path_with`]。
+///
+/// ⚠️ 这个注入口是**先于测试**开的：本函数目前一条测试都碰不到（它开头就读
+/// `meta::process_names()`，而 `meta::manifest()` 未 bootstrap 即 panic，单测里没有清单），
+/// 所以此刻它一个字节都没往注册表写。但下面三处排队一旦变可达就是活的污染源，
+/// 其中尾部那条还是**递归**排队、一次能排一整棵树。
+///
+/// 顺序反过来的话——先补测试、再回头注入化——中间会有一段「测试已经在写真注册表
+/// 而没人注意」的时间，而这种污染完全静默，不会有任何东西变红。上一次就是这么攒到
+/// 36 对条目的。
+fn delete_install_files_with(
+    install_dir: &PathBuf,
+    r: &mut dyn Reporter,
+    schedule_file: &dyn Fn(&Path) -> Result<(), String>,
+    schedule_dir: &dyn Fn(&Path),
+) -> Result<(), String> {
     // 从 meta 动态构建二进制文件列表：进程名→.exe + ACL DLL 列表
     let mut binaries: Vec<String> = meta::process_names()
         .iter()
@@ -289,7 +313,7 @@ pub fn delete_install_files(install_dir: &PathBuf, r: &mut dyn Reporter) -> Resu
             } else {
                 path
             };
-            let _ = reboot::schedule_delete_on_reboot(&target);
+            let _ = schedule_file(&target);
         }
     }
 
@@ -314,7 +338,7 @@ pub fn delete_install_files(install_dir: &PathBuf, r: &mut dyn Reporter) -> Resu
             }
             let p = entry.path();
             if std::fs::remove_file(&p).is_err() {
-                let _ = reboot::schedule_delete_on_reboot(&p);
+                let _ = schedule_file(&p);
             }
         }
     }
@@ -327,7 +351,7 @@ pub fn delete_install_files(install_dir: &PathBuf, r: &mut dyn Reporter) -> Resu
     // `schedule_dir_on_reboot` 自底向上逐项处理，且能当场删掉的一律当场删、不进队列，
     // 故正常路径（`remove_dir_all` 一把成功）根本走不到它，也不会多排任何重启任务。
     if std::fs::remove_dir_all(install_dir).is_err() {
-        reboot::schedule_dir_on_reboot(install_dir);
+        schedule_dir(install_dir);
     }
 
     Ok(())
@@ -436,6 +460,23 @@ fn remove_local_data_entries(
     root: &Path,
     options: &CleanupOptions,
 ) -> Vec<String> {
+    remove_local_data_entries_with(
+        info,
+        root,
+        options,
+        &reboot::schedule_delete_on_reboot,
+        &reboot::schedule_dir_on_reboot,
+    )
+}
+
+/// 同上，排队动作可注入。理由见 [`remove_path_with`]。
+fn remove_local_data_entries_with(
+    info: Option<&crate::manifest::LocalDataInfo>,
+    root: &Path,
+    options: &CleanupOptions,
+    schedule_file: &dyn Fn(&Path) -> Result<(), String>,
+    schedule_dir: &dyn Fn(&Path),
+) -> Vec<String> {
     // 清单没声明 [localdata] = 这个目录不归安装器管，一个字节都不碰（AGENTS.md 规则 2）。
     let Some(info) = info else {
         return Vec::new();
@@ -452,7 +493,7 @@ fn remove_local_data_entries(
         // remove_dir_all 落到 %LOCALAPPDATA% 之外。
         match crate::manifest::safe_local_data_rel(entry.as_str()) {
             None => rejected.push(entry.to_string()),
-            Some(rel) => remove_path(&root.join(rel)),
+            Some(rel) => remove_path_with(&root.join(rel), schedule_file, schedule_dir),
         }
     }
 
@@ -495,7 +536,34 @@ fn entries_to_remove<'a>(
 
 /// 删一个条目，不区分文件还是目录——清单作者写 `logs` 时想的是「那一坨日志」，
 /// 不该要求他先知道它在磁盘上是目录才写得对。
-fn remove_path(path: &Path) {
+/// 删掉一个路径；删不掉就排进重启删除队列。两个排队动作由调用方给。
+///
+/// 没有「不带注入的薄壳」版本：唯一的调用方 [`remove_local_data_entries_with`] 本身
+/// 就带着注入，再留一层只会给人一条绕过注入的近路。
+///
+/// ── 为什么必须能注入 ────────────────────────────────────────────────────
+/// 真的那两个函数往 `HKLM\…\PendingFileRenameOperations` 写，那是**进程外的全局
+/// 状态**，开机时由会话管理器**无条件执行**。测试里调到它们，等于在跑测试的人机器上
+/// 留下真实的开机删除指令。
+///
+/// 这不是假想：2026-09-14 在编译机上实测，`undeletable_entries_are_recorded_in_the_reboot_ledger`
+/// 每跑一轮往注册表写 2 对条目（`held.bin` 一次、`logs` 目录自身一次），攒到 **36 对**
+/// 才被发现 —— 而且它是静默的，不会有任何东西变红。排的又都是
+/// `%TEMP%\wind_guard_<pid>_…`，PID 会被系统复用，理论上能撞上一个真实文件。
+///
+/// `util::reboot` 那边早就把注入做对了（`schedule_dir_on_reboot_impl` 收 `&dyn Fn`），
+/// 是**这个调用方绕过了它**。形状照抄那边，读代码的人不用学新东西。
+///
+/// ── 注入不损失任何测试强度 ──────────────────────────────────────────────
+/// 这些测试断言的是**账本**（`reboot::is_reboot_pending()`），而
+/// `schedule_delete_on_reboot` 里是 `record_pending(path, result.is_ok())` ——
+/// 无论 `MoveFileExW` 成功还是失败都记账。所以断言从来不依赖那次真实调用成功：
+/// 非提权环境下写 HKLM 本来就会失败，测试照样绿。假的排队函数自己记一笔账就够了。
+fn remove_path_with(
+    path: &Path,
+    schedule_file: &dyn Fn(&Path) -> Result<(), String>,
+    schedule_dir: &dyn Fn(&Path),
+) {
     // 用 symlink_metadata 而非 `is_dir()`：后者跟随重解析点，遇到 junction 会递归进
     // 目标目录把**目标**删掉（本仓在 util::reboot 的递归排队里踩过同一个坑）。
     let Ok(meta) = std::fs::symlink_metadata(path) else {
@@ -521,9 +589,9 @@ fn remove_path(path: &Path) {
         // 目录走递归排队：MoveFileExW 对非空目录无效，只排目录自身等于没排
         // （commit 457b542 为同一件事引入了 schedule_dir_on_reboot）。
         if is_dir {
-            reboot::schedule_dir_on_reboot(path);
+            schedule_dir(path);
         } else {
-            let _ = reboot::schedule_delete_on_reboot(path);
+            let _ = schedule_file(path);
         }
     }
 }
@@ -891,7 +959,14 @@ mod guard_tests {
             .open(&locked)
             .expect("独占打开失败");
 
-        remove_path(&root.join("logs"));
+        // ⚠️ 走注入版。用真的那个会往注册表写两对真实的开机删除指令
+        // （`held.bin` 与 `logs` 各一），指向 `%TEMP%\wind_guard_<pid>_…` —— PID 会被
+        // 系统复用，而 PFRO 开机时无条件执行。实测攒到 36 对才被发现。
+        remove_path_with(
+            &root.join("logs"),
+            &fake_schedule_file,
+            &fake_schedule_dir,
+        );
 
         assert!(
             reboot::is_reboot_pending(),
@@ -900,6 +975,31 @@ mod guard_tests {
         drop(_guard);
         reboot::reset_ledger();
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 假的排队动作：**自己记一笔账，但不碰注册表**。
+    ///
+    /// 断言的是账本，而真函数里是 `record_pending(path, result.is_ok())` —— 无论
+    /// `MoveFileExW` 成没成功都记账。所以把真调用换掉一点强度都不损失，换来的是
+    /// 测试不再往 `HKLM\…\PendingFileRenameOperations` 写真实的开机删除指令。
+    ///
+    /// 传 `true`（而不是 `result.is_ok()`）是有意的：这里模拟的是「成功排进队列」，
+    /// 需要验「排不进队列」那一支的测试应另写一个返回 `Err` 的版本。
+    fn fake_schedule_file(p: &Path) -> Result<(), String> {
+        reboot::record_pending(p, true);
+        Ok(())
+    }
+
+    /// 目录版。真的那个会自底向上递归，这里只记目录自身 —— 本模块的断言只问
+    /// 「账本非空吗」，递归与否不影响；真正验递归行为的是 `reboot` 自己那组测试。
+    ///
+    /// ⚠️ **做变异检验时改的是这一个，不是上面那个。**
+    /// `undeletable_entries_are_recorded_in_the_reboot_ledger` 喂给 `remove_path_with`
+    /// 的是 `logs` **目录**，所以只走 `schedule_dir` 这一支；把
+    /// [`fake_schedule_file`] 改成不记账，测试照样绿 —— 那是个**无效变异**
+    /// （实测过），不是测试的漏洞。改本函数才会红。
+    fn fake_schedule_dir(p: &Path) {
+        reboot::record_pending(p, true);
     }
 
     fn tmpdir(tag: &str) -> PathBuf {
