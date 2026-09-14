@@ -41,6 +41,24 @@ impl InstallLogger {
     }
 }
 
+/// 启动决策日志 `%TEMP%\wind_installer_args.log`。
+///
+/// 与上面的安装过程日志是两回事：安装器是 GUI 子系统程序，没有 stdout，而「怎么被
+/// 调起来的」「为什么一上来就退了」这类事发生在安装流程开始之前，那时 InstallLogger
+/// 还没建。出问题时这个文件往往是唯一的线索。
+pub fn startup_log_path() -> PathBuf {
+    std::env::temp_dir().join("wind_installer_args.log")
+}
+
+/// 往启动决策日志追加一行（失败即忽略：诊断日志不该反过来影响流程）。
+pub fn append_startup_line(line: &str) {
+    let _ = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(startup_log_path())
+        .and_then(|mut f| f.write_all(line.as_bytes()));
+}
+
 /// 从 SystemTime 提取 UTC HH:MM:SS
 fn utc_hms() -> String {
     let secs = std::time::SystemTime::now()

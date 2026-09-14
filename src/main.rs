@@ -97,20 +97,14 @@ fn main() {
 /// 尤其能暴露 `request_elevation` 重启自身后参数丢失：日志里会出现两条记录，
 /// 第一条 `silent=true admin=false`，第二条 `silent=false admin=true`。
 fn log_startup(tag: &str, args: &Args) {
-    use std::io::Write;
-    let line = format!(
+    util::log::append_startup_line(&format!(
         "{tag}: silent={} dir={:?} datadir={:?} admin={} argv={:?}\n",
         args.silent,
         args.dir,
         args.datadir,
         util::admin::is_admin(),
         std::env::args().collect::<Vec<_>>(),
-    );
-    let _ = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(std::env::temp_dir().join("wind_installer_args.log"))
-        .and_then(|mut f| f.write_all(line.as_bytes()));
+    ));
 }
 
 /// 记录「以 3010 退出」的原因。
@@ -118,16 +112,10 @@ fn log_startup(tag: &str, args: &Args) {
 /// 静默模式退出码非 0 时，调用方唯一能查的就是这个文件；不落盘的话，
 /// 用户只会看到「安装器返回了 3010」而无从知道是哪些文件卡住了。
 fn log_reboot_required(tag: &str) {
-    use std::io::Write;
-    let line = format!(
+    util::log::append_startup_line(&format!(
         "{tag}: exit={EXIT_REBOOT_REQUIRED} reboot_required {}\n",
         util::reboot::pending_summary()
-    );
-    let _ = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(std::env::temp_dir().join("wind_installer_args.log"))
-        .and_then(|mut f| f.write_all(line.as_bytes()));
+    ));
 }
 
 /// 运行安装
@@ -137,11 +125,6 @@ fn run_install(args: Args) {
     if let Err(e) = meta::bootstrap() {
         eprintln!("无法载入安装清单: {}", e);
         std::process::exit(1);
-    }
-
-    // 检查单实例
-    if util::single::is_another_instance_running() {
-        std::process::exit(0);
     }
 
     // 检查管理员权限
@@ -154,6 +137,15 @@ fn run_install(args: Args) {
     if !util::path::is_64bit_system() {
         // TODO: 显示错误对话框
         std::process::exit(1);
+    }
+
+    // 检查单实例。
+    //
+    // ⚠️ 必须排在 bootstrap 与提权**之后**：被挡住时要报出应用名，清单没载入就会
+    // panic（release 是 panic=abort + GUI 子系统，那是一次无提示的崩溃）；而提权前
+    // 的这个进程只做「重启自身」一件事，让它持锁只会让提权后的自己被自己挡住。
+    if let Some(pid) = util::single::another_instance_pid() {
+        util::single::report_busy_and_exit(pid, args.silent);
     }
 
     if args.silent {
@@ -188,10 +180,6 @@ fn run_install(args: Args) {
 
 /// 运行卸载
 fn run_uninstall(args: Args) {
-    if util::single::is_another_instance_running() {
-        std::process::exit(0);
-    }
-
     if !util::admin::is_admin() {
         util::admin::request_elevation().ok();
         std::process::exit(0);
@@ -208,6 +196,11 @@ fn run_uninstall(args: Args) {
     if let Err(e) = meta::bootstrap() {
         eprintln!("无法载入卸载清单: {}", e);
         std::process::exit(1);
+    }
+
+    // 检查单实例——排在 bootstrap 之后，理由见 run_install 里同一处的注释。
+    if let Some(pid) = util::single::another_instance_pid() {
+        util::single::report_busy_and_exit(pid, args.silent);
     }
 
     if args.silent {

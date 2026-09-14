@@ -68,6 +68,15 @@ pub fn app_id() -> &'static str {
 pub fn app_display_name() -> &'static str {
     &manifest().app.display_name
 }
+
+/// 清单没初始化时返回 `None`，不 panic。
+///
+/// 给**出错收场的那些路径**用：它们可能跑在 bootstrap 之前，而收场代码自己再崩一次，
+/// 换来的是一次无提示 abort（release profile 是 `panic = "abort"` + GUI 子系统，
+/// 连崩溃信息都没处显示），比它本来要报告的那个问题更难查。
+pub fn try_app_display_name() -> Option<&'static str> {
+    MANIFEST.get().map(|m| m.app.display_name.as_str())
+}
 pub fn app_version() -> &'static str {
     &manifest().app.version
 }

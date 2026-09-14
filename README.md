@@ -75,9 +75,14 @@ wind-packer build --config app.toml --stub wind-installer.exe
 |---|---|
 | 0 | 成功 |
 | 1 | 失败 |
+| 1618 | 什么都没做：另一个安装/卸载实例正在运行（`ERROR_INSTALL_ALREADY_RUNNING`） |
 | 3010 | 成功，但需重启以完成清理（`ERROR_SUCCESS_REBOOT_REQUIRED`） |
 
 3010 表示安装成功，取值与 MSI、NSIS 一致。调用方若只判断 `exit == 0`，会把需要重启的情况误判为安装失败。
+
+1618 表示**本次没有做任何改动**，重试即可。它取代了从前那个「被单实例锁挡住就以 0 退出」的行为
+——那个行为会让批量部署脚本把「什么都没干」记成一次成功的安装。被挡时的详情
+（占着锁的进程号、锁文件路径）写在 `%TEMP%\wind_installer_args.log`。
 
 ## 构建与测试
 
