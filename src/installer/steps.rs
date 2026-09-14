@@ -321,12 +321,18 @@ impl Step<InstallCtx<'_>> for RegisterInputMethod {
         "正在注册系统输入法...".into()
     }
     fn run(&self, ctx: &mut InstallCtx, _r: &mut dyn Reporter) -> Result<(), String> {
-        ime::register_input_method()?;
+        let outcome = ime::register_input_method();
+        // ⚠️ 回执先记，再把失败抛上去。
+        //
+        // `InstallLayoutOrTip` 报 false 不等于「一点都没注册成」——它是个没有文档的
+        // API，返回值含义不确定。漏记回执的代价是卸载时根本不去反注册，语言栏里
+        // 永远留着这个输入法，而那时用户已经没有卸载程序可用了。多记一条的代价只是
+        // 卸载时多做一次无害的反注册。两边不对称，所以宁可多记。
         if let Some(profile) = ime::profile_id() {
             ctx.receipt
                 .push(ReceiptEntry::InputMethodRegistered { profile });
         }
-        Ok(())
+        outcome
     }
 }
 

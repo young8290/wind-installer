@@ -159,10 +159,11 @@ impl Step<UninstallCtx<'_>> for DeleteInstallFiles {
     fn name(&self) -> String {
         "正在删除程序文件...".into()
     }
-    fn run(&self, ctx: &mut UninstallCtx, _r: &mut dyn Reporter) -> Result<(), String> {
-        cleanup::delete_install_files(&ctx.options.install_dir).inspect_err(|_| {
-            ctx.need_reboot = true;
-        })
+    fn run(&self, ctx: &mut UninstallCtx, r: &mut dyn Reporter) -> Result<(), String> {
+        // 这里原本还挂着 `.inspect_err(|_| ctx.need_reboot = true)`，但 delete_install_files
+        // 恒返回 Ok，那句永远触发不了。删不掉的东西由它自己 `schedule_dir_on_reboot`
+        // 排进账本，run_plan 收尾时统一读账本 —— 重启提示走的一直是那条路。
+        cleanup::delete_install_files(&ctx.options.install_dir, r)
     }
 }
 
@@ -173,8 +174,8 @@ impl Step<UninstallCtx<'_>> for CleanupUserData {
     fn name(&self) -> String {
         "正在清理用户数据...".into()
     }
-    fn run(&self, ctx: &mut UninstallCtx, _r: &mut dyn Reporter) -> Result<(), String> {
-        cleanup::cleanup_user_data(ctx.options, &ctx.user_data_dir)
+    fn run(&self, ctx: &mut UninstallCtx, r: &mut dyn Reporter) -> Result<(), String> {
+        cleanup::cleanup_user_data(ctx.options, &ctx.user_data_dir, r)
     }
 }
 

@@ -70,9 +70,13 @@ pub fn remove_auto_start_value(value_name: &str) -> Result<(), String> {
         .open_subkey_with_flags(RUN_KEY, KEY_WRITE)
         .map_err(|e| format!("Failed to open Run key: {}", e))?;
 
-    run_key
-        .delete_value(value_name)
-        .map_err(|e| format!("Failed to remove auto-start: {}", e))?;
+    // 值已不在就算删成了（用户或清理工具先动过手）。不加这条守卫的话，
+    // 卸载会为一件「本来就想要的结果」报一条警告。
+    if let Err(e) = run_key.delete_value(value_name) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            return Err(format!("Failed to remove auto-start: {}", e));
+        }
+    }
 
     Ok(())
 }
@@ -119,9 +123,12 @@ pub fn unregister_url_protocol_named(protocol: &str) -> Result<(), String> {
         .open_subkey_with_flags(r"Software\Classes", KEY_WRITE)
         .map_err(|e| format!("Failed to open Classes key: {}", e))?;
 
-    classes_key
-        .delete_subkey_all(protocol)
-        .map_err(|e| format!("Failed to remove protocol key: {}", e))?;
+    // 键已不在就算删成了，理由同 remove_auto_start_value。
+    if let Err(e) = classes_key.delete_subkey_all(protocol) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            return Err(format!("Failed to remove protocol key: {}", e));
+        }
+    }
 
     Ok(())
 }

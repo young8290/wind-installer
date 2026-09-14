@@ -51,7 +51,7 @@ enum ProgressMsg {
 /// 挤在 99% 处不动。
 struct GuiReporter {
     tx: Sender<ProgressMsg>,
-    logger: crate::util::log::InstallLogger,
+    logger: crate::util::log::RunLogger,
     index: usize,
     total: usize,
 }
@@ -125,7 +125,7 @@ fn run_install_plan(
     is_fresh_install: bool,
 ) {
     {
-        let mut logger = crate::util::log::InstallLogger::new();
+        let mut logger = crate::util::log::RunLogger::install();
         logger.log(&format!("安装目录: {:?}", install_dir));
         logger.log(&format!("安装模式: {:?}", mode));
         let log_path = logger.path.to_string_lossy().to_string();

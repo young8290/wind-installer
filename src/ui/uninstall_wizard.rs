@@ -32,20 +32,28 @@ enum UninstallMsg {
 
 /// 把 [`Reporter`] 事件转成 UI 通道消息。卸载页只有状态文字、无进度条，
 /// 故步内细粒度进度也走 Status（如「反注册 COM ...」逐条显示）。
+///
+/// 同时把每一步、每一条警告落进卸载日志：本程序是 `windows_subsystem = "windows"`，
+/// 没有控制台，从前这里的 `eprintln!` 等于把话说给空气听。
 struct GuiReporter {
     tx: Sender<UninstallMsg>,
+    logger: crate::util::log::RunLogger,
 }
 
 impl Reporter for GuiReporter {
-    fn step_begin(&mut self, _index: usize, _total: usize, name: &str) {
+    fn step_begin(&mut self, index: usize, total: usize, name: &str) {
+        self.logger
+            .log(&format!("[{}/{}] {}", index + 1, total, name));
         let _ = self.tx.send(UninstallMsg::Status(name.to_string()));
     }
     fn step_progress(&mut self, detail: &str, _fraction: f32) {
         let _ = self.tx.send(UninstallMsg::Status(detail.to_string()));
     }
-    fn log(&mut self, _msg: &str) {}
+    fn log(&mut self, msg: &str) {
+        self.logger.log(msg);
+    }
     fn warn(&mut self, msg: &str) {
-        eprintln!("Warning: {}", msg);
+        self.logger.log_error(msg);
     }
 }
 
@@ -276,26 +284,42 @@ pub fn run_uninstall_wizard() {
                             std::thread::spawn(move || {
                                 // 与静默路径共用同一份计划，仅 Reporter 不同
                                 let plan = crate::uninstaller::plan::plan_uninstall();
-                                let mut reporter = GuiReporter { tx: tx.clone() };
+                                let mut logger = crate::util::log::RunLogger::uninstall();
+                                let log_path = logger.path.to_string_lossy().to_string();
+                                logger.log(&format!("安装目录: {:?}", options.install_dir));
+                                let mut reporter = GuiReporter {
+                                    tx: tx.clone(),
+                                    logger,
+                                };
+                                let mut collector =
+                                    crate::installer::step::WarningCollector::new(&mut reporter);
                                 let mut ctx =
                                     crate::uninstaller::steps::UninstallCtx::new(&options);
 
                                 let outcome = crate::installer::step::run_plan(
                                     &plan,
                                     &mut ctx,
-                                    &mut reporter,
+                                    &mut collector,
                                 );
 
                                 // 卸载计划无致命步骤，一路尽力而为；删不掉的东西
                                 // 转化为「需要重启」（与 perform_uninstall 同一口径）。
                                 let need_reboot = ctx.need_reboot
-                                    || outcome.map(|o| o.need_reboot).unwrap_or(false);
+                                    || outcome.as_ref().map(|o| o.need_reboot).unwrap_or(false);
+
+                                let mut warnings = collector.into_warnings();
+                                if let Err(e) = outcome {
+                                    warnings.push(e);
+                                }
 
                                 let _ = crate::installer::registry::clear_installer_running();
 
+                                // ⚠️ ok 必须来自实际结果。从前这里写死 true，于是
+                                // 反注册失败、文件删不动都被报成「卸载完成」，而
+                                // 「卸载失败」那一页因此永远显示不出来、成了死代码。
                                 tx.send(UninstallMsg::Finished {
-                                    ok: true,
-                                    detail: String::new(),
+                                    ok: warnings.is_empty(),
+                                    detail: format_problems(&warnings, &log_path),
                                     need_reboot,
                                 })
                                 .ok();
@@ -399,7 +423,8 @@ pub fn run_uninstall_wizard() {
                         .text_align(Align::Center),
                 ),
         )
-        // 失败
+        // 没卸干净。措辞不是「卸载失败」：计划无致命步骤，它总能跑到最后，
+        // 真正发生的是**有产物没清掉**。说成「失败」会让用户以为什么都没动。
         .child(
             Element::col()
                 .width_match()
@@ -407,19 +432,19 @@ pub fn run_uninstall_wizard() {
                 .cross(Align::Center)
                 .visible_when(move || !finish_success.get())
                 .child(
-                    Element::label("✗")
+                    Element::label("！")
                         .font_size(44.0)
-                        .fg(Color::hex(theme::error())),
+                        .fg(Color::hex(theme::warning())),
                 )
                 .child(
-                    Element::label("卸载失败")
+                    Element::label("卸载完成，但有项目未能清除")
                         .font_size(18.0)
                         .fg(Color::hex(theme::text_primary())),
                 )
                 .child(
                     Element::label_signal(finish_error)
                         .font_size(12.0)
-                        .fg(Color::hex(theme::error()))
+                        .fg(Color::hex(theme::text_secondary()))
                         .width_match()
                         .text_align(Align::Center),
                 ),
@@ -434,9 +459,15 @@ pub fn run_uninstall_wizard() {
                 .fg(Color::hex(0xFFFFFF))
                 .align(Align::Center)
                 .on_click(move |_ctx: &mut EventCtx| {
-                    let dir = install_dir.get();
-                    // trigger_self_delete 内部调用 process::exit(0)，不返回
-                    let _ = crate::uninstaller::selfdelete::trigger_self_delete(&dir);
+                    // ⚠️ 只有干干净净卸完才自删除。self_delete 会 remove_dir_all 掉
+                    // 整个安装目录 —— 在「有产物没清掉」的局面下那是最坏的选择：
+                    // 比如 COM 还注册着而 DLL 已经没了，用户既看不到残留、也没法重试。
+                    // 留着目录，用户至少能再跑一次 uninstall.exe，或按提示手动收尾。
+                    if finish_success.get() {
+                        let dir = install_dir.get();
+                        // trigger_self_delete 内部调用 process::exit(0)，不返回
+                        let _ = crate::uninstaller::selfdelete::trigger_self_delete(&dir);
+                    }
                     std::process::exit(0);
                 }),
         )
@@ -597,4 +628,70 @@ fn detect_install_dir() -> PathBuf {
     }
     let pf = std::env::var("ProgramFiles").unwrap_or_else(|_| r"C:\Program Files".to_string());
     PathBuf::from(pf).join(meta::app_id())
+}
+
+/// 把没干成的那些事渲染成完成页上的一段话。
+///
+/// 这段文字是本次修复对用户的**全部**交付：从前这些失败只写进一个不存在的 stderr，
+/// 界面一律报「卸载完成」。所以它必须把三件事说清——出了什么问题、还剩几条、
+/// 去哪看详情。日志路径不能省：界面放不下的条目只有那里有。
+fn format_problems(warnings: &[String], log_path: &str) -> String {
+    if warnings.is_empty() {
+        return String::new();
+    }
+    // 界面容不下长列表，列前两条，其余交给日志。
+    const SHOWN: usize = 2;
+    let mut text = warnings
+        .iter()
+        .take(SHOWN)
+        .map(|w| format!("· {}", w))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if warnings.len() > SHOWN {
+        text.push_str(&format!("\n· 另有 {} 项，详见日志", warnings.len() - SHOWN));
+    }
+    text.push_str(&format!("\n\n完整记录：{}", log_path));
+    text
+}
+
+// 以下为测试，须置于文件末尾：`#[cfg(test)] mod` 在非测试编译下整块消失，
+// 把真实代码排在它后面会让人误以为文件到此为止。
+#[cfg(test)]
+mod problem_text_tests {
+    use super::format_problems;
+
+    const LOG: &str = r"C:\Temp\demo-uninstall.log";
+
+    #[test]
+    fn no_problems_means_no_text() {
+        assert_eq!(format_problems(&[], LOG), "");
+    }
+
+    #[test]
+    fn every_problem_is_shown_while_it_fits() {
+        let text = format_problems(&["反注册 COM 失败".into(), "字体删不掉".into()], LOG);
+        assert!(text.contains("反注册 COM 失败"), "{text}");
+        assert!(text.contains("字体删不掉"), "{text}");
+        assert!(!text.contains("另有"), "两条放得下, 不该出现省略行: {text}");
+    }
+
+    #[test]
+    fn overflow_is_counted_not_dropped() {
+        // 界面放不下时必须说清还剩几条 —— 悄悄截断等于又把问题藏起来一次,
+        // 那正是这次要修的毛病。
+        let warnings: Vec<String> = (1..=5).map(|i| format!("问题{i}")).collect();
+        let text = format_problems(&warnings, LOG);
+        assert!(text.contains("问题1") && text.contains("问题2"), "{text}");
+        assert!(text.contains("另有 3 项"), "{text}");
+    }
+
+    #[test]
+    fn log_path_is_always_there() {
+        // 界面只列前两条, 其余只有日志里有; 路径丢了就等于那些条目没报过。
+        for n in 1..=5 {
+            let warnings: Vec<String> = (1..=n).map(|i| format!("问题{i}")).collect();
+            let text = format_problems(&warnings, LOG);
+            assert!(text.contains(LOG), "n={n} 时漏掉了日志路径: {text}");
+        }
+    }
 }

@@ -210,8 +210,18 @@ fn run_uninstall(args: Args) {
         };
 
         let result = uninstaller::perform_uninstall(&options);
+
+        // ⚠️ 「有产物没清掉」**不是失败**，不能让它变成非 0 退出码：
+        // 卸载已经跑完，ARP 条目多半也已移除，调用方重试没有意义 —— 报成失败只会让
+        // 批量部署把它当成待重试项反复跑。详情写在卸载日志里，这里留一行指路。
+        // 也**不能**排在 need_reboot 之前：那会让 3010 不可达，而 3010 是写在
+        // README 退出码表与 AGENTS.md 调用方契约里的对外承诺。
         if !result.success {
-            std::process::exit(1);
+            util::log::append_startup_line(&format!(
+                "uninstall: exit=0 residue={} log={}\n",
+                result.warnings.len(),
+                result.log_path
+            ));
         }
         if result.need_reboot {
             log_reboot_required("uninstall");

@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use crate::installer::step::Reporter;
 use crate::meta;
 use crate::util::reboot;
 
@@ -189,7 +190,7 @@ pub fn guard_user_data_dir(dir: &Path, markers: &[String]) -> Result<(), String>
 }
 
 /// 删除安装文件
-pub fn delete_install_files(install_dir: &PathBuf) -> Result<(), String> {
+pub fn delete_install_files(install_dir: &PathBuf, r: &mut dyn Reporter) -> Result<(), String> {
     // 从 meta 动态构建二进制文件列表：进程名→.exe + ACL DLL 列表
     let mut binaries: Vec<String> = meta::process_names()
         .iter()
@@ -221,7 +222,7 @@ pub fn delete_install_files(install_dir: &PathBuf) -> Result<(), String> {
     // 删除数据目录
     let data_dir = install_dir.join("data");
     if data_dir.exists() && std::fs::remove_dir_all(&data_dir).is_err() {
-        eprintln!("Warning: Could not delete data directory");
+        r.warn(&format!("数据目录未能删除: {}", data_dir.display()));
     }
 
     // 删除卸载程序
@@ -265,7 +266,11 @@ pub fn delete_install_files(install_dir: &PathBuf) -> Result<(), String> {
 ///
 /// `user_data_dir` 由调用方在卸载开始时解析并传入，而非在此现算——`UndoReceipt`
 /// 会删掉数据目录配置文件，现算就只能拿到默认位置，用户自定义的数据目录会被漏掉。
-pub fn cleanup_user_data(options: &CleanupOptions, user_data_dir: &Path) -> Result<(), String> {
+pub fn cleanup_user_data(
+    options: &CleanupOptions,
+    user_data_dir: &Path,
+    r: &mut dyn Reporter,
+) -> Result<(), String> {
     if options.keep_user_data {
         return Ok(());
     }
@@ -282,10 +287,13 @@ pub fn cleanup_user_data(options: &CleanupOptions, user_data_dir: &Path) -> Resu
         match guard_user_data_dir(user_data_dir, markers) {
             // 守卫失败只跳过这一块，**不中断整个清理**——%LOCALAPPDATA% 那一侧的
             // 路径由 app.id 与清单条目算出，与这个可疑路径无关，照常清理。
-            Err(reason) => eprintln!(
-                "Refusing to delete user data directory: {} — 已跳过，请手动确认后自行删除",
-                reason
-            ),
+            // 用户明确勾了「删除用户数据」却没删成，必须让他知道 —— 从前这句写进
+            // eprintln!，而本程序没有控制台，等于什么都没说。
+            Err(reason) => r.warn(&format!(
+                "用户数据目录未删除（路径未通过安全检查：{}），请手动确认后自行删除：{}",
+                reason,
+                user_data_dir.display()
+            )),
             Ok(()) => {
                 if options.backup_to_desktop {
                     // 目录名带本地时间戳，每次卸载生成唯一目录，避免覆盖历史备份
@@ -295,11 +303,20 @@ pub fn cleanup_user_data(options: &CleanupOptions, user_data_dir: &Path) -> Resu
                         local_timestamp()
                     ));
                     if let Err(e) = copy_dir_all(user_data_dir, &backup_dir) {
-                        eprintln!("Warning: Failed to backup user data to desktop: {}", e);
+                        // 备份是不可逆删除前的唯一退路，它失败了还照删不误 ——
+                        // 这条无论如何都得说出来。
+                        r.warn(&format!(
+                            "备份用户数据到桌面失败（随后仍会删除原目录）: {}",
+                            e
+                        ));
                     }
                 }
                 if let Err(e) = std::fs::remove_dir_all(user_data_dir) {
-                    eprintln!("Warning: Failed to remove user data: {}", e);
+                    r.warn(&format!(
+                        "用户数据目录未能删除 {}: {}",
+                        user_data_dir.display(),
+                        e
+                    ));
                 }
             }
         }
@@ -311,7 +328,7 @@ pub fn cleanup_user_data(options: &CleanupOptions, user_data_dir: &Path) -> Resu
     // 那是对某个应用内部布局的硬编码猜测，且已经猜空了：它在本机根本不存在，而设置
     // 程序也早已不带 WebView2。一段永远删不到东西的清理比没有更糟——它让「这一块已经
     // 清过了」看起来是真的。应用自己的目录该由 [localdata] 声明，不由安装器猜。
-    cleanup_local_data(options);
+    cleanup_local_data(options, r);
 
     Ok(())
 }
@@ -325,8 +342,10 @@ pub fn cleanup_user_data(options: &CleanupOptions, user_data_dir: &Path) -> Resu
 /// 两组条目跟随**两个不同的勾选**：`cache_dirs` 跟「清除本地缓存」，`state_files`
 /// 跟「删除用户数据」。这是本函数存在的理由——把它们合成一个开关，用户只勾了清缓存
 /// 就会连状态一起丢，而他明确没勾另一个。
-fn cleanup_local_data(options: &CleanupOptions) {
-    remove_local_data_entries(meta::localdata(), &local_data_dir(), options);
+fn cleanup_local_data(options: &CleanupOptions, r: &mut dyn Reporter) {
+    for entry in remove_local_data_entries(meta::localdata(), &local_data_dir(), options) {
+        r.warn(&format!("跳过不安全的 [localdata] 条目 {:?}", entry));
+    }
 }
 
 /// 真正动手的那一半：清单与作用域根都由调用方注入。
@@ -334,26 +353,31 @@ fn cleanup_local_data(options: &CleanupOptions) {
 /// 拆出来是为了能对着一棵临时目录树断言——这是本次改动里唯一会**删除**东西的新路径，
 /// 而它的三条契约（缺省一动不动、两个门控各管一组、空了才收目录）读代码都像是对的，
 /// 只有真的建一棵树、删一遍、再看剩下什么，才分得清「写对了」和「看着像写对了」。
+/// 返回**被拒绝**的条目（调用方负责汇报）。
+///
+/// 返回而不是就地 `r.warn`：本函数有 9 条单测直接对着一棵临时目录树调它，
+/// 返回值让「哪些条目被拒了」也进得了断言 —— 只验「树还在」证明不了它报告过。
 fn remove_local_data_entries(
     info: Option<&crate::manifest::LocalDataInfo>,
     root: &Path,
     options: &CleanupOptions,
-) {
+) -> Vec<String> {
     // 清单没声明 [localdata] = 这个目录不归安装器管，一个字节都不碰（AGENTS.md 规则 2）。
     let Some(info) = info else {
-        return;
+        return Vec::new();
     };
     if !root.exists() {
-        return;
+        return Vec::new();
     }
 
+    let mut rejected = Vec::new();
     let entries = entries_to_remove(info, options);
     for entry in &entries {
         // 打包期 `AppManifest::validate` 已经拦过一遍；这里是运行期兜底——归档里的
         // 清单未必出自本机的打包器。拒绝的代价只是少删一项，放行的代价是
         // remove_dir_all 落到 %LOCALAPPDATA% 之外。
         match crate::manifest::safe_local_data_rel(entry.as_str()) {
-            None => eprintln!("Warning: 跳过不安全的 [localdata] 条目 {:?}", entry),
+            None => rejected.push(entry.to_string()),
             Some(rel) => remove_path(&root.join(rel)),
         }
     }
@@ -371,6 +395,8 @@ fn remove_local_data_entries(
     if info.remove_dir_when_empty && !entries.is_empty() {
         let _ = std::fs::remove_dir(root);
     }
+
+    rejected
 }
 
 /// 本次要删的条目（相对作用域根），按两个勾选各自的门控筛出。
@@ -754,7 +780,11 @@ mod guard_tests {
             state_files: vec![],
             remove_dir_when_empty: false,
         };
-        remove_local_data_entries(Some(&evil), &root, &opts(true, false));
+        let rejected = remove_local_data_entries(Some(&evil), &root, &opts(true, false));
+
+        // 被拒的条目必须**报出来**，不能悄悄跳过：用户以为清理干净了，实际有一条
+        // 没执行。这里六条全都该被拒。
+        assert_eq!(rejected.len(), 6, "被拒条目没有全部上报: {rejected:?}");
 
         assert!(root.exists(), "作用域根被删掉了——`...` 那一档又漏了");
         assert!(

@@ -2,28 +2,44 @@ use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
 
-/// 安装过程日志，写入 `%TEMP%\{app.id}-install.log`（文件名跟随清单，不同应用互不覆盖）
-pub struct InstallLogger {
+/// 安装 / 卸载过程日志，写入 `%TEMP%\{app.id}-{install,uninstall}.log`
+/// （文件名跟随清单，不同应用互不覆盖）。
+///
+/// 安装与卸载分成两个文件：出事时要看的往往只是其中一次，混在一起还得先找分界。
+pub struct RunLogger {
     file: Option<File>,
     pub path: PathBuf,
 }
 
-impl Default for InstallLogger {
+impl Default for RunLogger {
     fn default() -> Self {
-        Self::new()
+        Self::install()
     }
 }
 
-impl InstallLogger {
-    pub fn new() -> Self {
-        let path = std::env::temp_dir().join(format!("{}-install.log", crate::meta::app_id()));
+impl RunLogger {
+    pub fn install() -> Self {
+        Self::open("install", "=== 安装开始 ===")
+    }
+
+    /// 卸载过程日志。
+    ///
+    /// 卸载此前**全程不落盘**：两个 Reporter 的 `warn` 都是 `eprintln!`，而两个二进制
+    /// 都是 `windows_subsystem = "windows"`、没有控制台 —— 反注册 COM 失败、文件删不掉
+    /// 之类的话全写进了一个不存在的句柄，用户只看到「卸载成功」。
+    pub fn uninstall() -> Self {
+        Self::open("uninstall", "=== 卸载开始 ===")
+    }
+
+    fn open(kind: &str, banner: &str) -> Self {
+        let path = std::env::temp_dir().join(format!("{}-{}.log", crate::meta::app_id(), kind));
         let file = OpenOptions::new()
             .create(true)
             .append(true)
             .open(&path)
             .ok();
         let mut logger = Self { file, path };
-        logger.log("=== 安装开始 ===");
+        logger.log(banner);
         logger
     }
 
@@ -44,7 +60,7 @@ impl InstallLogger {
 /// 启动决策日志 `%TEMP%\wind_installer_args.log`。
 ///
 /// 与上面的安装过程日志是两回事：安装器是 GUI 子系统程序，没有 stdout，而「怎么被
-/// 调起来的」「为什么一上来就退了」这类事发生在安装流程开始之前，那时 InstallLogger
+/// 调起来的」「为什么一上来就退了」这类事发生在安装流程开始之前，那时 RunLogger
 /// 还没建。出问题时这个文件往往是唯一的线索。
 pub fn startup_log_path() -> PathBuf {
     std::env::temp_dir().join("wind_installer_args.log")

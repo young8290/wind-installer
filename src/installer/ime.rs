@@ -326,10 +326,14 @@ fn call_install_layout_or_tip(profile: &str, flags: u32) -> Result<(), String> {
                 let f: Fn = std::mem::transmute(f);
                 let wide: Vec<u16> = profile.encode_utf16().chain(std::iter::once(0)).collect();
                 if !f(wide.as_ptr(), flags) {
-                    eprintln!(
-                        "Warning: InstallLayoutOrTip returned false for flags={:#010x}",
-                        flags
-                    );
+                    // 返回 false 必须往上报。这条路承担的正是**注册/反注册系统输入法**：
+                    // 反注册失败的后果是卸载之后语言栏里还留着这个输入法，而用户已经
+                    // 没有卸载程序可用了。从前它只写 eprintln!，而两个二进制都是
+                    // GUI 子系统、没有控制台 —— 等于从未报过。
+                    return Err(format!(
+                        "InstallLayoutOrTip 失败（flags={:#010x}，profile={}）",
+                        flags, profile
+                    ));
                 }
             }
             None => {
