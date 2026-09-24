@@ -578,9 +578,7 @@ pub fn run_uninstall_wizard() {
         )
     };
 
-    let content = Element::col()
-        .size(win_w, win_h)
-        .bg(Color::hex(theme::bg_primary()));
+    let content = Element::col().bg(Color::hex(theme::bg_primary()));
 
     #[cfg(feature = "frameless")]
     let content = content.child(title_bar);
@@ -591,11 +589,7 @@ pub fn run_uninstall_wizard() {
         .child(page_progress)
         .child(page_finish);
 
-    // 用 stack 叠加模态对话框（显示时覆盖全窗）
-    let root = Element::stack()
-        .size(win_w, win_h)
-        .child(content)
-        .child(delete_dialog);
+    let root = window_root(content, delete_dialog);
 
     let app = app
         .centered()
@@ -608,6 +602,18 @@ pub fn run_uninstall_wizard() {
     let app = app.frameless();
 
     app.run();
+}
+
+/// 根节点：内容列叠上模态对话框（显示时覆盖全窗）。
+///
+/// ⚠️ 内容列必须 `fill()` 铺满**实际客户区**，不能写死清单尺寸 `size(w, h)`（GH#145）。
+/// windui 无边框窗口的客户区 = 清单尺寸 + 系统标题栏/边框（约 40dp），并不等于清单
+/// 尺寸；而绘制不按父节点裁剪、命中测试却要求点落在每层父节点矩形内。内容一旦比
+/// 清单高（数据目录路径长、附注折行），被挤到清单高度以下的按钮**画得出来、点不到**——
+/// 用户看到的就是「开始卸载」「取消」都没反应。根节点本身由框架拉到客户区大小，
+/// 内容列跟着它走即可。
+pub fn window_root(content: Element, dialog: Element) -> Element {
+    Element::stack().child(content.fill()).child(dialog)
 }
 
 /// 把没干成的那些事渲染成完成页上的一段话。
