@@ -95,6 +95,10 @@ pub fn url_protocol() -> &'static str {
 pub fn agreement_url() -> &'static str {
     &manifest().app.agreement_url
 }
+/// 协议全文（打包期由 `[package].agreement_file` 读入），空则没有。
+pub fn agreement_body() -> &'static str {
+    &manifest().app.agreement_body
+}
 pub fn portable_marker() -> &'static str {
     &manifest().app.portable_marker
 }
@@ -180,6 +184,11 @@ pub fn s_user_data_label() -> &'static str {
 }
 pub fn s_cache_label() -> &'static str {
     string_or(&manifest().strings.cache_label, "清除本地缓存")
+}
+
+/// 完成页附加说明，默认空（不显示）。不做中性默认——这一行本来就是产品自己的话。
+pub fn s_finish_note() -> &'static str {
+    manifest().strings.finish_note.trim()
 }
 
 /// 删除用户数据的二次确认正文；`{path}` 替换为实际路径。

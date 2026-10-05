@@ -141,7 +141,8 @@ app.toml ──► AppManifest ──► plan::plan_install(manifest, mode) ─�
 - **`plan_install` 是「装什么、按什么顺序装」的唯一真相**。GUI 与静默路径共用同一份计划，
   差异仅在 `Reporter` 实现——历史上两条链各自手写，已漂移出缺陷。
 - **能力段缺省 = 该步骤不入计划**：`[ime]`/`[[font]]`/`[autostart]`/`[[shortcut]]`/
-  `[startup]`/`[datadir]` 任一缺省，对应步骤不会出现在计划里。新增能力 =
+  `[startup]`/`[datadir]`/`[runtime_autostart]`/`[[prerequisite]]` 任一缺省，对应步骤
+  不会出现在计划里。新增能力 =
   加一个 `impl Step` + 在 planner 里加一行门控。
 - **失败语义**由 `Step::fatal()` 决定：解压类步骤失败即中止；注册类步骤失败仅记警告并继续。
 - 进度按「已完成步骤数 + 步内比例」折算，而非按解压文件数。
@@ -161,12 +162,20 @@ app.toml ──► AppManifest ──► plan::plan_install(manifest, mode) ─�
 8. **安装字体**（含 `[[font]]`）
 9. **注册 COM + 注册输入法**（含 `[ime]`）
 10. **配置自启动**（含 `[autostart]` 且 `enabled`）：HKCU Run 键
-11. **注册 URL 协议**（`url_protocol` 非空）
-12. **创建快捷方式**（含 `[[shortcut]]`）：开始菜单 / 桌面
-13. **写入卸载信息**：Add/Remove Programs 注册表项
-14. **写数据目录配置**（含 `[datadir]` 且首次安装）
-15. **预启动**（含 `[startup]` 且 `prestart`）
-16. **清除 InstallerRunning 标志**
+11. **登记应用自启动项**（`[runtime_autostart].value_names` 非空）：只记回执、不写
+    注册表——值由应用自己的「登录时启动」开关写，卸载按回执删
+12. **注册 URL 协议**（`url_protocol` 非空）
+13. **创建快捷方式**（含 `[[shortcut]]`）：开始菜单 / 桌面；声明了 `app_user_model_id`
+    的再用 ShellLink COM 对象写入 `System.AppUserModel.ID`（mslnk 不支持属性存储）
+14. **写入卸载信息**：Add/Remove Programs 注册表项
+15. **写数据目录配置**（含 `[datadir]` 且首次安装）
+16. **预启动**（含 `[startup]` 且 `prestart`）
+17. **写安装回执**
+18. **清除 InstallerRunning 标志**
+19. **检查运行环境**（含 `[[prerequisite]]`）：缺失时运行随包引导程序（最长等 20 分钟）。
+    排在最末：在线引导程序可能要下载几分钟，这时本体已装好、回执已落盘，强关向导也
+    不会留下卸不掉的安装。无回执——运行时是系统共享组件，卸载本应用不该卸它。
+    完成页按装完那一刻**重新检测**的结果提示，不转述这一步的返回值
 
 「是否首次安装」按**机器**判定（注册表 `DisplayVersion`），而非按安装目录——
 `datadir.conf` 写在 `%LOCALAPPDATA%` 是机器全局的，两者维度必须对齐。

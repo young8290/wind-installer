@@ -5,7 +5,8 @@
 #  无需重新编译 stub：
 #       wind-packer build --config app.toml --stub wind-installer.exe
 #
-#  [app]/[ui]/[ime]/[[font]]/[autostart]/[[shortcut]]/[startup] 会被嵌入归档头部，
+#  [app]/[ui]/[ime]/[[font]]/[autostart]/[[shortcut]]/[startup]/[[prerequisite]]/
+#  [runtime_autostart] 等会被嵌入归档头部，
 #  由安装/卸载器运行期读取；[package] 仅打包时使用，不进归档。
 #
 #  能力段（[ime]/[[font]]/[autostart]/[[shortcut]]/[startup]）遵循同一约定：
@@ -66,6 +67,8 @@ agreement_text      = "《用户服务协议》"
 user_data_label     = "删除用户项目和配置数据"
 cache_label         = "清除本地缓存"
 delete_data_confirm = "将永久删除 {path} 下的所有项目和配置数据，卸载后无法恢复。\n\n确定要勾选删除吗？"
+# 完成页「已准备就绪」下方的附加说明，可多行（\n 分行）。缺省空 = 不显示
+finish_note         = "从开始菜单打开「示例应用」即可开始使用"
 
 # ── 输入法（TSF）注册：整段缺省即跳过。非输入法应用删除本段即可 ───────────
 #    GUID 用你自己的，两个必须不同：clsid 标识 COM 组件，profile_guid 标识输入配置
@@ -109,6 +112,15 @@ args    = ""                              # 附加命令行参数
 #    location = "start_menu"（开始菜单 app.start_menu_folder 子目录）或 "desktop"（公共桌面）
 #    name 留空则取 target 去扩展名后的文件名
 [[shortcut]]
+target   = "demo_app.exe"
+name     = "示例应用"
+location = "start_menu"
+# 可选：写进快捷方式的 System.AppUserModel.ID（支持占位符）。未打包（非 MSIX）的程序
+# 要弹 Windows 通知，开始菜单里须有一个带同名标识的快捷方式；取值与程序运行期用的
+# 标识逐字一致。缺省不写
+app_user_model_id = "com.demo.app"
+
+[[shortcut]]
 target   = "demo_settings.exe"
 name     = "示例应用 设置"
 location = "start_menu"
@@ -117,6 +129,13 @@ location = "start_menu"
 target   = "uninstall.exe"
 name     = "卸载 示例应用"
 location = "start_menu"
+
+# ── 应用运行期自己写的自启动值：整段缺省即卸载不碰它们 ─────────────────────
+#    典型来源是应用设置里的「登录时启动」开关：值是应用写进 HKCU\...\Run 的，安装器
+#    从没写过，回执里没有，卸载后会留下一条指向已删 exe 的启动项。在这里声明值名，
+#    安装时记进回执（不写注册表），卸载时按回执删除；值不存在也不报错
+[runtime_autostart]
+value_names = ["DemoHelper"]
 
 # ── 安装完成后的启动行为：整段缺省即不启动任何程序 ─────────────────────────
 [startup]
@@ -155,6 +174,22 @@ state_files = ["state.toml"]
 # 上面两组清完后，目录若已空则连它一并移除（用非递归 remove_dir，非空自然失败）
 remove_dir_when_empty = true
 
+# ── 系统运行时依赖：可多条，缺省即不检测 ────────────────────────────────────
+#    装完后按 detect 检测（任一注册表值存在、非空且不是 0.0.0.0 即视为已装）；缺失且
+#    声明了 installer 就运行它（相对安装目录，随包分发，按 args 传参），再检测一遍；
+#    仍缺则完成页提示，并给出 url。排在计划最末，可能要联网下载几分钟。
+#    便携模式不代装，只提示。无回执：运行时是系统共享组件，卸载本应用不卸它。
+#    下面是 Microsoft Edge WebView2 运行时的写法（GUID 是微软公布的固定值）
+[[prerequisite]]
+name      = "Microsoft Edge WebView2 运行时"
+detect    = [
+  { key = 'HKLM\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}', value = "pv" },
+  { key = 'HKCU\Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}', value = "pv" },
+]
+installer = "redist/MicrosoftEdgeWebview2Setup.exe"
+args      = "/silent /install"
+url       = "https://developer.microsoft.com/microsoft-edge/webview2/"
+
 # ── 打包参数（仅 wind-packer 使用，不进归档）──────────────────────────────
 [package]
 compression = "lzma"                      # zstd（解压快）或 lzma（压缩率高）
@@ -163,3 +198,6 @@ output_name = "DemoApp-Setup"             # 输出名（自动追加 -<version>�
 output_dir  = "./dist"
 logo        = "assets/logo.png"           # UI 显示的 logo，字节嵌入归档头部
 icon        = "assets/installer.ico"      # 安装器 EXE 图标，由 editpe 写入 PE 资源
+# 协议全文（UTF-8 纯文本，相对本文件）。打包时读进清单；[app].agreement_url 为空时，
+# 向导的协议链接打开这份全文，安装前就能读到。读不到、非 UTF-8、超过 256 KiB 均拒绝出包
+# agreement_file = "LICENSE.txt"

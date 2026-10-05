@@ -5,13 +5,14 @@
 //!
 //! **有系统副作用的步骤必须把做成的产物写进 `ctx.receipt`**，否则卸载时撤销不掉。
 
-use crate::manifest::{AutoStartInfo, DataDirInfo, ShortcutInfo, StartupInfo};
+use crate::manifest::{AutoStartInfo, DataDirInfo, PrerequisiteInfo, ShortcutInfo, StartupInfo};
 use crate::meta;
 
 use super::receipt::ReceiptEntry;
 use super::step::{InstallCtx, Reporter, Step};
 use super::{
-    acl, font, ime, is_uninstaller_entry, legacy, process, registry, residue, shortcut, userdata,
+    acl, font, ime, is_uninstaller_entry, legacy, prereq, process, registry, residue, shortcut,
+    userdata,
 };
 use super::{InstallMode, UNINSTALLER_NAME};
 
@@ -354,6 +355,30 @@ impl Step<InstallCtx<'_>> for SetAutoStart {
     }
 }
 
+/// 把应用运行期自己写的自启动值名记进回执，卸载时按回执删除。
+///
+/// **本步不写注册表**：值由应用自己的「登录时启动」开关决定写不写，安装器只是认领
+/// 「这个名字归本应用」。卸载删一个不存在的值是无害的（`remove_auto_start_value`
+/// 对 NotFound 视为成功）。复用 `AutoStartSet` 而不新增回执类型，是为了让旧版本的
+/// 卸载器/安装器读到这份回执时不至于判它损坏。
+pub struct ClaimRuntimeAutoStart {
+    pub value_names: Vec<String>,
+}
+
+impl Step<InstallCtx<'_>> for ClaimRuntimeAutoStart {
+    fn name(&self) -> String {
+        "正在登记应用自启动项...".into()
+    }
+    fn run(&self, ctx: &mut InstallCtx, _r: &mut dyn Reporter) -> Result<(), String> {
+        for name in &self.value_names {
+            ctx.receipt.push(ReceiptEntry::AutoStartSet {
+                value_name: name.trim().to_string(),
+            });
+        }
+        Ok(())
+    }
+}
+
 /// 注册自定义 URL 协议。
 pub struct RegisterUrlProtocol;
 
@@ -471,5 +496,38 @@ impl Step<InstallCtx<'_>> for PrestartApp {
     }
     fn run(&self, ctx: &mut InstallCtx, _r: &mut dyn Reporter) -> Result<(), String> {
         process::prestart_app(&ctx.config.install_dir, self.info.exe_or(meta::main_exe()))
+    }
+}
+
+/// 检测 `[[prerequisite]]` 声明的系统运行时，缺失的运行随包引导程序。
+///
+/// 排在计划最末（回执落盘、InstallerRunning 清除之后）：在线引导程序可能要下载
+/// 几分钟，这段时间里应用本体已经装好、可卸载，即便用户此刻强关向导也不会留下
+/// 一个没有回执的安装。无回执：运行时是系统共享组件，卸载本应用不该卸它。
+///
+/// 非致命：依赖缺失不等于安装失败，完成页会按装完时的真实检测结果提示。
+pub struct EnsurePrerequisites {
+    pub items: Vec<PrerequisiteInfo>,
+}
+
+impl Step<InstallCtx<'_>> for EnsurePrerequisites {
+    fn name(&self) -> String {
+        "正在检查运行环境（缺失时会联网安装，可能需要几分钟）...".into()
+    }
+    fn run(&self, ctx: &mut InstallCtx, r: &mut dyn Reporter) -> Result<(), String> {
+        let mut errors = Vec::new();
+        let total = self.items.len();
+        for (i, p) in self.items.iter().enumerate() {
+            r.step_progress(&p.name, i as f32 / total.max(1) as f32);
+            match prereq::ensure(&ctx.config.install_dir, p) {
+                Ok(()) => r.log(&format!("运行环境就绪：{}", p.name)),
+                Err(e) => errors.push(e),
+            }
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors.join("; "))
+        }
     }
 }

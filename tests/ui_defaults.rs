@@ -79,3 +79,10 @@ fn theme_falls_back_to_builtin_palette() {
     assert_eq!(theme::warning(), 0xFA9D3B);
     assert_ne!(theme::warning(), theme::error());
 }
+
+/// 完成页附加说明没有默认文案：那一行是产品自己的话，通用安装器替它说什么都不对。
+#[test]
+fn finish_note_defaults_to_empty() {
+    init();
+    assert_eq!(meta::s_finish_note(), "");
+}

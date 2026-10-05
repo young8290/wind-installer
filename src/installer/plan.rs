@@ -58,6 +58,15 @@ pub fn plan_install<'a>(m: &AppManifest, mode: InstallMode) -> Vec<Box<dyn Step<
     if let Some(auto) = m.autostart.as_ref().filter(|a| a.enabled) {
         plan.push(Box::new(SetAutoStart { info: auto.clone() }));
     }
+    if let Some(rt) = m
+        .runtime_autostart
+        .as_ref()
+        .filter(|r| !r.value_names.is_empty())
+    {
+        plan.push(Box::new(ClaimRuntimeAutoStart {
+            value_names: rt.value_names.clone(),
+        }));
+    }
     if !m.app.url_protocol.trim().is_empty() {
         plan.push(Box::new(RegisterUrlProtocol));
     }
@@ -84,5 +93,12 @@ pub fn plan_install<'a>(m: &AppManifest, mode: InstallMode) -> Vec<Box<dyn Step<
     // 回执必须在所有有副作用的步骤之后落盘
     plan.push(Box::new(PersistReceipt));
     plan.push(Box::new(ClearInstallerRunning));
+
+    // 放在最末，理由见 EnsurePrerequisites 的注释（可能要联网下载几分钟）
+    if !m.prerequisite.is_empty() {
+        plan.push(Box::new(EnsurePrerequisites {
+            items: m.prerequisite.clone(),
+        }));
+    }
     plan
 }

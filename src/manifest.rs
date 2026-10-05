@@ -57,6 +57,13 @@ pub struct AppManifest {
     /// 整段缺省 = 卸载完全不碰这个目录。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub localdata: Option<LocalDataInfo>,
+    /// 应用依赖、但不随包分发的系统运行时（如 WebView2）。空 = 不检测。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub prerequisite: Vec<PrerequisiteInfo>,
+    /// 应用**运行期自己**写进 `HKCU\...\Run` 的自启动值。整段缺省 = 卸载只删安装器
+    /// 自己写过的那个值。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_autostart: Option<RuntimeAutoStartInfo>,
 }
 
 /// 应用身份与安装行为。
@@ -89,6 +96,11 @@ pub struct AppInfo {
     /// 用户协议链接，空则不显示。
     #[serde(default)]
     pub agreement_url: String,
+    /// 协议全文（纯文本）。由打包器从 `[package].agreement_file` 读入，**不要在
+    /// app.toml 里手写**。`agreement_url` 为空而本项非空时，向导的协议链接打开这份
+    /// 全文——安装之前用户就能读到，不依赖网络，也不依赖还没释放的安装目录。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub agreement_body: String,
     /// 便携模式标记文件名。
     #[serde(default = "default_portable_marker")]
     pub portable_marker: String,
@@ -215,6 +227,10 @@ pub struct StringsInfo {
     /// 支持 `{path}` 占位符。
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub delete_data_confirm: String,
+    /// 完成页「已准备就绪」下方的附加说明（如「按 Win + Space 切换」），可多行。
+    /// 默认空 = 不显示。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub finish_note: String,
 }
 
 /// 输入法（TSF）注册信息。
@@ -311,6 +327,13 @@ pub struct ShortcutInfo {
     /// 快捷方式描述（悬停提示），空则回退到 name。
     #[serde(default)]
     pub description: String,
+    /// 写进快捷方式的 `System.AppUserModel.ID`，支持占位符。空 = 不写。
+    ///
+    /// 未打包（非 MSIX）的桌面程序要弹 Windows 通知，系统要求开始菜单里有一个带
+    /// 同名标识的快捷方式，程序自己再用同一个标识发通知；缺了它通知会挂在别的
+    /// 应用名下或干脆不显示。取值须与程序运行期用的标识逐字一致。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub app_user_model_id: String,
 }
 
 impl ShortcutInfo {
@@ -478,6 +501,79 @@ pub fn safe_local_data_rel(entry: &str) -> Option<PathBuf> {
     resolve_local_data_entry(entry).ok()
 }
 
+/// 一个系统运行时依赖（如 WebView2）：装完后检测，缺了就跑随包的引导程序，
+/// 仍缺则在完成页提示并给出下载地址。
+///
+/// **无回执，卸载不碰它。** 这类运行时是系统共享组件，别的应用也在用；卸载本应用时
+/// 把它一并卸掉会弄坏那些应用。这是「有副作用必须写回执」（AGENTS.md 规则 3）的
+/// 有意例外：副作用不属于本应用。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PrerequisiteInfo {
+    /// 给人看的名字，完成页提示里用。
+    pub name: String,
+    /// 已安装的判据：任一注册表值存在、非空且不是 `0.0.0.0` 即视为已装。
+    pub detect: Vec<RegistryProbe>,
+    /// 缺失时运行的引导程序（相对安装目录，随包分发）。空 = 不代装，只提示。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub installer: String,
+    /// 引导程序参数，按空白切分（不支持带空格的单个参数）。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub args: String,
+    /// 仍缺失时完成页给出的下载地址。空 = 只提示名字。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub url: String,
+}
+
+/// 注册表里的一个值：`key` 以 `HKLM\` 或 `HKCU\`（也接受全称）开头。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RegistryProbe {
+    pub key: String,
+    pub value: String,
+}
+
+/// [`RegistryProbe::key`] 的根键。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RegistryHive {
+    LocalMachine,
+    CurrentUser,
+}
+
+impl RegistryProbe {
+    /// 拆出根键与子键路径。不认识的根键返回 `None`（打包期校验会拦下）。
+    pub fn split_hive(&self) -> Option<(RegistryHive, &str)> {
+        let (head, rest) = self.key.split_once('\\')?;
+        let hive = match head.to_ascii_uppercase().as_str() {
+            "HKLM" | "HKEY_LOCAL_MACHINE" => RegistryHive::LocalMachine,
+            "HKCU" | "HKEY_CURRENT_USER" => RegistryHive::CurrentUser,
+            _ => return None,
+        };
+        let rest = rest.trim_matches('\\');
+        (!rest.is_empty()).then_some((hive, rest))
+    }
+}
+
+/// 探测到的值算不算「已装」：非空且不是 `0.0.0.0`。
+///
+/// 后者不是假想：WebView2 运行时被卸载后，EdgeUpdate 常把 `pv` 留成 `0.0.0.0`
+/// 而不删键，只看「值存在」会把卸掉的运行时当成还在。
+pub fn probe_value_present(value: Option<&str>) -> bool {
+    value
+        .map(str::trim)
+        .is_some_and(|v| !v.is_empty() && v != "0.0.0.0")
+}
+
+/// 应用运行期自己写进 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 的值名。
+///
+/// 典型来源是应用设置里的「登录时启动」开关：值是应用写的，安装器从没写过，回执里
+/// 自然没有，卸载后它会留在 Run 键里、指向已删掉的 exe，每次登录弹一次「找不到文件」。
+/// 只有产品清单知道这个值叫什么。
+///
+/// 安装时把这些值名记进回执（不写注册表），卸载按回执删除——卸载侧仍然只认回执。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RuntimeAutoStartInfo {
+    pub value_names: Vec<String>,
+}
+
 /// 安装完成后的启动行为。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StartupInfo {
@@ -529,6 +625,9 @@ pub struct PackageConfig {
     /// PE 资源版本信息。
     #[serde(default)]
     pub version_info: Option<VersionInfoConfig>,
+    /// 协议全文文件（UTF-8 纯文本，相对 app.toml）。打包时读入 `[app].agreement_body`。
+    #[serde(default)]
+    pub agreement_file: String,
 }
 
 /// 版本信息，用于写入 PE 文件的 Version Info 资源。
@@ -757,8 +856,76 @@ impl AppManifest {
                 });
             }
         }
+
+        // [[prerequisite]]：错在这里的后果是每次安装都去跑一遍引导程序（判据写错），
+        // 或者引导程序路径走出安装目录——都只有在用户机器上才看得见。
+        for p in &self.prerequisite {
+            if p.name.trim().is_empty() {
+                return Err("[[prerequisite]] 的 name 不能为空：完成页靠它告诉用户缺了什么".into());
+            }
+            if p.detect.is_empty() {
+                return Err(format!(
+                    "[[prerequisite]] {:?} 没有 detect：没有判据就永远判为「未安装」，\
+                     每次安装（含每次自动升级）都会重跑一遍引导程序",
+                    p.name
+                ));
+            }
+            if let Some(bad) = p.detect.iter().find(|d| d.split_hive().is_none()) {
+                return Err(format!(
+                    "[[prerequisite]] {:?} 的 detect.key {:?} 不认识：须以 HKLM\\ 或 HKCU\\ \
+                     开头（也接受 HKEY_LOCAL_MACHINE\\ / HKEY_CURRENT_USER\\），后面跟子键路径",
+                    p.name, bad.key
+                ));
+            }
+            let rel = p.installer.replace('\\', "/");
+            if rel.starts_with('/') || rel.contains(':') || rel.split('/').any(|c| c.trim() == "..")
+            {
+                return Err(format!(
+                    "[[prerequisite]] {:?} 的 installer {:?} 必须是安装目录下的相对路径\
+                     （不含 `..`、盘符或开头的斜杠）：它会以安装器的管理员权限被执行",
+                    p.name, p.installer
+                ));
+            }
+        }
+
+        if let Some(rt) = &self.runtime_autostart {
+            if let Some(bad) = rt
+                .value_names
+                .iter()
+                .find(|n| n.trim().is_empty() || n.contains('\\'))
+            {
+                return Err(format!(
+                    "[runtime_autostart].value_names 的条目 {:?} 不是合法的注册表值名\
+                     （不能为空、不能含反斜杠）",
+                    bad
+                ));
+            }
+        }
         Ok(())
     }
+}
+
+/// 读入协议全文（`[package].agreement_file`）。上限 256 KiB：全文会进清单，清单又会
+/// 嵌进安装器和卸载器各一份，误配成一个大文件会把两个 exe 一起撑大。
+pub fn read_agreement_file(path: &Path) -> Result<String, String> {
+    const MAX: u64 = 256 * 1024;
+    let len = std::fs::metadata(path)
+        .map_err(|e| format!("读取协议文件 {:?} 失败: {}", path, e))?
+        .len();
+    if len > MAX {
+        return Err(format!(
+            "协议文件 {:?} 有 {} 字节，超过上限 {} 字节",
+            path, len, MAX
+        ));
+    }
+    let bytes = std::fs::read(path).map_err(|e| format!("读取协议文件 {:?} 失败: {}", path, e))?;
+    let text =
+        String::from_utf8(bytes).map_err(|_| format!("协议文件 {:?} 不是 UTF-8 文本", path))?;
+    let text = text.strip_prefix('\u{feff}').unwrap_or(&text).to_string();
+    if text.trim().is_empty() {
+        return Err(format!("协议文件 {:?} 是空的", path));
+    }
+    Ok(text)
 }
 
 fn non_empty(s: &str) -> Option<&str> {
