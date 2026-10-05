@@ -962,11 +962,7 @@ mod guard_tests {
         // ⚠️ 走注入版。用真的那个会往注册表写两对真实的开机删除指令
         // （`held.bin` 与 `logs` 各一），指向 `%TEMP%\wind_guard_<pid>_…` —— PID 会被
         // 系统复用，而 PFRO 开机时无条件执行。实测攒到 36 对才被发现。
-        remove_path_with(
-            &root.join("logs"),
-            &fake_schedule_file,
-            &fake_schedule_dir,
-        );
+        remove_path_with(&root.join("logs"), &fake_schedule_file, &fake_schedule_dir);
 
         assert!(
             reboot::is_reboot_pending(),
@@ -1026,7 +1022,11 @@ mod install_dir_tests {
     /// ARP 里有就用 ARP —— 那是安装时亲手写下的目录，比任何推断都硬。
     #[test]
     fn arp_wins_over_everything() {
-        let got = pick_install_dir(Some(p(r"D:\Apps\Demo")), Some(p(r"C:\elsewhere")), p(r"C:\PF\Demo"));
+        let got = pick_install_dir(
+            Some(p(r"D:\Apps\Demo")),
+            Some(p(r"C:\elsewhere")),
+            p(r"C:\PF\Demo"),
+        );
         assert_eq!(got, p(r"D:\Apps\Demo"));
     }
 
