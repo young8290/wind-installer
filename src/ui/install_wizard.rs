@@ -39,6 +39,8 @@ enum ProgressMsg {
         /// 有文件被占用、清不掉，需重启系统才能彻底清理。
         /// 这不是失败——新版已就位可正常使用，只是旧文件还赖在盘上。
         need_reboot: bool,
+        /// 装完时仍检测不到的 `[[prerequisite]]`（清单中的下标）。
+        missing_prereqs: Vec<usize>,
     },
     /// quiet 模式停留片刻后开始安装 —— 由后台线程发出，UI 线程据此切到进度页。
     /// 切页必须回到 UI 线程做（Signal 非 Send），故不能在延迟线程里直接写。
@@ -147,6 +149,7 @@ fn run_install_plan(
                     ok: false,
                     detail: msg,
                     need_reboot: false,
+                    missing_prereqs: Vec::new(),
                 })
                 .ok();
                 return;
@@ -181,10 +184,21 @@ fn run_install_plan(
                 } else {
                     reporter.log("=== 安装完成 ===");
                 }
+                // 按装完这一刻的真实状态提示，而不是转述 EnsurePrerequisites 的返回值：
+                // 便携模式根本不跑那一步，代装也可能超时后在后台装好。
+                let missing_prereqs =
+                    crate::installer::prereq::missing(&crate::meta::manifest().prerequisite);
+                for &i in &missing_prereqs {
+                    reporter.log(&format!(
+                        "仍缺少运行环境：{}",
+                        crate::meta::manifest().prerequisite[i].name
+                    ));
+                }
                 tx.send(ProgressMsg::Finished {
                     ok: true,
                     detail: log_path,
                     need_reboot: outcome.need_reboot,
+                    missing_prereqs,
                 })
                 .ok();
             }
@@ -196,6 +210,7 @@ fn run_install_plan(
                     ok: false,
                     detail: e,
                     need_reboot: false,
+                    missing_prereqs: Vec::new(),
                 })
                 .ok();
             }
@@ -229,6 +244,14 @@ pub fn run_install_wizard(opts: WizardOptions) {
     // 装完了但有文件被占用清不掉 —— 完成页据此显示重启提示，
     // 且 quiet 模式据此放弃自动退出（见下方 channel 处理）。
     let finish_reboot = signal(false);
+    // 每个声明的运行时依赖一个「装完仍缺」开关。依赖列表来自清单、运行期不变，
+    // 故完成页可以静态地为每项建一行，只切可见性。
+    let prereq_missing: Vec<_> = meta::manifest()
+        .prerequisite
+        .iter()
+        .map(|_| signal(false))
+        .collect();
+    let any_prereq_missing = signal(false);
     let config_error = signal(String::new());
     let agreed = signal(false);
 
@@ -241,6 +264,7 @@ pub fn run_install_wizard(opts: WizardOptions) {
     // 0.14 起通道回调里的 close / close_forced / window_op 被**丢弃**：通道挂在 App 级、
     // 借哪棵树排空是实现细节，「关掉哪个窗口」本就不确定。要关窗请走窗口自身的交互。
     // 这里只写 Signal 切页，用不上 ctx。
+    let prereq_flags = prereq_missing.clone();
     let tx = app.channel::<ProgressMsg>(move |_ctx, msg| match msg {
         ProgressMsg::Status(s) => progress_text.set(s),
         ProgressMsg::Progress(f) => progress_value.set(f),
@@ -250,10 +274,17 @@ pub fn run_install_wizard(opts: WizardOptions) {
             ok,
             detail,
             need_reboot,
+            missing_prereqs,
         } => {
             progress_value.set(1.0);
             finish_success.set(ok);
             finish_reboot.set(need_reboot);
+            for &i in &missing_prereqs {
+                if let Some(flag) = prereq_flags.get(i) {
+                    flag.set(true);
+                }
+            }
+            any_prereq_missing.set(!missing_prereqs.is_empty());
             if !ok {
                 finish_error.set(detail);
             }
@@ -265,7 +296,8 @@ pub fn run_install_wizard(opts: WizardOptions) {
             // - 失败：否则错误信息一闪而过无从排查；
             // - 需重启：这是唯一告知用户「还有一步要做」的时机。自动升级本就发生在
             //   用户没盯着屏幕的时候，2 秒后自弹自灭等于把提示扔了。
-            if quiet && ok && !need_reboot {
+            // - 缺运行环境：同理，下载链接只在完成页上。
+            if quiet && ok && !need_reboot && missing_prereqs.is_empty() {
                 std::thread::spawn(|| {
                     std::thread::sleep(std::time::Duration::from_millis(QUIET_FINISH_MS));
                     std::process::exit(0);
@@ -452,12 +484,15 @@ pub fn run_install_wizard(opts: WizardOptions) {
                 .cross(Align::Center)
                 .spacing(4)
                 .child(Element::checkbox("我已阅读并同意", agreed))
-                .child(if meta::agreement_url().is_empty() {
-                    Element::label(meta::s_agreement_text())
-                        .font_size(13.0)
-                        .fg(Color::hex(theme::text_secondary()))
-                } else {
-                    Element::link(meta::s_agreement_text()).url(meta::agreement_url())
+                .child({
+                    let target = agreement_link_target();
+                    if target.is_empty() {
+                        Element::label(meta::s_agreement_text())
+                            .font_size(13.0)
+                            .fg(Color::hex(theme::text_secondary()))
+                    } else {
+                        Element::link(meta::s_agreement_text()).url(target)
+                    }
                 }),
         )
         // 校验错误提示（仅未勾协议时可见）
@@ -575,8 +610,16 @@ pub fn run_install_wizard(opts: WizardOptions) {
                     .fg(Color::hex(theme::text_secondary()))
                     .width_match()
                     .text_align(Align::Center),
-                ),
+                )
+                .child(finish_note()),
         )
+        // 装好了，但有运行环境没装上（代装失败/超时，或清单只要求提示）。warning 色，
+        // 理由同下面的重启提示：程序本体已就绪，不该让人以为装失败而去重装。
+        .child(prereq_notice(
+            &prereq_missing,
+            any_prereq_missing,
+            finish_success,
+        ))
         // 装成功了，但有旧文件被占用清不掉。
         //
         // 用 warning 而非 error 色：新版文件已全部就位、注册也完成了，程序现在就能用，
@@ -715,6 +758,83 @@ pub fn run_install_wizard(opts: WizardOptions) {
     }
 
     app.run();
+}
+
+/// 完成页附加说明：清单 `[strings].finish_note`，按行各建一个 label（不依赖 label
+/// 自己换行）。为空时返回一个零高度占位，调用方不必分支。
+fn finish_note() -> Element {
+    let note = meta::s_finish_note();
+    let mut col = Element::col().width_match().spacing(2).cross(Align::Center);
+    if note.is_empty() {
+        return col;
+    }
+    col = col.child(Element::leaf().height(6));
+    for line in note.lines() {
+        col = col.child(
+            Element::label(line.to_string())
+                .font_size(12.0)
+                .fg(Color::hex(theme::text_secondary()))
+                .width_match()
+                .text_align(Align::Center),
+        );
+    }
+    col
+}
+
+/// 完成页「缺运行环境」提示：每个声明的依赖一行，装完仍缺的才显示。
+fn prereq_notice(
+    flags: &[windui::signal::Signal<bool>],
+    any_missing: windui::signal::Signal<bool>,
+    success: windui::signal::Signal<bool>,
+) -> Element {
+    let mut col = Element::col()
+        .width_match()
+        .spacing(4)
+        .cross(Align::Center)
+        .visible_when(move || success.get() && any_missing.get())
+        .child(Element::leaf().height(10));
+    for (p, &flag) in meta::manifest().prerequisite.iter().zip(flags) {
+        let mut row = Element::row()
+            .spacing(6)
+            .cross(Align::Center)
+            .visible_when(move || flag.get())
+            .child(
+                Element::label(format!("未能安装 {}，部分功能暂不可用", p.name))
+                    .font_size(12.0)
+                    .fg(Color::hex(theme::warning())),
+            );
+        if !p.url.is_empty() {
+            row = row.child(Element::link("手动下载").url(p.url.clone()));
+        }
+        col = col.child(row);
+    }
+    col
+}
+
+/// 协议链接的打开目标：`agreement_url` 优先；否则把清单里的协议全文写到临时目录，
+/// 链接指向那个文件（由系统默认的文本查看器打开）。都没有则为空串，调用方显示纯文字。
+///
+/// 在构建界面时就写好，而不是点击时再写：链接控件只认一个目标串，没有点击回调。
+/// 写失败只是退回纯文字，不影响安装。
+fn agreement_link_target() -> String {
+    let url = meta::agreement_url();
+    if !url.is_empty() {
+        return url.to_string();
+    }
+    let body = meta::agreement_body();
+    if body.is_empty() {
+        return String::new();
+    }
+    let path = std::env::temp_dir().join(format!("{}_agreement.txt", meta::app_id()));
+    // BOM + CRLF：老版记事本只认这两样，否则中文乱码、全文挤成一行
+    let text = format!(
+        "\u{feff}{}",
+        body.replace("\r\n", "\n").replace('\n', "\r\n")
+    );
+    match std::fs::write(&path, text) {
+        Ok(()) => path.to_string_lossy().into_owned(),
+        Err(_) => String::new(),
+    }
 }
 
 fn default_install_dir() -> String {

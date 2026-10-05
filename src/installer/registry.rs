@@ -610,7 +610,7 @@ mod arp_command_tests {
     #[test]
     fn exe_path_is_quoted() {
         for cmd in [uninstall_command(EXE), quiet_uninstall_command(EXE)] {
-            assert!(cmd.starts_with('"') , "exe 路径没加引号: {cmd}");
+            assert!(cmd.starts_with('"'), "exe 路径没加引号: {cmd}");
             assert!(cmd[1..].contains('"'), "引号没闭合: {cmd}");
         }
     }

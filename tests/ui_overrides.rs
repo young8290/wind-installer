@@ -33,6 +33,7 @@ portable = 'E:\Portable\{id}\bin'
 data_dir_hint       = "素材库、配置路径"
 user_data_label     = "删除用户素材和配置数据"
 delete_data_confirm = "将永久删除 {path} 下的所有素材，无法恢复。"
+finish_note         = "  按 F1 打开帮助  "
 "##;
 
 fn init() {
@@ -83,4 +84,10 @@ fn malformed_color_falls_back_instead_of_panicking() {
     init();
     // 一个拼错的颜色不该让整个安装器起不来
     assert_eq!(theme::accent_hover(), 0x6BA3FF);
+}
+
+#[test]
+fn declared_finish_note_is_trimmed() {
+    init();
+    assert_eq!(meta::s_finish_note(), "按 F1 打开帮助");
 }

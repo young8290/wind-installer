@@ -217,13 +217,28 @@ struct Loaded {
 fn load(config: &Path) -> Result<Loaded, String> {
     let text = std::fs::read_to_string(config)
         .map_err(|e| format!("读取配置 {:?} 失败: {}", config, e))?;
-    let cfg = ProjectConfig::from_toml_str(&text)?;
+    let mut cfg = ProjectConfig::from_toml_str(&text)?;
     let base = config
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
+    // 协议全文在打包期读入清单，安装器运行期不再碰宿主文件。与 logo 不同，这里读不到
+    // 直接失败：声明了协议却打出一个点开是空白的包，比打包失败糟糕得多。
+    if !cfg.package.agreement_file.trim().is_empty() {
+        let path = resolve_against(&base, &cfg.package.agreement_file);
+        cfg.manifest.app.agreement_body = wind_installer::manifest::read_agreement_file(&path)?;
+    }
     Ok(Loaded { cfg, base })
+}
+
+fn resolve_against(base: &Path, p: &str) -> PathBuf {
+    let path = Path::new(p);
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        base.join(path)
+    }
 }
 
 impl Loaded {
@@ -250,12 +265,7 @@ impl Loaded {
 
     /// 相对 app.toml 解析路径
     fn resolve(&self, p: &str) -> PathBuf {
-        let path = Path::new(p);
-        if path.is_absolute() {
-            path.to_path_buf()
-        } else {
-            self.base.join(path)
-        }
+        resolve_against(&self.base, p)
     }
 
     fn version(&self) -> &str {
@@ -698,6 +708,38 @@ fn cmd_inspect(file: &Path) -> Result<(), String> {
     );
     print_capability("URL 协议", !m.app.url_protocol.trim().is_empty(), || {
         format!("{}://", m.app.url_protocol)
+    });
+    print_capability(
+        "运行时依赖 [[prerequisite]]",
+        !m.prerequisite.is_empty(),
+        || {
+            m.prerequisite
+                .iter()
+                .map(|p| {
+                    if p.installer.is_empty() {
+                        format!("{}（只提示）", p.name)
+                    } else {
+                        format!("{}（缺失时运行 {}）", p.name, p.installer)
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        },
+    );
+    print_capability(
+        "运行期自启值 [runtime_autostart]",
+        m.runtime_autostart
+            .as_ref()
+            .is_some_and(|r| !r.value_names.is_empty()),
+        || {
+            m.runtime_autostart
+                .as_ref()
+                .map(|r| r.value_names.join(", "))
+                .unwrap_or_default()
+        },
+    );
+    print_capability("协议全文", !m.app.agreement_body.is_empty(), || {
+        format!("{} 字", m.app.agreement_body.chars().count())
     });
 
     Ok(())

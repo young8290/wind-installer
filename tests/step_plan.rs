@@ -268,3 +268,78 @@ fn install_and_clear_flags_bracket_the_standard_plan() {
     assert_eq!(names.first().unwrap(), "正在准备安装环境...");
     assert_eq!(names.last().unwrap(), "正在完成安装...");
 }
+
+// ── 运行时依赖 / 应用自启值 ─────────────────────────────────────────────────
+
+const PREREQ: &str = r#"
+[[prerequisite]]
+name      = "Some Runtime"
+detect    = [{ key = 'HKLM\SOFTWARE\Vendor\Runtime', value = "pv" }]
+installer = "redist/runtime_setup.exe"
+args      = "/silent /install"
+"#;
+
+#[test]
+fn prerequisite_check_is_opt_in() {
+    assert!(!plan_names(FULL, InstallMode::Standard)
+        .iter()
+        .any(|n| n.contains("运行环境")));
+    let toml = format!("{}\n{}", MINIMAL, PREREQ);
+    assert!(plan_names(&toml, InstallMode::Standard)
+        .iter()
+        .any(|n| n.contains("运行环境")));
+}
+
+/// 引导程序可能要联网下载几分钟：它必须排在回执落盘、InstallerRunning 清除之后，
+/// 这段时间里应用本体已经装好且可卸载，强关向导也不会留下没有回执的安装。
+#[test]
+fn prerequisite_check_runs_after_install_is_complete() {
+    let toml = format!("{}\n{}", FULL, PREREQ);
+    let names = plan_names(&toml, InstallMode::Standard);
+    let pos = |kw: &str| names.iter().position(|n| n.contains(kw)).unwrap();
+    assert!(pos("安装回执") < pos("运行环境"));
+    assert!(pos("完成安装") < pos("运行环境"));
+    assert!(names.last().unwrap().contains("运行环境"));
+}
+
+#[test]
+fn portable_mode_never_runs_prerequisite_installers() {
+    // 便携模式不动系统：装运行时是动系统。缺不缺由完成页提示，不代装
+    let toml = format!("{}\n{}", MINIMAL, PREREQ);
+    assert!(!plan_names(&toml, InstallMode::Portable)
+        .iter()
+        .any(|n| n.contains("运行环境")));
+}
+
+#[test]
+fn runtime_autostart_claim_is_opt_in() {
+    assert!(!plan_names(FULL, InstallMode::Standard)
+        .iter()
+        .any(|n| n.contains("应用自启动项")));
+
+    let toml = format!(
+        "{}\n[runtime_autostart]\nvalue_names = [\"DemoHelper\"]\n",
+        MINIMAL
+    );
+    assert!(plan_names(&toml, InstallMode::Standard)
+        .iter()
+        .any(|n| n.contains("应用自启动项")));
+
+    // 段在、名单空 = 什么都不认领
+    let toml = format!("{}\n[runtime_autostart]\nvalue_names = []\n", MINIMAL);
+    assert!(!plan_names(&toml, InstallMode::Standard)
+        .iter()
+        .any(|n| n.contains("应用自启动项")));
+}
+
+/// 认领只写回执，回执又必须先于落盘——排在 PersistReceipt 之后就等于没认领。
+#[test]
+fn runtime_autostart_claim_lands_in_receipt() {
+    let toml = format!(
+        "{}\n[runtime_autostart]\nvalue_names = [\"DemoHelper\"]\n",
+        FULL
+    );
+    let names = plan_names(&toml, InstallMode::Standard);
+    let pos = |kw: &str| names.iter().position(|n| n.contains(kw)).unwrap();
+    assert!(pos("应用自启动项") < pos("安装回执"));
+}

@@ -33,10 +33,15 @@ wind-packer build --config app.toml --stub wind-installer.exe
 | `[ime]` | 跳过 | 注册 TSF 输入法（COM + InstallLayoutOrTip） |
 | `[[font]]` | 跳过 | 安装字体到 `%WINDIR%\Fonts` 并注册 |
 | `[autostart]` | 不注册 | 写 `HKCU\...\Run` |
-| `[[shortcut]]` | 不创建 | 开始菜单或桌面快捷方式 |
+| `[[shortcut]]` | 不创建 | 开始菜单或桌面快捷方式；可带 `app_user_model_id`（Windows 通知所需） |
 | `[startup]` | 装完不启动 | 装完以 `DETACHED_PROCESS` 启动主程序 |
 | `[datadir]` | 不写 | 将向导中选定的数据目录落盘供主程序读取 |
-| `[strings]` | 中性文案 | 覆盖为应用自己的措辞 |
+| `[runtime_autostart]` | 卸载不碰 | 应用自己写的 `HKCU\...\Run` 值，卸载时一并删除 |
+| `[[prerequisite]]` | 不检测 | 装完检测系统运行时（如 WebView2），缺失时运行随包引导程序，仍缺则完成页提示 |
+| `[strings]` | 中性文案 | 覆盖为应用自己的措辞；`finish_note` 为完成页附加说明 |
+
+`[package].agreement_file` 指向协议全文（UTF-8），打包时读入清单；未配 `agreement_url` 时，
+向导的协议链接打开这份全文。
 
 只声明 `[app]` 段的应用，安装过程只做解压和写入卸载信息，不改动系统其他位置。修改注册表的行为都需要在清单中显式开启。
 

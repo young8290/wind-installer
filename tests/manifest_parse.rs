@@ -805,3 +805,170 @@ fn every_allowed_entry_stays_under_the_root_after_join() {
         assert_ne!(joined, root, "{e:?} 放行后 join 就是作用域根本身");
     }
 }
+
+// ── [[prerequisite]] / [runtime_autostart] / 快捷方式标识 / 协议全文 / 完成页说明 ──
+
+const MINIMAL_PROJECT: &str = r#"
+[app]
+id           = "Demo"
+display_name = "Demo App"
+version      = "1.0.0"
+publisher    = "Demo Inc"
+main_exe     = "demo.exe"
+
+[package]
+source_dir = "build"
+"#;
+
+fn project(extra: &str) -> Result<ProjectConfig, String> {
+    ProjectConfig::from_toml_str(&format!("{}\n{}", MINIMAL_PROJECT, extra))
+}
+
+const WEBVIEW2_LIKE: &str = r#"
+[[prerequisite]]
+name      = "Some Runtime"
+detect    = [
+  { key = 'HKLM\SOFTWARE\WOW6432Node\Vendor\Clients\{X}', value = "pv" },
+  { key = 'HKEY_CURRENT_USER\Software\Vendor\Clients\{X}', value = "pv" },
+]
+installer = "redist/setup.exe"
+args      = "/silent /install"
+url       = "https://example.com/runtime"
+"#;
+
+#[test]
+fn prerequisite_parses_and_roundtrips() {
+    let cfg = project(WEBVIEW2_LIKE).expect("解析失败");
+    let p = &cfg.manifest.prerequisite[0];
+    assert_eq!(p.name, "Some Runtime");
+    assert_eq!(p.detect.len(), 2);
+    assert_eq!(p.installer, "redist/setup.exe");
+
+    // 进归档前后一致：安装器运行期读到的就是打包时写的
+    let bytes = cfg.manifest.to_toml_bytes().unwrap();
+    let back = AppManifest::from_toml_bytes(&bytes).unwrap();
+    assert_eq!(back.prerequisite[0].detect, p.detect);
+    assert_eq!(back.prerequisite[0].url, p.url);
+}
+
+#[test]
+fn registry_probe_splits_hive_both_spellings() {
+    use wind_installer::manifest::{RegistryHive, RegistryProbe};
+    let probe = |k: &str| RegistryProbe {
+        key: k.into(),
+        value: "pv".into(),
+    };
+    assert_eq!(
+        probe(r"HKLM\SOFTWARE\A").split_hive(),
+        Some((RegistryHive::LocalMachine, r"SOFTWARE\A"))
+    );
+    assert_eq!(
+        probe(r"hkey_current_user\Software\B\").split_hive(),
+        Some((RegistryHive::CurrentUser, r"Software\B"))
+    );
+    assert_eq!(probe(r"HKCR\Foo").split_hive(), None);
+    assert_eq!(probe(r"HKLM\").split_hive(), None);
+    assert_eq!(probe("HKLM").split_hive(), None);
+}
+
+#[test]
+fn probe_value_treats_zero_version_as_missing() {
+    use wind_installer::manifest::probe_value_present;
+    assert!(probe_value_present(Some("120.0.2210.91")));
+    assert!(!probe_value_present(Some("0.0.0.0")));
+    assert!(!probe_value_present(Some("  ")));
+    assert!(!probe_value_present(None));
+}
+
+#[test]
+fn prerequisite_without_detect_is_rejected() {
+    let err = project("[[prerequisite]]\nname = \"X\"\ndetect = []\n").unwrap_err();
+    assert!(err.contains("detect"), "{}", err);
+}
+
+#[test]
+fn prerequisite_with_unknown_hive_is_rejected() {
+    let err = project(
+        "[[prerequisite]]\nname = \"X\"\ndetect = [{ key = 'HKCR\\Foo', value = \"v\" }]\n",
+    )
+    .unwrap_err();
+    assert!(err.contains("HKCR"), "{}", err);
+}
+
+#[test]
+fn prerequisite_installer_must_stay_inside_install_dir() {
+    for bad in [
+        "../evil.exe",
+        r"C:\Windows\x.exe",
+        "/abs.exe",
+        r"redist\..\..\x.exe",
+    ] {
+        let toml = format!(
+            "[[prerequisite]]\nname = \"X\"\ndetect = [{{ key = 'HKLM\\A', value = \"v\" }}]\ninstaller = '{}'\n",
+            bad
+        );
+        assert!(project(&toml).is_err(), "{bad:?} 应被拒绝");
+    }
+}
+
+#[test]
+fn runtime_autostart_names_are_validated() {
+    let ok = project("[runtime_autostart]\nvalue_names = [\"DemoHelper\"]\n").unwrap();
+    assert_eq!(
+        ok.manifest.runtime_autostart.unwrap().value_names,
+        ["DemoHelper"]
+    );
+    assert!(project("[runtime_autostart]\nvalue_names = [\"\"]\n").is_err());
+    assert!(project("[runtime_autostart]\nvalue_names = ['a\\b']\n").is_err());
+}
+
+#[test]
+fn shortcut_app_user_model_id_is_optional() {
+    let cfg = project(
+        "[[shortcut]]\ntarget = \"a.exe\"\n\n[[shortcut]]\ntarget = \"b.exe\"\napp_user_model_id = \"com.demo.b\"\n",
+    )
+    .unwrap();
+    assert_eq!(cfg.manifest.shortcut[0].app_user_model_id, "");
+    assert_eq!(cfg.manifest.shortcut[1].app_user_model_id, "com.demo.b");
+    // 未声明时不进序列化结果：旧清单打出来的包与从前逐字节一致
+    let text = String::from_utf8(cfg.manifest.to_toml_bytes().unwrap()).unwrap();
+    assert_eq!(text.matches("app_user_model_id").count(), 1);
+}
+
+#[test]
+fn finish_note_parses() {
+    let cfg = project("[strings]\nfinish_note = \"第一行\\n第二行\"\n").unwrap();
+    assert_eq!(cfg.manifest.strings.finish_note, "第一行\n第二行");
+}
+
+fn temp_file(name: &str, bytes: &[u8]) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("wind_manifest_parse_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join(name);
+    std::fs::write(&path, bytes).unwrap();
+    path
+}
+
+#[test]
+fn agreement_file_is_read_as_utf8_without_bom() {
+    use wind_installer::manifest::read_agreement_file;
+    let path = temp_file("agree_bom.txt", "\u{feff}MIT License\n许可".as_bytes());
+    assert_eq!(read_agreement_file(&path).unwrap(), "MIT License\n许可");
+}
+
+#[test]
+fn agreement_file_rejects_bad_input() {
+    use wind_installer::manifest::read_agreement_file;
+    assert!(read_agreement_file(&temp_file("agree_gbk.txt", &[0xC4, 0xE3, 0xFF])).is_err());
+    assert!(read_agreement_file(&temp_file("agree_empty.txt", b"  \n")).is_err());
+    assert!(read_agreement_file(&temp_file("agree_big.txt", &vec![b'a'; 300 * 1024])).is_err());
+    assert!(read_agreement_file(std::path::Path::new("no/such/file.txt")).is_err());
+}
+
+#[test]
+fn agreement_body_survives_archive_roundtrip() {
+    let mut cfg = project("").unwrap();
+    cfg.manifest.app.agreement_body = "MIT License\n\n心晴".into();
+    let back = AppManifest::from_toml_bytes(&cfg.manifest.to_toml_bytes().unwrap()).unwrap();
+    assert_eq!(back.app.agreement_body, "MIT License\n\n心晴");
+}

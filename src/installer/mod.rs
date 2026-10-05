@@ -4,6 +4,7 @@ pub mod font;
 pub mod ime;
 pub mod legacy;
 pub mod plan;
+pub mod prereq;
 pub mod process;
 pub mod receipt;
 pub mod registry;

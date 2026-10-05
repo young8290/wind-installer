@@ -58,6 +58,14 @@ pub fn create_shortcuts(install_dir: &Path, items: &[ShortcutInfo]) -> CreatedSh
             &expand(item.effective_description()),
         ) {
             Ok(()) => {
+                // 标识写失败不撤掉快捷方式：它照样能打开程序，只是通知不归它管。
+                // 记成错误让日志看得见，链接本身照常进回执。
+                let aumid = expand(&item.app_user_model_id);
+                if !aumid.trim().is_empty() {
+                    if let Err(e) = set_app_user_model_id(&link_path, aumid.trim()) {
+                        created.errors.push(e);
+                    }
+                }
                 if item.location == ShortcutLocation::StartMenu {
                     created.start_menu_dir = Some(dir);
                 }
@@ -91,6 +99,75 @@ fn create_shortcut(
     Ok(())
 }
 
+/// `System.AppUserModel.ID`（propkey.h 的 PKEY_AppUserModel_ID）。就地定义而不开
+/// `Win32_Storage_EnhancedStorage` feature：为一个常量拉进一整个模块的绑定不划算。
+const PKEY_APP_USER_MODEL_ID: windows::Win32::Foundation::PROPERTYKEY =
+    windows::Win32::Foundation::PROPERTYKEY {
+        fmtid: windows::core::GUID::from_u128(0x9f4c2855_9f79_4b39_a8d0_e1d42de1d5f3),
+        pid: 5,
+    };
+
+/// 给已存在的 .lnk 写入 AppUserModelID。
+///
+/// mslnk 只会写 Shell Link 的基本字段，不支持属性存储，故这里用系统的 ShellLink COM
+/// 对象重新打开刚生成的文件、写属性、存回。值必须是 `VT_LPWSTR`：windows 库自带的
+/// `PROPVARIANT::from(&str)` 产出的是 `VT_BSTR`，官方示例与 `InitPropVariantFromString`
+/// 都用前者，不赌 shell 对后者的兼容。
+fn set_app_user_model_id(link: &Path, id: &str) -> Result<(), String> {
+    use std::mem::ManuallyDrop;
+
+    use windows::core::{Interface, HSTRING};
+    use windows::Win32::System::Com::StructuredStorage::{
+        PROPVARIANT, PROPVARIANT_0, PROPVARIANT_0_0, PROPVARIANT_0_0_0,
+    };
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, CoUninitialize, IPersistFile, CLSCTX_INPROC_SERVER,
+        COINIT_APARTMENTTHREADED, STGM_READWRITE,
+    };
+    use windows::Win32::System::Variant::VT_LPWSTR;
+    use windows::Win32::UI::Shell::PropertiesSystem::IPropertyStore;
+    use windows::Win32::UI::Shell::{IShellLinkW, SHStrDupW, ShellLink};
+
+    unsafe {
+        // 安装步骤跑在后台线程上，没人替它初始化 COM。已被别处以 MTA 初始化时这里
+        // 返回 RPC_E_CHANGED_MODE：照用即可（ShellLink 两种套间都支持），但不能配对
+        // CoUninitialize。
+        let inited = CoInitializeEx(None, COINIT_APARTMENTTHREADED).is_ok();
+
+        // 闭包收住全部 COM 对象：它们必须在 CoUninitialize 之前析构
+        let result = (|| -> windows::core::Result<()> {
+            let shell_link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)?;
+            let file: IPersistFile = shell_link.cast()?;
+            let path = HSTRING::from(link.as_os_str());
+            file.Load(&path, STGM_READWRITE)?;
+
+            // 字符串由 CoTaskMem 分配，PROPVARIANT 析构时 PropVariantClear 负责释放
+            let text = SHStrDupW(&HSTRING::from(id))?;
+            let value = PROPVARIANT {
+                Anonymous: PROPVARIANT_0 {
+                    Anonymous: ManuallyDrop::new(PROPVARIANT_0_0 {
+                        vt: VT_LPWSTR,
+                        wReserved1: 0,
+                        wReserved2: 0,
+                        wReserved3: 0,
+                        Anonymous: PROPVARIANT_0_0_0 { pwszVal: text },
+                    }),
+                },
+            };
+
+            let store: IPropertyStore = shell_link.cast()?;
+            store.SetValue(&PKEY_APP_USER_MODEL_ID, &value)?;
+            store.Commit()?;
+            file.Save(&path, true)
+        })();
+
+        if inited {
+            CoUninitialize();
+        }
+        result.map_err(|e| format!("无法给快捷方式 {:?} 写入应用标识: {}", link, e))
+    }
+}
+
 fn location_dir(loc: ShortcutLocation) -> PathBuf {
     match loc {
         ShortcutLocation::StartMenu => start_menu_dir(),
@@ -114,4 +191,81 @@ fn start_menu_dir() -> PathBuf {
 fn desktop_dir() -> PathBuf {
     let public = std::env::var("PUBLIC").unwrap_or_else(|_| r"C:\Users\Public".to_string());
     PathBuf::from(public).join("Desktop")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use windows::core::{Interface, BSTR, HSTRING};
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, IPersistFile, CLSCTX_INPROC_SERVER,
+        COINIT_APARTMENTTHREADED, STGM_READ,
+    };
+    use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
+    use windows::Win32::System::Variant::{VARENUM, VT_LPWSTR};
+    use windows::Win32::UI::Shell::PropertiesSystem::IPropertyStore;
+    use windows::Win32::UI::Shell::{IShellLinkW, ShellLink};
+
+    use super::*;
+
+    /// wine 的 ShellLink 接受属性写入但不落盘，回读必然为空——那是 wine 的缺口，
+    /// 不是这里的缺陷。真 Windows（CI）上照常断言。
+    fn running_under_wine() -> bool {
+        unsafe {
+            GetModuleHandleW(windows::core::w!("ntdll.dll"))
+                .ok()
+                .and_then(|h| GetProcAddress(h, windows::core::s!("wine_get_version")))
+                .is_some()
+        }
+    }
+
+    /// 读回 (属性类型, 标识, 目标路径)。
+    fn read_back(link: &Path) -> (VARENUM, String, String) {
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+            let shell_link: IShellLinkW =
+                CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER).unwrap();
+            let file: IPersistFile = shell_link.cast().unwrap();
+            file.Load(&HSTRING::from(link.as_os_str()), STGM_READ)
+                .unwrap();
+            let store: IPropertyStore = shell_link.cast().unwrap();
+            let value = store.GetValue(&PKEY_APP_USER_MODEL_ID).unwrap();
+            let vt = value.Anonymous.Anonymous.vt;
+            let text = BSTR::try_from(&value)
+                .map(|b| b.to_string())
+                .unwrap_or_default();
+            let mut buf = [0u16; 260];
+            shell_link
+                .GetPath(&mut buf, std::ptr::null_mut(), 0)
+                .unwrap();
+            let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+            (vt, text, String::from_utf16_lossy(&buf[..len]))
+        }
+    }
+
+    /// 写进去的必须是 shell 能读回来的 `VT_LPWSTR`，且原有的目标路径不能被这次
+    /// 「打开—写属性—存回」弄丢。
+    #[test]
+    fn app_user_model_id_round_trips_through_the_shell() {
+        if running_under_wine() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("wind_aumid_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = std::env::current_exe().unwrap();
+        let link = dir.join("demo.lnk");
+
+        create_shortcut(&target, &link, &dir.to_string_lossy(), "demo").unwrap();
+        set_app_user_model_id(&link, "com.demo.app").unwrap();
+
+        let (vt, text, path) = read_back(&link);
+        assert_eq!(vt, VT_LPWSTR);
+        assert_eq!(text, "com.demo.app");
+        assert!(
+            path.eq_ignore_ascii_case(&target.to_string_lossy()),
+            "目标路径被改写: {path}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

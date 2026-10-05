@@ -1,4 +1,3 @@
-
 use windui::app::App;
 use windui::core::EventCtx;
 use windui::geometry::{Color, Insets};

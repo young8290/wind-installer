@@ -28,6 +28,13 @@ wind-packer build --config <app.toml> --stub wind-installer.exe
    - 提示文案与不可逆动作（`remove_dir_all`、备份拷贝）之间尤其不能有第二份推导：用户是照着提示按下按钮的。
    - 由 `tests/wizard_data_dir.rs` 守护（向导初值、卸载提示、实际删除三方一致）。
 
+### 规则 3 的一处有意例外：`[[prerequisite]]`
+
+运行时依赖（如 WebView2）由随包引导程序装进系统，却**不写回执**：它是系统共享组件，
+别的应用也在用，卸载本应用时把它卸掉会弄坏它们。副作用不属于本应用，故不撤销。
+反过来，`[runtime_autostart]` 没有副作用却**写回执**：它只是认领「这个 Run 值名归本
+应用」，让卸载继续只认回执（复用 `AutoStartSet` 条目，旧版卸载器读到不会判回执损坏）。
+
 ## 新增一种能力的标准套路
 
 1. `src/manifest.rs`：给对应段/结构加字段（`#[serde(default)]` 保证旧清单兼容）。
