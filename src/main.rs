@@ -14,9 +14,9 @@ mod util;
 
 use util::exitcode;
 
-/// Wind Installer - 轻量级 Windows 安装管理器
+/// Moodflow Installer - 轻量级 Windows 安装管理器
 #[derive(Parser, Debug)]
-#[command(name = "wind-installer")]
+#[command(name = "moodflow-installer")]
 #[command(about = "Lightweight manifest-driven Windows installer")]
 // 容忍未知参数：未来版本的安装器可能向已安装的旧版（卸载器）传入新 flag，
 // 旧版不应因不认识的参数而报错退出，只解析自己认识的、忽略其余。
@@ -83,7 +83,7 @@ fn main() {
     }
 }
 
-/// 启动诊断：把解析到的参数与提权状态追加到 %TEMP%\wind_installer_args.log。
+/// 启动诊断：把解析到的参数与提权状态追加到 %TEMP%\moodflow_installer_args.log。
 ///
 /// 安装器是 `windows_subsystem = "windows"` 的 GUI 进程，没有控制台，`eprintln!` 的
 /// 输出无处可见。排查「为何没有静默安装」时，这个文件是唯一能看到真相的地方 ——
@@ -228,7 +228,7 @@ mod arg_tests {
     #[test]
     fn silent_install_with_quoted_dir() {
         let args = Args::parse_from([
-            "wind-installer",
+            "moodflow-installer",
             "--silent",
             "--dir",
             r"C:\Program Files\Demo App",
@@ -239,14 +239,14 @@ mod arg_tests {
 
     #[test]
     fn silent_alone() {
-        let args = Args::parse_from(["wind-installer", "--silent"]);
+        let args = Args::parse_from(["moodflow-installer", "--silent"]);
         assert!(args.silent, "--silent 单独传入也未被识别");
     }
 
     /// 未知参数应被忽略而不影响已知参数 —— 这是 ignore_errors 的本意。
     #[test]
     fn unknown_flag_does_not_swallow_known_ones() {
-        let args = Args::parse_from(["wind-installer", "--silent", "--future-flag"]);
+        let args = Args::parse_from(["moodflow-installer", "--silent", "--future-flag"]);
         assert!(args.silent, "未知参数把 --silent 一起吞掉了");
     }
 }

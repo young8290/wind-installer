@@ -22,8 +22,8 @@ use windui::geometry::{Point, Size};
 use windui::signal::signal;
 use windui::ui::Element;
 
-use wind_installer::manifest::AppManifest;
-use wind_installer::{meta, ui::uninstall_wizard};
+use moodflow_installer::manifest::AppManifest;
+use moodflow_installer::{meta, ui::uninstall_wizard};
 
 const MANIFEST: &str = r#"
 [app]

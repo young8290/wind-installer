@@ -1,4 +1,4 @@
-# Wind Installer 设计文档
+# Moodflow Installer 设计文档
 
 ## 1. 项目概述
 
@@ -6,21 +6,21 @@
 
 **设计理念**：类微信输入法风格，1-2 步完成安装。应用身份、安装行为、输入法/字体等
 专属逻辑全部由打包时提供的 `app.toml` 描述，序列化进归档头部，由安装/卸载器运行期读取。
-**同一个预编译 stub（wind-installer.exe）配不同 app.toml 即可为不同应用生成安装包，
+**同一个预编译 stub（moodflow-installer.exe）配不同 app.toml 即可为不同应用生成安装包，
 无需重新编译。** 根目录 `app.toml` 是一份演示用的虚构应用清单，把各能力段的写法都列了出来；
-本文档的界面示意图则以真实产品「清风输入法」为例，那是本安装器的第一个使用者。
+本文档的界面示意图则以真实产品「Moodflow 输入法」为例，那是本安装器的第一个使用者。
 
 配置分两层：
 - **运行期清单**（`[app]`/`[ui]`/`[ime]`/`[[font]]`）→ 嵌入归档头部，安装/卸载器读取；
-- **打包参数**（`[package]`：源目录、压缩、logo/icon 路径）→ 仅 `wind-packer` 使用，不进归档。
+- **打包参数**（`[package]`：源目录、压缩、logo/icon 路径）→ 仅 `moodflow-packer` 使用，不进归档。
 
 输入法 TSF 注册与字体安装为可选段：`[ime]`/`[[font]]` 存在即启用，缺省即跳过——
-普通应用删除这两段即可。EXE 图标由 `wind-packer` 用纯 Rust 的 `editpe` 按 `app.toml`
+普通应用删除这两段即可。EXE 图标由 `moodflow-packer` 用纯 Rust 的 `editpe` 按 `app.toml`
 写入（无外部依赖，CI 离线可用）。
 
 ### 对标 NSIS 的优势
 
-| 维度 | NSIS | Wind Installer |
+| 维度 | NSIS | Moodflow Installer |
 |------|------|----------------|
 | 二进制体积 | ~100KB stub | ~0.5MB（含 GUI） |
 | 运行时内存 | ~5MB | ~3.6MB |
@@ -52,7 +52,7 @@
 └─────────────────────────┘  ← 文件结束
 ```
 
-> **打包管线**：`wind-packer build` 先用 `editpe` 给**干净 stub**写入图标，再压缩源目录、
+> **打包管线**：`moodflow-packer build` 先用 `editpe` 给**干净 stub**写入图标，再压缩源目录、
 > 嵌入 manifest/logo 到头部，最后拼接 `stub + 压缩块 + Header + Footer`。
 >
 > ⚠️ 「写图标」必须在「有尾部 overlay」**之前**。`editpe` 并不会丢弃 overlay（它原地改
@@ -60,7 +60,7 @@
 > 尾部数据之前 —— overlay 于是被整体后移，而 Footer 里的 `header_offset` 是**绝对偏移**，
 > 一挪就对不上，归档从此打不开。顺序反了不会有任何报错，只有「装到一半读不出清单」。
 >
-> 卸载器走同一套结构、但只有头部：`wind-packer prep-uninstaller` 在**进归档之前**给它写
+> 卸载器走同一套结构、但只有头部：`moodflow-packer prep-uninstaller` 在**进归档之前**给它写
 > 版本信息与图标、并追加一个「0 条目、只含 manifest + logo」的 overlay，于是它自包含，
 > 安装目录不需要任何散落的配置文件。这一步单独暴露成子命令是为了给代码签名腾位置——
 > 加工完即为终态，签完就不能再改（见 §5.2.1）。`build` 在没人提前 prep 时会自己补做。
@@ -183,7 +183,7 @@ app.toml ──► AppManifest ──► plan::plan_install(manifest, mode) ─�
 #### 5.2.1 第 6 步为什么带门控：卸载器要能签名
 
 overlay 的内容（清单 + logo）全部来自 `app.toml`，没有一个字节依赖安装期，因此它现在
-由**打包器在构建机上**追加（`wind-packer prep-uninstaller`），第 6 步正常情况下什么
+由**打包器在构建机上**追加（`moodflow-packer prep-uninstaller`），第 6 步正常情况下什么
 都不做。
 
 前移的理由是代码签名：Authenticode 要求证书表是 PE 的最后一段（`offset + size == 文件
@@ -282,10 +282,10 @@ uninstall.exe (在安装目录)
 
 | 数据类型 | 路径 | 默认行为 |
 |---------|------|---------|
-| 用户配置 | %APPDATA%\WindInput | 可选删除，默认保留 |
-| 本地缓存 | %LOCALAPPDATA%\WindInput\cache | 默认删除 |
+| 用户配置 | %APPDATA%\Moodflow | 可选删除，默认保留 |
+| 本地缓存 | %LOCALAPPDATA%\Moodflow\cache | 默认删除 |
 | WebView2 缓存 | %TEMP%\wind_setting | 始终删除 |
-| 数据目录配置 | %LOCALAPPDATA%\WindInput\datadir.conf | 跟随用户配置 |
+| 数据目录配置 | %LOCALAPPDATA%\Moodflow\datadir.conf | 跟随用户配置 |
 
 ## 7. UI 设计
 
@@ -303,7 +303,7 @@ uninstall.exe (在安装目录)
 保持内置，避免把清单撑成一张翻译表。默认文案的领域中性由 `tests/ui_defaults.rs`
 断言守护——普通应用装出来的界面不该出现输入法词汇。
 
-下文示意图以清风输入法为例——它的清单里 `[strings]` 显式声明了输入法专用措辞，
+下文示意图以Moodflow 输入法为例——它的清单里 `[strings]` 显式声明了输入法专用措辞，
 正好演示「领域文案从哪来」。仓库自带的 `app.toml` 是另一份虚构示例，措辞不同。
 
 ### 7.1 安装界面（3 页）
@@ -311,7 +311,7 @@ uninstall.exe (在安装目录)
 **Page 1 - 安装类型选择**
 ```
 ┌─────────────────────────────────────────────┐
-│  [图标]  清风输入法 安装程序                  │
+│  [图标]  Moodflow 输入法 安装程序                  │
 │                                             │
 │  请选择安装方式：                             │
 │                                             │
@@ -321,7 +321,7 @@ uninstall.exe (在安装目录)
 │  ○ 便携模式                                  │
 │    仅解压文件，不修改系统                      │
 │                                             │
-│  安装路径: [C:\Program Files\WindInput]      │
+│  安装路径: [C:\Program Files\Moodflow]      │
 │                                             │
 │           [ 下一步 ]  [ 取消 ]               │
 └─────────────────────────────────────────────┘
@@ -330,10 +330,10 @@ uninstall.exe (在安装目录)
 **Page 2 - 数据目录 + 安装进度**
 ```
 ┌─────────────────────────────────────────────┐
-│  [图标]  清风输入法 安装程序                  │
+│  [图标]  Moodflow 输入法 安装程序                  │
 │                                             │
 │  数据存储位置：                               │
-│  ● 默认位置 (%APPDATA%\WindInput)           │
+│  ● 默认位置 (%APPDATA%\Moodflow)           │
 │  ○ 自定义位置: [________________] [浏览]     │
 │                                             │
 │  正在安装...                                 │
@@ -348,11 +348,11 @@ uninstall.exe (在安装目录)
 **Page 3 - 完成**
 ```
 ┌─────────────────────────────────────────────┐
-│  [图标]  清风输入法 安装完成                  │
+│  [图标]  Moodflow 输入法 安装完成                  │
 │                                             │
-│  ✓ 清风输入法 已成功安装到您的电脑           │
+│  ✓ Moodflow 输入法 已成功安装到您的电脑           │
 │                                             │
-│  [x] 立即启动 清风输入法 设置                │
+│  [x] 立即启动 Moodflow 输入法 设置                │
 │                                             │
 │           [ 完成 ]                           │
 └─────────────────────────────────────────────┘
@@ -363,16 +363,16 @@ uninstall.exe (在安装目录)
 **Page 1 - 确认 + 用户数据选项**
 ```
 ┌─────────────────────────────────────────────┐
-│  [图标]  清风输入法 卸载程序                  │
+│  [图标]  Moodflow 输入法 卸载程序                  │
 │                                             │
-│  确定要卸载 清风输入法 吗？                   │
+│  确定要卸载 Moodflow 输入法 吗？                   │
 │                                             │
 │  用户数据处理：                               │
 │  [ ] 清除用户配置数据（输入状态、自定义短语）  │
-│      %APPDATA%\WindInput                    │
+│      %APPDATA%\Moodflow                    │
 │  [x] 备份配置数据到桌面（推荐）               │
 │  [x] 清除本地缓存数据（词库缓存）             │
-│      %LOCALAPPDATA%\WindInput\cache         │
+│      %LOCALAPPDATA%\Moodflow\cache         │
 │                                             │
 │  [x] 我已阅读并确认卸载                      │
 │                                             │
@@ -383,9 +383,9 @@ uninstall.exe (在安装目录)
 **Page 2 - 完成**
 ```
 ┌─────────────────────────────────────────────┐
-│  [图标]  清风输入法 卸载完成                  │
+│  [图标]  Moodflow 输入法 卸载完成                  │
 │                                             │
-│  ✓ 清风输入法 已从您的电脑中移除              │
+│  ✓ Moodflow 输入法 已从您的电脑中移除              │
 │                                             │
 │  ⚠ 部分文件正被占用，需重启电脑才能彻底清除    │  ← 仅 need_reboot 时
 │    已排入系统清理队列，重启后将自动删除        │
@@ -403,7 +403,7 @@ uninstall.exe (在安装目录)
 ## 8. 项目结构
 
 ```
-wind-installer/
+moodflow-installer/
 ├── Cargo.toml
 ├── build.rs                   # 嵌入 UAC Manifest + 图标
 ├── assets/

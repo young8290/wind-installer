@@ -1,0 +1,10 @@
+# Copy to sign.local.ps1 (gitignored), after obtaining a code-signing certificate.
+# Configure the public certificate fingerprint, never a private key or password.
+# A provider/token must expose the certificate and key through Windows certificate storage.
+$MOODFLOW_SIGN_THUMBPRINT = ''
+$MOODFLOW_SIGN_STORE = 'CurrentUser' # or LocalMachine
+$MOODFLOW_SIGN_TIMESTAMP_URL = 'http://timestamp.digicert.com'
+$MOODFLOW_SIGN_RETRY = 3
+$MOODFLOW_SIGN_SESSION_HINT = '检查签名服务或硬件令牌已连接，证书有效且具有代码签名用途'
+# Optional environment variables: MOODFLOW_SIGN_THUMBPRINT, MOODFLOW_SIGN_STORE,
+# MOODFLOW_SIGNTOOL (absolute path to Windows SDK signtool.exe).

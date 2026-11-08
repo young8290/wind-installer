@@ -24,7 +24,7 @@
 //! `ignore_errors` 不同：这里跳过的只是**那一个** token，它后面的照常解析。
 
 // 两个二进制共用同一棵模块树，本模块只有 `uninstall.exe` 那个用得上；
-// 编译 `wind-installer.exe` 时整块都是「未使用」。同 `util::exitcode`。
+// 编译 `moodflow-installer.exe` 时整块都是「未使用」。同 `util::exitcode`。
 #![allow(dead_code)]
 
 use std::ffi::OsStr;
@@ -36,7 +36,7 @@ pub struct UninstallArgs {
     /// 静默卸载时保留用户配置数据（`%APPDATA%\<app.id>`）。
     ///
     /// ARP 不会传它（控制面板没有这个开关），是给脚本用的；与
-    /// `wind-installer.exe uninstall --keep-user-data` 同名同义。
+    /// `moodflow-installer.exe uninstall --keep-user-data` 同名同义。
     ///
     /// ⚠️ **只在 `--silent` 下起作用**。交互式向导用它自己的勾选框决定删不删用户数据
     /// （`uninstall_wizard.rs` 里 `keep_user_data` 恒为 false），所以单独传这个 flag

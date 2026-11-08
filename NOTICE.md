@@ -1,6 +1,6 @@
 # 第三方声明
 
-wind-installer 使用了以下第三方组件，在此表示感谢并声明其许可证信息。
+moodflow-installer 使用了以下第三方组件，在此表示感谢并声明其许可证信息。
 
 本项目自身采用 MIT 许可证，见 [LICENSE](LICENSE)。
 
@@ -8,7 +8,7 @@ wind-installer 使用了以下第三方组件，在此表示感谢并声明其�
 
 ### editpe（本地修补副本）
 
-- **用途**：`wind-packer` 写入 EXE 的图标与版本资源
+- **用途**：`moodflow-packer` 写入 EXE 的图标与版本资源
 - **目录**：`vendor/editpe`
 - **上游**：[editpe](https://crates.io/crates/editpe) 0.2.3，作者 Christian Sdunek 及 editpe contributors
 - **许可证**：BSD-2-Clause，全文见 [`vendor/editpe/LICENSE`](vendor/editpe/LICENSE)
@@ -40,3 +40,7 @@ cargo license --features packer
 
 如您是上述任一资源的权利人，且认为本项目的使用方式不当，请通过
 [Issue](../../issues) 联系我们，我们将及时处理。
+
+## 安装器来源
+
+本分支基于 [huanfeng/wind-installer](https://github.com/huanfeng/wind-installer)，以 MIT 许可改造为 Moodflow。原作者版权和许可证见 LICENSE；品牌改名不改变第三方组件的归属。

@@ -15,9 +15,10 @@ use super::InstallMode;
 /// 的全部区别，无需在各步骤内部再判断模式。
 pub fn plan_install<'a>(m: &AppManifest, mode: InstallMode) -> Vec<Box<dyn Step<InstallCtx<'a>>>> {
     let mut plan: Vec<Box<dyn Step<InstallCtx<'a>>>> = Vec::new();
+    // Fail before stopping processes, changing registration or creating directories.
+    plan.push(Box::new(PrepareArchive));
 
     if mode == InstallMode::Portable {
-        plan.push(Box::new(PrepareArchive));
         plan.push(Box::new(ExtractFiles));
         plan.push(Box::new(WritePortableMarker));
         return plan;
@@ -41,7 +42,6 @@ pub fn plan_install<'a>(m: &AppManifest, mode: InstallMode) -> Vec<Box<dyn Step<
         plan.push(Box::new(CleanupLegacy));
     }
 
-    plan.push(Box::new(PrepareArchive));
     plan.push(Box::new(ExtractFiles));
     plan.push(Box::new(AppendUninstallerOverlay));
 

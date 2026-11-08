@@ -1,4 +1,4 @@
-//! 安装器单实例锁（`%TEMP%\wind_installer.lock`）。
+//! 安装器单实例锁（`%TEMP%\moodflow_installer.lock`）。
 //!
 //! ── 这个锁出过什么事 ──────────────────────────────────────────────────
 //! 锁文件里原本只存一个 PID。Windows 会复用 PID，所以一个早已死去的安装器留下的锁，
@@ -148,7 +148,7 @@ fn busy_log_line(pid: u32, lock: &Path) -> String {
 }
 
 fn lock_file_path() -> PathBuf {
-    std::env::temp_dir().join("wind_installer.lock")
+    std::env::temp_dir().join("moodflow_installer.lock")
 }
 
 /// 锁文件读出来的实况。
@@ -554,7 +554,7 @@ mod tests {
         static SEQ: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         let n = SEQ.fetch_add(1, Ordering::SeqCst);
         let path = std::env::temp_dir().join(format!(
-            "wind_installer_test_{}_{}.lock",
+            "moodflow_installer_test_{}_{}.lock",
             std::process::id(),
             n
         ));
@@ -629,7 +629,7 @@ mod tests {
     #[test]
     fn missing_lock_file_never_blocks() {
         let path = std::env::temp_dir().join(format!(
-            "wind_installer_test_absent_{}.lock",
+            "moodflow_installer_test_absent_{}.lock",
             std::process::id()
         ));
         let _ = std::fs::remove_file(&path);
@@ -644,10 +644,10 @@ mod tests {
 
         // 静默模式下调用方只看得到一个退出码，这行日志是唯一能说清「谁占着锁、锁在哪」
         // 的东西；格式写坏了不会有任何地方报错，只能靠这条钉住。
-        let line = busy_log_line(2628, Path::new("C:\\Temp\\wind_installer.lock"));
+        let line = busy_log_line(2628, Path::new("C:\\Temp\\moodflow_installer.lock"));
         assert_eq!(
             line,
-            "aborted: exit=1618 another_instance_pid=2628 lock=C:\\Temp\\wind_installer.lock\n"
+            "aborted: exit=1618 another_instance_pid=2628 lock=C:\\Temp\\moodflow_installer.lock\n"
         );
     }
 
@@ -658,7 +658,7 @@ mod tests {
     #[test]
     fn acquire_then_block_then_release() {
         let path = std::env::temp_dir().join(format!(
-            "wind_installer_test_acquire_{}.lock",
+            "moodflow_installer_test_acquire_{}.lock",
             std::process::id()
         ));
         let _ = std::fs::remove_file(&path);

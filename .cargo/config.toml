@@ -8,7 +8,7 @@
 # 直接 `cargo build --release` 出来的 stub 其实是不能发布的。约束属于产物本身，
 # 故固化在这里：无论谁在哪构建，产出的 Windows 二进制都自包含。
 #
-# 只作用于 MSVC 目标：Linux 上原生构建的 wind-packer 不受影响（glibc 静态链接另有
+# 只作用于 MSVC 目标：Linux 上原生构建的 moodflow-packer 不受影响（glibc 静态链接另有
 # 一堆坑，且 packer 只跑在构建机上，不需要自包含）。
 #
 # 注意 RUSTFLAGS 环境变量会**覆盖**而非合并本节。调用方注入的恰好是同一个 flag，

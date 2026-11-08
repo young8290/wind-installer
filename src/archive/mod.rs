@@ -1,4 +1,5 @@
 pub mod format;
+pub mod integrity;
 pub mod reader;
 pub mod writer;
 

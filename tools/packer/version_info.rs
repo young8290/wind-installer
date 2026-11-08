@@ -1,4 +1,4 @@
-use wind_installer::manifest::ProjectConfig;
+use moodflow_installer::manifest::ProjectConfig;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedVersionInfo {
@@ -118,7 +118,7 @@ pub fn derive_version_info(cfg: &ProjectConfig, is_uninstaller: bool) -> Resolve
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wind_installer::manifest::ProjectConfig;
+    use moodflow_installer::manifest::ProjectConfig;
 
     #[test]
     fn test_parse_version() {

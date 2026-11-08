@@ -53,7 +53,7 @@ impl Default for CleanupOptions {
 /// 1. **ARP 的 `InstallLocation`**：安装时亲手写下的，最权威。
 /// 2. **自身所在目录**：仅当它看起来确实是安装目录（旁边有 `uninstall.exe` 或
 ///    清单声明的主程序）。对 `uninstall.exe` 而言这按定义必然成立 —— 它就躺在
-///    安装目录里；对 `wind-installer.exe uninstall` 则通常不成立（安装器可能在
+///    安装目录里；对 `moodflow-installer.exe uninstall` 则通常不成立（安装器可能在
 ///    任何地方），那道存在性检查正是用来把这种情形挡掉的。
 /// 3. 猜：`%ProgramFiles%\<app.id>`。留着是因为总得有个兜底，但它是最后一档。
 pub fn resolve_install_dir() -> PathBuf {
@@ -97,7 +97,7 @@ fn self_dir_if_it_looks_installed() -> Option<PathBuf> {
 
 /// 判据：目录里有 `uninstall.exe` 或清单声明的主程序。
 ///
-/// 只看「自己叫不叫 uninstall.exe」是不够的：`wind-installer.exe` 被改名成
+/// 只看「自己叫不叫 uninstall.exe」是不够的：`moodflow-installer.exe` 被改名成
 /// `xxx_uninstall.exe` 分发也是支持的用法（`main.rs` 就按文件名里含 "uninstall"
 /// 来切模式），那种 exe 可以躺在下载目录里，它的 parent 绝不是安装目录。
 fn looks_like_install_dir(dir: &Path) -> bool {

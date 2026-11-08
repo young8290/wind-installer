@@ -1,24 +1,24 @@
-# AGENTS.md — wind-installer
+# AGENTS.md — moodflow-installer
 
 ## 本仓库的定位（不可动摇的目标）
 
-**wind-installer 是一个「通用 Windows 安装器生成器」，不是清风输入法的专用安装器。**
+**本分支用于 Moodflow Windows 安装器，保留清单驱动架构；产品身份来自 app.toml。**
 
-同一个 stub 二进制（`wind-installer.exe`）配上不同的清单（`app.toml`）即可为**任意应用**打出安装包，无需重新编译：
+同一个 stub 二进制（`moodflow-installer.exe`）配上不同的清单（`app.toml`）即可为**任意应用**打出安装包，无需重新编译：
 
 ```
-wind-packer build --config <app.toml> --stub wind-installer.exe
+moodflow-packer build --config <app.toml> --stub moodflow-installer.exe
 ```
 
 清单被嵌入归档头部，由安装/卸载器**运行期读取**。因此：
 
 > **一切与具体应用相关的东西都必须写在清单里，绝不能硬编码进 Rust 代码。**
 
-清风输入法只是**第一个使用者**，不是特权使用者。任何"因为我们是输入法所以直接写死"的改动，都是在把通用安装器退化成定制安装器——这是明确要避免的方向。
+Moodflow 输入法只是**第一个使用者**，不是特权使用者。任何"因为我们是输入法所以直接写死"的改动，都是在把通用安装器退化成定制安装器——这是明确要避免的方向。
 
 ## 硬性规则
 
-1. **禁止在 Rust 代码里出现**：产品名（"清风输入法"）、具体 GUID/CLSID、DLL 名、"输入法/词库"等领域词、固定安装路径。这些一律从 `meta::manifest()` 取。
+1. **禁止在 Rust 代码里出现**：产品名（"Moodflow 输入法"）、具体 GUID/CLSID、DLL 名、"输入法/词库"等领域词、固定安装路径。这些一律从 `meta::manifest()` 取。
    - 领域中性由测试守护：`tests/ui_defaults.rs::defaults_are_domain_neutral`。
 2. **能力段缺省 = 该能力不执行**。清单不声明某段（`[ime]`/`[[font]]`/`[autostart]`/…）→ 对应 `Step` 不入计划。一个只有 `[app]` 身份的普通应用，计划里只剩"解压 + 可卸载"。由 `tests/step_plan.rs::minimal_manifest_plans_no_capability_steps` 守护。
 3. **有系统副作用的步骤必须写回执**（`ctx.receipt`），否则卸载撤销不掉。卸载是回执驱动的，不重新读清单。
@@ -58,7 +58,7 @@ wind-packer build --config <app.toml> --stub wind-installer.exe
 | 路径 | 行为 |
 |---|---|
 | 交互式向导 / `--quiet` | 完成页显示 warning 色提示；**quiet 模式放弃自动退出**，窗口留给用户亲手关闭 |
-| `--silent`（无界面） | 以 **3010**（`ERROR_SUCCESS_REBOOT_REQUIRED`）退出，并写 `%TEMP%\wind_installer_args.log` |
+| `--silent`（无界面） | 以 **3010**（`ERROR_SUCCESS_REBOOT_REQUIRED`）退出，并写 `%TEMP%\moodflow_installer_args.log` |
 | 卸载（两条路径同上） | 同上 |
 
 > **调用方契约**：`--silent` 的 `3010` 是**成功**，不是失败。宿主（wind-setting）若只判 `exit == 0` 会把「装好了但请重启」误报成安装失败。
@@ -68,7 +68,7 @@ wind-packer build --config <app.toml> --stub wind-installer.exe
 > 会把无人值守的部署挂在那里等人点；从前这条路是「弹 UAC + `exit(0)`」，一次连开始都没
 > 开始的卸载被记成了成功。
 >
-> ⚠️ **静默安装不在此列**：`wind-installer.exe --silent` 未提权时仍弹 UAC 并以 0 退出，
+> ⚠️ **静默安装不在此列**：`moodflow-installer.exe --silent` 未提权时仍弹 UAC 并以 0 退出，
 > 因为 wind-setting 的应用内自动升级依赖它（`request_elevation` 转发原始 argv 给新实例）。
 > 这个不对称是有意的，改动前先看 `uninstaller::require_admin_or_exit` 的注释。
 > 从前这条路是 `exit(0)`——静默、无提示、退出码还在说「成功」，于是一个残留的锁能让
@@ -110,7 +110,7 @@ wind-packer build --config <app.toml> --stub wind-installer.exe
 
 `uninstall.exe` 是独立二进制（`src/uninstaller_main.rs`），**不用 clap**。参数解析在
 `uninstaller::args`，静默路径的退出码收场在 `uninstaller::run_silent`——后者与
-`wind-installer.exe uninstall --silent` 共用同一份，退出码是对外契约，分两处写会分叉。
+`moodflow-installer.exe uninstall --silent` 共用同一份，退出码是对外契约，分两处写会分叉。
 
 改 ARP 那两条命令行时注意：
 
@@ -122,7 +122,7 @@ wind-packer build --config <app.toml> --stub wind-installer.exe
   **从出错处截断**：一个不认识的参数会把它自己和它之后的全部丢掉。历史上的
   `--uninstall` 正是这么把 `--silent` 吃掉的。
 - 新加 flag 要同时管两条路：`uninstaller::args`（`uninstall.exe`）与 `main.rs` 的 clap
-  `Args`（`wind-installer.exe`）。
+  `Args`（`moodflow-installer.exe`）。
 
 ## 变体隔离（dev / release）
 
@@ -130,8 +130,8 @@ wind-packer build --config <app.toml> --stub wind-installer.exe
 
 ## 配置文件的位置（重要）
 
-- **生产清单**：`../WindInput/config/app.toml`（归属 **WindInput 仓库**）。这才是清风输入法真正打包用的配置。
-- **本仓库的 `app.toml`**：只是**示例/参考**，演示清单写法，不是产品配置。改产品行为要改 WindInput 那份。
+- **生产清单**：`../Moodflow/config/app.toml`（归属 **Moodflow 仓库**）。这才是Moodflow 输入法真正打包用的配置。
+- **本仓库的 `app.toml`**：Moodflow 参考配置；通用示例在 `examples/generic-app.toml`。正式产品行为以 Moodflow 主仓配置为准。
 
 ## 构建 / 测试
 
@@ -147,13 +147,13 @@ cargo clippy --lib
 
 `.cargo/config.toml` 给 MSVC 目标注入 `-C target-feature=+crt-static`。**删掉它，产出的安装器在没装 VC++ 运行库的干净机器上直接起不来**——`VCRUNTIME140.dll` 不是 Windows 内置组件，缺它会报「找不到 VCRUNTIME140.dll」或 `0xc000007b`。而安装器往往是用户在那台机器上运行的第一个程序，它起不来，用户无从自救、也不会知道为什么。
 
-这条约束原先只写在调用方（WindInput 仓的 `dev.ps1` / `pack-installer.sh`）的 `RUSTFLAGS` 注入里，本仓直接 `cargo build --release` 出来的 stub 其实**不能发布**。约束属于产物本身，故已固化到本仓。
+这条约束原先只写在调用方（Moodflow 仓的 `dev.ps1` / `pack-installer.sh`）的 `RUSTFLAGS` 注入里，本仓直接 `cargo build --release` 出来的 stub 其实**不能发布**。约束属于产物本身，故已固化到本仓。
 
 注意 `RUSTFLAGS` 环境变量会**覆盖**而非合并 `.cargo/config.toml` 的 target 小节——调用方注入的恰好是同一个 flag 故结果一致，但这也意味着这个保证可能被外部环境静默掀翻。因此 `release.yml` 不信任构建配置，而是**在发布前实测产物本身**有无动态 CRT 引用，命中即失败。改动构建配置或发布流程时不要摘掉这个校验。
 
 ## CI
 
-- `ci.yml`（push/PR）：Windows 上 build + `test --tests` + `clippy --lib`；另有一个 ubuntu job 只构建 `wind-packer`，守着「packer 能在 Linux 原生构建」这条能力（`pack-installer.sh` 的全 Linux 流水线依赖它）。往 `archive`/`manifest`/`meta` 里引入 Windows-only 依赖时，只有这个 job 会红。
-- `release.yml`（push tag `v*`）：产出 `wind-installer-windows-x64.exe`、`wind-uninstaller-windows-x64.exe`、`wind-packer-windows-x64.exe`、`wind-packer-linux-x64` 与 `SHA256SUMS`。`workflow_dispatch` 触发时只产 artifact 不发 Release。资产名不带版本号——版本由 tag 表达，下载方写死文件名即可。
+- `ci.yml`（push/PR）：Windows 上 build + `test --tests` + `clippy --lib`；另有一个 ubuntu job 只构建 `moodflow-packer`，守着「packer 能在 Linux 原生构建」这条能力（`pack-installer.sh` 的全 Linux 流水线依赖它）。往 `archive`/`manifest`/`meta` 里引入 Windows-only 依赖时，只有这个 job 会红。
+- `release.yml`（push tag `v*`）：产出 `moodflow-installer-windows-x64.exe`、`moodflow-uninstaller-windows-x64.exe`、`moodflow-packer-windows-x64.exe`、`moodflow-packer-linux-x64` 与 `SHA256SUMS`。`workflow_dispatch` 触发时只产 artifact 不发 Release。资产名不带版本号——版本由 tag 表达，下载方写死文件名即可。
 
 门禁强度是**按代码库现状**定的：未启用 `-D warnings`（既有 11 处 clippy 警告）、未加 `cargo fmt --check`（现有代码未按 rustfmt 格式化）。红着的门禁没人会认真看，所以先让它保持绿。清理干净后再收紧，两处都在 `ci.yml` 里留了注释说明怎么改。

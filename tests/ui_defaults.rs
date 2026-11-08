@@ -11,8 +11,8 @@
 
 #![cfg(windows)]
 
-use wind_installer::manifest::AppManifest;
-use wind_installer::{meta, ui::theme};
+use moodflow_installer::manifest::AppManifest;
+use moodflow_installer::{meta, ui::theme};
 
 /// 只声明身份，不声明任何 UI 配置。
 const MINIMAL: &str = r#"

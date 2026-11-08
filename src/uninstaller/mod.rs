@@ -84,7 +84,7 @@ pub fn perform_uninstall(options: &CleanupOptions) -> UninstallResult {
 
 /// 静默卸载的完整收场：跑一遍卸载，再把结果翻译成**退出码**。
 ///
-/// 两个二进制共用这一份：`wind-installer.exe uninstall --silent` 与
+/// 两个二进制共用这一份：`moodflow-installer.exe uninstall --silent` 与
 /// `uninstall.exe --silent`（后者才是 ARP `QuietUninstallString` 指向的那个）。
 /// 退出码是写在 README 与 AGENTS.md 里的对外契约，分两处各写一遍迟早会分叉——
 /// 事实上卸载器那边此前根本没有这段代码，`--silent` 一路跌进 GUI 向导。
@@ -151,7 +151,7 @@ pub fn run_silent(keep_user_data: bool) -> i32 {
 
 /// 本进程是不是就躺在待删的那个目录里。
 ///
-/// 只有这种情形才需要自删除。`wind-installer.exe uninstall --silent` 通常在别处，
+/// 只有这种情形才需要自删除。`moodflow-installer.exe uninstall --silent` 通常在别处，
 /// 那条路上安装目录已被 `remove_dir_all` 正常收走，再拷一个副本到 `%TEMP%` 纯属多余
 /// —— 而「往 %TEMP% 拷 exe 并立刻执行」正是杀毒软件最常见的拦截规则之一，
 /// 不需要时就别去踩。
@@ -177,7 +177,7 @@ fn is_running_from(install_dir: &Path) -> bool {
 /// 交互式那条维持原样：用户就在屏幕前，弹 UAC 正是他期待的。原进程 `exit(0)` 也仍然
 /// 合理 —— 真正的卸载由提权后的新进程接手，而人看的是窗口不是退出码。
 ///
-/// ⚠️ **卸载专用，安装那条别照搬。** `wind-installer.exe --silent` 安装未提权时仍是
+/// ⚠️ **卸载专用，安装那条别照搬。** `moodflow-installer.exe --silent` 安装未提权时仍是
 /// 「弹 UAC + exit(0)」，那是有意的：wind-setting 的应用内自动升级依赖它，
 /// `request_elevation` 专门转发原始 argv 就是为它服务的，改成 5 会当场打断升级。
 /// 卸载没有这样的调用方 —— 它的静默入口只有 ARP 的 `QuietUninstallString`。

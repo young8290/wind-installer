@@ -146,15 +146,17 @@ pub struct PrepareArchive;
 
 impl Step<InstallCtx<'_>> for PrepareArchive {
     fn name(&self) -> String {
-        "正在解压数据...".into()
+        "正在校验安装文件...".into()
     }
     fn fatal(&self) -> bool {
         true
     }
     fn run(&self, ctx: &mut InstallCtx, _r: &mut dyn Reporter) -> Result<(), String> {
-        std::fs::create_dir_all(&ctx.config.install_dir)
-            .map_err(|e| format!("无法创建安装目录: {}", e))?;
-        ctx.archive.prepare()
+        ctx.archive.prepare()?;
+        if let Some(info) = &crate::meta::manifest().integrity {
+            ctx.archive.verify_data_manifest(&info.data_manifest)?;
+        }
+        Ok(())
     }
 }
 

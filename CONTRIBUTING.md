@@ -1,16 +1,16 @@
 # 贡献指南
 
-感谢您对 wind-installer 的关注！我们欢迎所有形式的贡献，包括 Bug 报告、功能建议和代码提交。
+感谢您对 moodflow-installer 的关注！我们欢迎所有形式的贡献，包括 Bug 报告、功能建议和代码提交。
 
 ## 先理解本仓库的定位
 
-**wind-installer 是一个「通用 Windows 安装器生成器」，不是某个特定应用的专用安装器。**
+**moodflow-installer 是一个「通用 Windows 安装器生成器」，不是某个特定应用的专用安装器。**
 
 同一个预编译的 stub 二进制配上不同的清单 (`app.toml`) 即可为任意应用打出安装包，无需重新编译。清单在打包时嵌入归档头部，安装器与卸载器在**运行期**读取它。因此有一条贯穿全仓的原则：
 
 > **一切与具体应用相关的东西都必须写在清单里，绝不能硬编码进 Rust 代码。**
 
-清风输入法 (WindInput) 只是本项目的第一个使用者，不是特权使用者。任何"因为调用方是输入法所以直接写死"的改动，都是在把通用安装器退化成定制安装器，不会被接受。这条约束由测试 `tests/ui_defaults.rs::defaults_are_domain_neutral` 守护。
+Moodflow 输入法 (Moodflow) 只是本项目的第一个使用者，不是特权使用者。任何"因为调用方是输入法所以直接写死"的改动，都是在把通用安装器退化成定制安装器，不会被接受。这条约束由测试 `tests/ui_defaults.rs::defaults_are_domain_neutral` 守护。
 
 完整的架构说明见 [`docs/DESIGN.md`](docs/DESIGN.md)，代码级的硬性规则见 [`AGENTS.md`](AGENTS.md)——**提交代码前请务必读一遍后者**，它记录了若干反直觉的约定及其原因。
 
@@ -35,13 +35,13 @@
 - 触发问题的**清单片段**（`app.toml` 中相关的段落，敏感信息可脱敏）
 - 运行模式：交互式向导 / `--quiet` / `--silent`，以及完整命令行
 - **退出码**——尤其请注意 `3010` 表示"安装成功但需重启"，不是失败
-- `%TEMP%\wind_installer_args.log`（`--silent` 模式会写入）
+- `%TEMP%\moodflow_installer_args.log`（`--silent` 模式会写入）
 - 是首次安装、升级覆盖，还是卸载时出现
 
-`wind-packer inspect <安装包.exe>` 可以读出已生成安装程序中嵌入的清单摘要，定位"打包时写了什么"与"运行期读到什么"不一致的问题时很有用，请一并附上。
+`moodflow-packer inspect <安装包.exe>` 可以读出已生成安装程序中嵌入的清单摘要，定位"打包时写了什么"与"运行期读到什么"不一致的问题时很有用，请一并附上。
 
-> 使用清风输入法时遇到的问题（候选、编码、词库、界面），请到
-> [WindInput 主仓库](https://github.com/huanfeng/WindInput/issues) 反馈——除非您能确认问题出在安装/卸载过程本身。
+> 使用Moodflow 输入法时遇到的问题（候选、编码、词库、界面），请到
+> [Moodflow 主仓库](https://github.com/young8290/Moodflow/issues) 反馈——除非您能确认问题出在安装/卸载过程本身。
 
 ## 功能建议
 
@@ -56,7 +56,7 @@
 - Rust stable 工具链（rustup 安装，含 `clippy` 组件）
 - **Windows 本机构建**：Visual Studio 2022 生成工具（MSVC 链接器）
 
-`src/installer/`、`src/uninstaller/`、`src/ui/`、`src/util/` 基本都是 `cfg(windows)` 代码，在非 Windows 主机上根本不参与编译。而 `src/archive/`、`src/manifest.rs` 与 `wind-packer` 是纯 IO，可在 Linux 上原生构建——CI 用一个独立的 ubuntu job 守着这条能力（消费方的全 Linux 打包流水线依赖它）。
+`src/installer/`、`src/uninstaller/`、`src/ui/`、`src/util/` 基本都是 `cfg(windows)` 代码，在非 Windows 主机上根本不参与编译。而 `src/archive/`、`src/manifest.rs` 与 `moodflow-packer` 是纯 IO，可在 Linux 上原生构建——CI 用一个独立的 ubuntu job 守着这条能力（消费方的全 Linux 打包流水线依赖它）。
 
 因此：**改动 archive / manifest / meta 时请留意不要引入 Windows-only 依赖**，否则会打断 Linux 侧的打包能力，而 Windows job 不会报错。
 
@@ -65,8 +65,8 @@
 ```powershell
 # 三个二进制。packer 走 packer feature（editpe 是可选依赖），
 # 只编 stub 不会暴露 packer 侧的编译错误
-cargo build --bin wind-installer --bin wind-uninstaller
-cargo build --bin wind-packer --features packer
+cargo build --bin moodflow-installer --bin moodflow-uninstaller
+cargo build --bin moodflow-packer --features packer
 
 # 打完整安装包（编译 + 打包，输出到 app.toml 的 [package] output_dir）
 .\scripts\pack.ps1
@@ -80,8 +80,8 @@ CI（`.github/workflows/ci.yml`）跑以下几项，请在本地先跑一遍：
 
 ```powershell
 cargo fmt --all -- --check
-cargo build --locked --bin wind-installer --bin wind-uninstaller
-cargo build --locked --bin wind-packer --features packer
+cargo build --locked --bin moodflow-installer --bin moodflow-uninstaller
+cargo build --locked --bin moodflow-packer --features packer
 cargo test --locked --tests
 cargo clippy --locked --lib -- -D warnings
 ```
@@ -184,7 +184,7 @@ Windows 副作用（注册表、字体安装、TSF 注册、快捷方式、文�
 | `src/uninstaller/` | 卸载计划、清理与自删除 |
 | `src/ui/` | 安装/卸载向导与主题 |
 | `src/util/reboot.rs` | "需要重启"账本 |
-| `tools/packer/` | 打包工具 `wind-packer` |
+| `tools/packer/` | 打包工具 `moodflow-packer` |
 | `scripts/` | 构建、打包与发布门禁脚本 |
 | `vendor/` | 第三方 crate 的本地修补副本（见 [NOTICE.md](NOTICE.md)） |
 | `docs/DESIGN.md` | 架构与归档格式设计文档 |

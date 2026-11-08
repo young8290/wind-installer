@@ -1,6 +1,6 @@
 //! 应用清单（AppManifest）—— 运行期安装配置的唯一来源。
 //!
-//! 设计目标：让 wind-installer 成为「通用安装器生成器」。应用身份、安装行为、
+//! 设计目标：让 moodflow-installer 成为「通用安装器生成器」。应用身份、安装行为、
 //! 输入法/字体等专属逻辑全部由打包时提供的 `app.toml` 描述，序列化进归档头部，
 //! 由运行期读取。**同一个预编译 stub 通过更换 app.toml 即可为不同应用生成安装包，
 //! 无需重新编译。**
@@ -10,7 +10,7 @@
 //! - [`ProjectConfig`]：`app.toml` 的完整映射 = 清单 + `[package]` 打包参数。
 //! - [`PackageConfig`]：仅打包期使用（压缩、源目录、logo/icon 路径等）。
 
-// ProjectConfig/PackageConfig 及多个序列化/默认值辅助仅 wind-packer 使用，
+// ProjectConfig/PackageConfig 及多个序列化/默认值辅助仅 moodflow-packer 使用，
 // 在 installer/uninstaller 二进制中不构造，故模块级允许 dead_code。
 #![allow(dead_code)]
 
@@ -24,6 +24,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppManifest {
     pub app: AppInfo,
+    /// Optional SHA-256 inventory, checked before any installation side effects.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub integrity: Option<IntegrityInfo>,
     #[serde(default)]
     pub ui: UiInfo,
     /// 向导主题色。缺省项回退到内置默认。
@@ -64,6 +67,12 @@ pub struct AppManifest {
     /// 自己写过的那个值。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime_autostart: Option<RuntimeAutoStartInfo>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IntegrityInfo {
+    /// Archive-relative JSON manifest. Its parent is the inventoried directory.
+    pub data_manifest: String,
 }
 
 /// 应用身份与安装行为。
@@ -786,6 +795,9 @@ pub fn is_reserved_legacy_dir(name: &str) -> bool {
 impl AppManifest {
     /// 打包期校验。失败即拒绝出包——比打出一个升级时会删用户数据的安装包好。
     pub fn validate(&self) -> Result<(), String> {
+        if let Some(info) = &self.integrity {
+            crate::archive::integrity::validate_path(&info.data_manifest)?;
+        }
         if let Some((bad, why)) = self
             .app
             .legacy_dirs

@@ -1,6 +1,6 @@
 //! AppManifest / ProjectConfig 解析与 roundtrip 测试。
 
-use wind_installer::manifest::{AppManifest, ProjectConfig};
+use moodflow_installer::manifest::{AppManifest, ProjectConfig};
 
 const SAMPLE: &str = r#"
 [app]
@@ -77,8 +77,8 @@ fn project_config_parses_all_sections() {
 
 /// 仓库自带的 app.toml 必须始终能被当前结构体解析——防止配置与代码漂移。
 #[test]
-fn repo_app_toml_parses_with_all_capability_sections() {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/app.toml");
+fn generic_example_parses_with_all_capability_sections() {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/generic-app.toml");
     let text = std::fs::read_to_string(path).expect("读取仓库 app.toml 失败");
     let cfg = ProjectConfig::from_toml_str(&text).expect("解析仓库 app.toml 失败");
 
@@ -86,8 +86,9 @@ fn repo_app_toml_parses_with_all_capability_sections() {
     assert!(autostart.enabled);
     assert_eq!(autostart.exe_or("fallback.exe"), "demo_app.exe");
 
-    assert_eq!(cfg.manifest.shortcut.len(), 2);
-    assert_eq!(cfg.manifest.shortcut[0].effective_name(), "示例应用 设置");
+    assert_eq!(cfg.manifest.shortcut.len(), 3);
+    assert_eq!(cfg.manifest.shortcut[0].effective_name(), "示例应用");
+    assert_eq!(cfg.manifest.shortcut[1].effective_name(), "示例应用 设置");
 
     assert!(
         cfg.manifest
@@ -115,7 +116,7 @@ fn repo_app_toml_parses_with_all_capability_sections() {
 /// [app] 字段展开出不同的 target/name，打包脚本无需为每个变体各维护一份配置。
 #[test]
 fn shortcut_placeholders_expand_per_variant() {
-    use wind_installer::manifest::expand_placeholders;
+    use moodflow_installer::manifest::expand_placeholders;
 
     // release 变体
     assert_eq!(
@@ -166,7 +167,7 @@ fn shortcut_placeholders_expand_per_variant() {
 /// 无需在配置里为「有/无设置程序」各写一份。
 #[test]
 fn setting_exe_placeholder_empty_when_unset() {
-    use wind_installer::manifest::expand_placeholders;
+    use moodflow_installer::manifest::expand_placeholders;
     let expanded = expand_placeholders("{setting_exe}", "app.exe", "", "App", "App");
     assert!(expanded.trim().is_empty());
 }
@@ -174,7 +175,7 @@ fn setting_exe_placeholder_empty_when_unset() {
 /// 无占位符的字面 target 原样保留。
 #[test]
 fn literal_target_passes_through_unchanged() {
-    use wind_installer::manifest::expand_placeholders;
+    use moodflow_installer::manifest::expand_placeholders;
     assert_eq!(
         expand_placeholders("uninstall.exe", "app.exe", "set.exe", "App", "App"),
         "uninstall.exe"
@@ -391,7 +392,7 @@ source_dir = "./build"
 /// 在剥前后缀而不是切分量——剥的顺序固定、每种剥法只做一遍。
 #[test]
 fn reserved_dir_check_is_spelling_insensitive() {
-    use wind_installer::manifest::is_reserved_legacy_dir;
+    use moodflow_installer::manifest::is_reserved_legacy_dir;
 
     for bad in [
         "data",
@@ -425,7 +426,7 @@ fn reserved_dir_check_is_spelling_insensitive() {
 /// 禁令理由不同，见 `RESERVED_LEGACY_DIRS`），不要觉得不一致而「顺手统一」。
 #[test]
 fn ordinary_legacy_dirs_still_allowed() {
-    use wind_installer::manifest::is_reserved_legacy_dir;
+    use moodflow_installer::manifest::is_reserved_legacy_dir;
 
     for ok in [
         "plugins",
@@ -482,7 +483,7 @@ legacy_dirs  = ["data_custom"]
 /// `remove_dir_all` 掉（实测：`data/..` 之后连基准目录本身都没了）。
 #[test]
 fn escaping_paths_get_their_own_error_message() {
-    use wind_installer::manifest::{classify_legacy_dir, LegacyDirRejection};
+    use moodflow_installer::manifest::{classify_legacy_dir, LegacyDirRejection};
 
     // 用 TOML **字面量字符串**（单引号）包 rel：基本字符串里 `data_custom\..\..` 的反斜杠
     // 会被当成转义序列，解析就先失败了，`expect_err` 拿到的是 TOML 报错而非校验报错——
@@ -607,7 +608,7 @@ remove_dir_when_empty = true"#,
 /// 对应的、用户这次并没有勾选删除的东西。两个勾选的语义在这一步一起作废。
 #[test]
 fn localdata_entries_resolving_to_root_are_rejected() {
-    use wind_installer::manifest::{classify_local_data_entry, LocalDataRejection};
+    use moodflow_installer::manifest::{classify_local_data_entry, LocalDataRejection};
 
     for bad in ["", ".", "./", " ", ".//./"] {
         assert_eq!(
@@ -625,7 +626,7 @@ fn localdata_entries_resolving_to_root_are_rejected() {
 /// 注意 `C:x` 的 `is_absolute()` 为 false，只看 Path 判不出来——`guard_shape` 也专门堵过。
 #[test]
 fn localdata_escaping_and_absolute_entries_rejected() {
-    use wind_installer::manifest::{classify_local_data_entry, LocalDataRejection};
+    use moodflow_installer::manifest::{classify_local_data_entry, LocalDataRejection};
 
     for bad in ["..", "cache/..", "logs/../..", r"cache\..\.."] {
         assert_eq!(
@@ -655,8 +656,8 @@ fn localdata_escaping_and_absolute_entries_rejected() {
 /// 都是清单里手写路径的常见形态，归一化漏掉任何一种，那一项就会静默删不掉。
 #[test]
 fn safe_local_data_rel_normalizes_hand_written_paths() {
+    use moodflow_installer::manifest::safe_local_data_rel;
     use std::path::PathBuf;
-    use wind_installer::manifest::safe_local_data_rel;
 
     for (raw, want) in [
         ("logs", "logs"),
@@ -682,7 +683,7 @@ fn safe_local_data_rel_normalizes_hand_written_paths() {
 /// **当前目录**下的 `x`，`remove_dir_all` 就落到了作用域根之外。实测四种变体全部逃逸。
 #[test]
 fn drive_prefix_in_any_component_is_rejected() {
-    use wind_installer::manifest::{
+    use moodflow_installer::manifest::{
         classify_local_data_entry, safe_local_data_rel, LocalDataRejection,
     };
 
@@ -713,7 +714,7 @@ fn drive_prefix_in_any_component_is_rejected() {
 /// `...` 是清单作者写得出的手滑（想写「等等」），不是攻击构造。
 #[test]
 fn dot_and_space_forms_that_resolve_to_root_are_rejected() {
-    use wind_installer::manifest::{
+    use moodflow_installer::manifest::{
         classify_local_data_entry, safe_local_data_rel, LocalDataRejection,
     };
 
@@ -734,7 +735,7 @@ fn dot_and_space_forms_that_resolve_to_root_are_rejected() {
 /// 作者写的那个。默默归一化会让清单与实际动作对不上，故单独报一类错而不是悄悄放行。
 #[test]
 fn trailing_dot_or_space_components_get_their_own_error() {
-    use wind_installer::manifest::{classify_local_data_entry, LocalDataRejection};
+    use moodflow_installer::manifest::{classify_local_data_entry, LocalDataRejection};
 
     // 只有**尾部点号**危险：`str::trim` 已经把分量两端的空格去掉了（TOML 里的行尾空格
     // 几乎都是手滑，且 Win32 同样忽略它），而它不动点号——`logs.` 因此原样活到 join，
@@ -772,8 +773,8 @@ fn trailing_dot_or_space_components_get_their_own_error() {
 /// 不碰文件系统，纯路径运算，故 root 用一个不存在的虚构路径即可。
 #[test]
 fn every_allowed_entry_stays_under_the_root_after_join() {
+    use moodflow_installer::manifest::safe_local_data_rel;
     use std::path::Path;
-    use wind_installer::manifest::safe_local_data_rel;
 
     let root = Path::new(r"C:\Users\U\AppData\Local\MyApp");
     let probes = [
@@ -853,7 +854,7 @@ fn prerequisite_parses_and_roundtrips() {
 
 #[test]
 fn registry_probe_splits_hive_both_spellings() {
-    use wind_installer::manifest::{RegistryHive, RegistryProbe};
+    use moodflow_installer::manifest::{RegistryHive, RegistryProbe};
     let probe = |k: &str| RegistryProbe {
         key: k.into(),
         value: "pv".into(),
@@ -873,7 +874,7 @@ fn registry_probe_splits_hive_both_spellings() {
 
 #[test]
 fn probe_value_treats_zero_version_as_missing() {
-    use wind_installer::manifest::probe_value_present;
+    use moodflow_installer::manifest::probe_value_present;
     assert!(probe_value_present(Some("120.0.2210.91")));
     assert!(!probe_value_present(Some("0.0.0.0")));
     assert!(!probe_value_present(Some("  ")));
@@ -951,14 +952,14 @@ fn temp_file(name: &str, bytes: &[u8]) -> std::path::PathBuf {
 
 #[test]
 fn agreement_file_is_read_as_utf8_without_bom() {
-    use wind_installer::manifest::read_agreement_file;
+    use moodflow_installer::manifest::read_agreement_file;
     let path = temp_file("agree_bom.txt", "\u{feff}MIT License\n许可".as_bytes());
     assert_eq!(read_agreement_file(&path).unwrap(), "MIT License\n许可");
 }
 
 #[test]
 fn agreement_file_rejects_bad_input() {
-    use wind_installer::manifest::read_agreement_file;
+    use moodflow_installer::manifest::read_agreement_file;
     assert!(read_agreement_file(&temp_file("agree_gbk.txt", &[0xC4, 0xE3, 0xFF])).is_err());
     assert!(read_agreement_file(&temp_file("agree_empty.txt", b"  \n")).is_err());
     assert!(read_agreement_file(&temp_file("agree_big.txt", &vec![b'a'; 300 * 1024])).is_err());
@@ -971,4 +972,16 @@ fn agreement_body_survives_archive_roundtrip() {
     cfg.manifest.app.agreement_body = "MIT License\n\n心晴".into();
     let back = AppManifest::from_toml_bytes(&cfg.manifest.to_toml_bytes().unwrap()).unwrap();
     assert_eq!(back.app.agreement_body, "MIT License\n\n心晴");
+}
+
+#[test]
+fn moodflow_manifest_has_own_identity_and_required_integrity() {
+    let config = ProjectConfig::from_toml_str(include_str!("../app.toml")).unwrap();
+    assert_eq!(config.manifest.app.id, "Moodflow");
+    assert_eq!(config.manifest.app.main_exe, "moodflow_core.exe");
+    assert_eq!(
+        config.manifest.integrity.unwrap().data_manifest,
+        "data/manifest.json"
+    );
+    assert_eq!(config.package.output_name, "Moodflow-Setup");
 }

@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 static BACKUP_SEQ: AtomicU32 = AtomicU32::new(0);
 
 use super::format::{ArchiveEntry, ArchiveFooter, ArchiveHeader};
+use super::integrity;
 use crate::archive::CompressionType;
 
 /// 归档数据的逻辑末尾偏移 —— Footer 的右边界，不一定是文件的物理末尾。
@@ -131,6 +132,7 @@ pub struct ArchiveReader {
     block_start: u64,
     /// 懒解压缓冲：首次 prepare() 后填充
     decompressed: Option<Vec<u8>>,
+    verified: bool,
 }
 
 #[allow(dead_code)]
@@ -177,6 +179,9 @@ impl ArchiveReader {
             .ok_or("Invalid archive: header_size underflow")?;
         file.seek(SeekFrom::Start(footer.header_offset))
             .map_err(|e| format!("Failed to seek to header: {}", e))?;
+        if header_size > integrity::MAX_HEADER_BYTES {
+            return Err("Archive header exceeds 64 MiB".into());
+        }
         let mut header_bytes = vec![0u8; header_size as usize];
         file.read_exact(&mut header_bytes)
             .map_err(|e| format!("Failed to read header: {}", e))?;
@@ -193,6 +198,7 @@ impl ArchiveReader {
             header,
             block_start,
             decompressed: None,
+            verified: false,
         })
     }
 
@@ -215,64 +221,71 @@ impl ArchiveReader {
         &self.header.logo
     }
 
-    /// 提前将压缩块整体解压到内存缓冲。
-    /// 安装向导在进入逐文件循环前调用此方法，可在独立步骤中显示解压进度消息。
+    /// Fully validate the in-memory archive before the first installation side effect.
     pub fn prepare(&mut self) -> Result<(), String> {
-        if self.decompressed.is_none() {
-            self.decompress_block()?;
+        if self.verified {
+            return Ok(());
         }
+        let expected = integrity::declared_size(&self.header.entries)?;
+        self.decompress_block(expected)?;
+        let data = self.decompressed.as_ref().unwrap();
+        for entry in &self.header.entries {
+            integrity::entry_bytes(entry, data)?;
+        }
+        self.verified = true;
         Ok(())
     }
 
-    /// 从已解压缓冲中提取单个文件到目标路径
+    pub fn verify_data_manifest(&mut self, path: &str) -> Result<(), String> {
+        self.prepare()?;
+        integrity::verify_manifest(
+            path,
+            &self.header.entries,
+            self.decompressed.as_ref().unwrap(),
+        )
+    }
+
+    /// Extract only after all archive entries have passed preflight.
     pub fn extract_entry(&mut self, entry: &ArchiveEntry, dest: &Path) -> Result<(), String> {
-        if self.decompressed.is_none() {
-            self.decompress_block()?;
+        self.prepare()?;
+        let bytes = integrity::entry_bytes(entry, self.decompressed.as_ref().unwrap())?;
+        // Check the complete path before creating directories or replacing files.
+        // Existing junctions/symlinks must not redirect elevated extraction.
+        for ancestor in dest.ancestors() {
+            match std::fs::symlink_metadata(ancestor) {
+                Ok(metadata) => {
+                    #[cfg(windows)]
+                    {
+                        use std::os::windows::fs::MetadataExt;
+                        if metadata.file_attributes() & 0x400 != 0 {
+                            return Err(format!(
+                                "Extraction path contains a reparse point: {}",
+                                ancestor.display()
+                            ));
+                        }
+                    }
+                    if metadata.file_type().is_symlink() {
+                        return Err(format!(
+                            "Extraction path contains a symbolic link: {}",
+                            ancestor.display()
+                        ));
+                    }
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(format!("Cannot inspect extraction path: {e}")),
+            }
         }
-
-        let start = entry.offset as usize;
-        let size = entry.original_size as usize;
-        let expected_crc = entry.crc32;
-        let path_str = entry.path.clone();
-
-        // 创建目标目录
         if let Some(parent) = dest.parent() {
             std::fs::create_dir_all(parent)
-                .map_err(|e| format!("Failed to create dir for {}: {}", path_str, e))?;
+                .map_err(|e| format!("Cannot create extraction directory: {e}"))?;
         }
-
-        // 切片写盘（borrow 限定在此块内）
-        {
-            let dec = self.decompressed.as_ref().unwrap();
-            let end = start + size;
-            if end > dec.len() {
-                return Err(format!(
-                    "Entry '{}' out of bounds in decompressed stream (offset={} size={} total={})",
-                    path_str,
-                    start,
-                    size,
-                    dec.len()
-                ));
-            }
-            let slice = &dec[start..end];
-
-            // 验证 CRC32
-            let computed = crc32fast::hash(slice);
-            if computed != expected_crc {
-                return Err(format!(
-                    "CRC32 mismatch for '{}': expected {:08x}, got {:08x}",
-                    path_str, expected_crc, computed
-                ));
-            }
-
-            // 写文件（被占用时先改名备份）
-            let mut output = BufWriter::new(create_or_backup(dest)?);
-            output
-                .write_all(slice)
-                .map_err(|e| format!("Failed to write '{}': {}", path_str, e))?;
-        }
-
-        Ok(())
+        let mut output = BufWriter::new(create_or_backup(dest)?);
+        output
+            .write_all(bytes)
+            .map_err(|e| format!("Cannot write {}: {e}", entry.path))?;
+        output
+            .flush()
+            .map_err(|e| format!("Cannot flush {}: {e}", entry.path))
     }
 
     /// 将所有文件解压到目标目录（一次性解压块，逐文件写盘）
@@ -286,32 +299,30 @@ impl ArchiveReader {
         Ok(())
     }
 
-    /// 将整个压缩块读入内存并解压
-    fn decompress_block(&mut self) -> Result<(), String> {
+    fn decompress_block(&mut self, expected: u64) -> Result<(), String> {
         self.file
             .seek(SeekFrom::Start(self.block_start))
-            .map_err(|e| format!("Failed to seek to compressed block: {}", e))?;
-
-        let compressed_size = self.header.solid_compressed_size as usize;
-        let mut compressed = vec![0u8; compressed_size];
-        self.file
-            .read_exact(&mut compressed)
-            .map_err(|e| format!("Failed to read compressed block: {}", e))?;
-
-        let decompressed = match self.header.compression {
-            CompressionType::Zstd => zstd::decode_all(&compressed[..])
-                .map_err(|e| format!("Zstd decompression failed: {}", e))?,
-            CompressionType::Lzma => {
-                let mut decoder = xz2::read::XzDecoder::new(&compressed[..]);
-                let mut out = Vec::new();
-                decoder
-                    .read_to_end(&mut out)
-                    .map_err(|e| format!("LZMA decompression failed: {}", e))?;
-                out
-            }
+            .map_err(|e| format!("Cannot seek to compressed block: {e}"))?;
+        if self.header.solid_compressed_size == 0 && expected == 0 {
+            self.decompressed = Some(Vec::new());
+            return Ok(());
+        }
+        let compressed = (&mut self.file).take(self.header.solid_compressed_size);
+        let decoder: Box<dyn Read + '_> = match self.header.compression {
+            CompressionType::Zstd => Box::new(
+                zstd::Decoder::new(compressed).map_err(|e| format!("Invalid Zstd block: {e}"))?,
+            ),
+            CompressionType::Lzma => Box::new(xz2::read::XzDecoder::new(compressed)),
         };
-
-        self.decompressed = Some(decompressed);
+        let mut output = Vec::new();
+        decoder
+            .take(expected + 1)
+            .read_to_end(&mut output)
+            .map_err(|e| format!("Decompression failed: {e}"))?;
+        if output.len() as u64 != expected {
+            return Err("Decompressed size does not match archive inventory".into());
+        }
+        self.decompressed = Some(output);
         Ok(())
     }
 }
@@ -335,7 +346,7 @@ fn create_or_backup(path: &Path) -> Result<File, String> {
             // 否则 .old_ 会随每次带锁升级永久累积。best-effort——失败不影响新文件写入。
             //
             // 门控到 Windows：`util` 是 cfg(windows) 模块，而 archive 必须保持跨平台
-            // ——wind-packer 要在 Linux 原生构建（见 lib.rs 与 ci.yml 的 linux-packer job）。
+            // ——moodflow-packer 要在 Linux 原生构建（见 lib.rs 与 ci.yml 的 linux-packer job）。
             // 非 Windows 上这个分支本就走不到：进入它的条件是 os error 5/32，即 Windows 的
             // ACCESS_DENIED / SHARING_VIOLATION，类 Unix 系统允许 unlink 仍被打开的文件。
             #[cfg(windows)]

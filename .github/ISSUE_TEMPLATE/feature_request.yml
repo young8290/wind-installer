@@ -46,7 +46,7 @@ body:
         - 安装/卸载流程与回执
         - 向导界面与文案
         - 命令行与退出码
-        - 打包工具 (wind-packer)
+        - 打包工具 (moodflow-packer)
         - 其他
     validations:
       required: true

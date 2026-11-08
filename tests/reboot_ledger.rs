@@ -11,7 +11,7 @@
 
 use std::path::Path;
 
-use wind_installer::util::reboot;
+use moodflow_installer::util::reboot;
 
 /// 账本是进程级共享的，而 cargo 默认并行跑测试——全部塞进一个 `#[test]` 顺序执行，
 /// 避免彼此看见对方的记账。

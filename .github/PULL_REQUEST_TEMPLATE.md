@@ -20,8 +20,8 @@
 <!-- 描述你做了哪些测试来验证这个变更 -->
 
 - [ ] `cargo fmt --all -- --check` 通过（逻辑修改与格式化修改分开提交）
-- [ ] `cargo build --locked --bin wind-installer --bin wind-uninstaller` 通过
-- [ ] `cargo build --locked --bin wind-packer --features packer` 通过
+- [ ] `cargo build --locked --bin moodflow-installer --bin moodflow-uninstaller` 通过
+- [ ] `cargo build --locked --bin moodflow-packer --features packer` 通过
 - [ ] `cargo test --locked --tests` 通过（注意 `--tests`，见 CONTRIBUTING）
 - [ ] `cargo clippy --locked --lib -- -D warnings` 通过
 - [ ] 已在 Windows 10/11 实测（涉及注册表、字体、快捷方式、TSF、文件占用等系统副作用时**必须**勾选）

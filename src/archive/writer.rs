@@ -1,4 +1,4 @@
-// ArchiveWriter 仅 wind-packer 与测试使用；installer/uninstaller 二进制不构造它。
+// ArchiveWriter 仅 moodflow-packer 与测试使用；installer/uninstaller 二进制不构造它。
 #![allow(dead_code)]
 
 use std::fs::File;
@@ -44,6 +44,8 @@ impl ArchiveWriter {
 
     /// 将文件加入待压缩队列（暂存到内存，不立即写盘）
     pub fn add_file(&mut self, source_path: &Path, archive_path: &str) -> Result<(), String> {
+        super::integrity::validate_path(archive_path)?;
+        reject_link(source_path)?;
         let mut f = File::open(source_path)
             .map_err(|e| format!("Failed to open {}: {}", source_path.display(), e))?;
         let mut data = Vec::new();
@@ -55,6 +57,7 @@ impl ArchiveWriter {
 
     /// 递归添加目录
     pub fn add_directory(&mut self, dir_path: &Path, base_path: &str) -> Result<(), String> {
+        reject_link(dir_path)?;
         for entry in std::fs::read_dir(dir_path)
             .map_err(|e| format!("Failed to read directory {}: {}", dir_path.display(), e))?
         {
@@ -97,6 +100,7 @@ impl ArchiveWriter {
             decompressed_offset += original_size;
         }
 
+        super::integrity::declared_size(&entries)?;
         // 2. 整体压缩一次
         let compressed = compress_solid(&combined, self.compression)?;
         let solid_compressed_size = compressed.len() as u64;
@@ -133,6 +137,22 @@ impl ArchiveWriter {
     pub fn entry_count(&self) -> u32 {
         self.pending.len() as u32
     }
+}
+
+fn reject_link(path: &Path) -> Result<(), String> {
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|e| format!("Cannot inspect {}: {e}", path.display()))?;
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if metadata.file_attributes() & 0x400 != 0 {
+            return Err(format!("Cannot package reparse point: {}", path.display()));
+        }
+    }
+    if metadata.file_type().is_symlink() {
+        return Err(format!("Cannot package symbolic link: {}", path.display()));
+    }
+    Ok(())
 }
 
 fn compress_solid(data: &[u8], compression: CompressionType) -> Result<Vec<u8>, String> {
