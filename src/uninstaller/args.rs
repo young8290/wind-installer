@@ -14,7 +14,7 @@
 //! `--uninstall` 一起吃掉。
 //!
 //! ── 为什么手写而不用 clap ──────────────────────────────────────────────
-//! 正因为上面那条截断语义。卸载器统共两个 flag，手写解析既没有这个坑，也不必为它
+//! 正因为上面那条截断语义。卸载器只有少量 flag，手写解析既没有这个坑，也不必为它
 //! 引一整套子命令体系；而「未知参数怎么办」这件事在这里必须是**显式**决定，
 //! 不能交给一个 flag 的隐含语义。
 //!
@@ -43,6 +43,8 @@ pub struct UninstallArgs {
     /// 而不带 `--silent` 是「被接受、被记进启动日志、然后什么也不做」。
     /// 界面上的勾选优先于命令行是对的 —— 用户刚亲手勾过的东西不该被一个 flag 推翻。
     pub keep_user_data: bool,
+    /// Explicit destructive option for unattended uninstall. Keep wins if both are passed.
+    pub delete_user_data: bool,
 }
 
 /// 解析一串参数（**不含** argv[0]）。
@@ -58,6 +60,7 @@ pub fn parse<S: AsRef<OsStr>>(argv: &[S]) -> UninstallArgs {
         match a.as_ref().to_string_lossy().as_ref() {
             "--silent" => out.silent = true,
             "--keep-user-data" => out.keep_user_data = true,
+            "--delete-user-data" => out.delete_user_data = true,
             _ => {}
         }
     }
@@ -114,6 +117,20 @@ mod tests {
         let args = parse(&["--keep-user-data"]);
         assert!(args.keep_user_data);
         assert!(!args.silent, "--keep-user-data 不该顺带打开静默");
+    }
+
+    #[test]
+    fn deletion_requires_the_exact_explicit_flag() {
+        assert!(!parse(&["--silent"]).delete_user_data);
+        assert!(!parse(&["--silent", "--delete-user-data=true"]).delete_user_data);
+        assert!(parse(&["--silent", "--delete-user-data"]).delete_user_data);
+        for flags in [
+            ["--silent", "--delete-user-data", "--keep-user-data"],
+            ["--silent", "--keep-user-data", "--delete-user-data"],
+        ] {
+            let args = parse(&flags);
+            assert!(args.silent && args.keep_user_data && args.delete_user_data);
+        }
     }
 
     /// 认的是完整 token，不是前缀/子串 —— 免得哪天 `--silently-something` 之类

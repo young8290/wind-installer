@@ -68,6 +68,7 @@ moodflow-packer build --config app.toml --stub moodflow-installer.exe
 | `--dir <DIR>` | 安装目录 |
 | `--datadir <DIR>` | 数据目录 |
 | `--keep-user-data` | 卸载时保留用户数据 |
+| `--delete-user-data` | 静默卸载时明确选择删除用户数据；与保留参数并用时保留优先 |
 | `--soft-render` | 强制软渲染，等效于设置 `WIND_SOFT_RENDER=1` |
 
 子命令 `install` / `uninstall` 分别对应安装与卸载模式。
@@ -85,7 +86,9 @@ moodflow-packer build --config app.toml --stub moodflow-installer.exe
 | `UninstallString` | `"<安装目录>\uninstall.exe"` | 交互式向导（控制面板 / 设置里点「卸载」走这条） |
 | `QuietUninstallString` | `"<安装目录>\uninstall.exe" --silent` | 无人值守，无任何界面（winget / SCCM 走这条） |
 
-`uninstall.exe` 认两个参数：`--silent`、`--keep-user-data`（静默时保留 `%APPDATA%\<app.id>`）。
+`uninstall.exe` 接受 `--silent`、`--keep-user-data`、`--delete-user-data`。
+默认静默卸载保留用户资料；只有显式传入 `--delete-user-data` 才清除清单声明的用户资料。
+同时传入保留与删除参数时，无论顺序如何均保留。交互式卸载仍以向导的勾选与确认弹窗为准。
 不认识的参数**只跳过它自己**，后面的照常解析 —— 存量机器的 ARP 条目是老版本安装器写的，
 里面有一个已经废弃的 `--uninstall`，新卸载器必须能被那些条目正常调起。
 

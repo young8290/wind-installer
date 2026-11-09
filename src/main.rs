@@ -46,6 +46,9 @@ struct Args {
     /// 保留用户数据（卸载时）
     #[arg(long)]
     keep_user_data: bool,
+    /// 显式删除用户数据（静默卸载；与保留同时出现时保留优先）
+    #[arg(long)]
+    delete_user_data: bool,
 
     /// 强制软渲染（禁用 Direct2D 硬件加速）；等效于设置环境变量 WIND_SOFT_RENDER=1
     #[arg(long)]
@@ -208,7 +211,9 @@ fn run_uninstall(args: Args) {
         // 退出码的三条出口（残留不算失败 / 3010 必须可达 / 其余为 0）都在
         // `uninstaller::run_silent` 里，与 `uninstall.exe --silent` 共用同一份——
         // 那边才是 ARP `QuietUninstallString` 真正调起的二进制。
-        let code = uninstaller::run_silent(args.keep_user_data);
+        let code = if args.delete_user_data {
+            uninstaller::run_silent_with_data_policy(args.keep_user_data, true)
+        } else { uninstaller::run_silent(args.keep_user_data) };
         util::single::release_lock();
         std::process::exit(code);
     }
@@ -241,6 +246,18 @@ mod arg_tests {
     fn silent_alone() {
         let args = Args::parse_from(["moodflow-installer", "--silent"]);
         assert!(args.silent, "--silent 单独传入也未被识别");
+    }
+
+    #[test]
+    fn silent_uninstall_accepts_both_data_flags_without_truncation() {
+        for flags in [
+            ["--silent", "--delete-user-data", "--keep-user-data"],
+            ["--silent", "--keep-user-data", "--delete-user-data"],
+        ] {
+            let args = Args::parse_from(["moodflow-installer", flags[0], flags[1], flags[2], "uninstall"]);
+            assert!(args.silent && args.keep_user_data && args.delete_user_data);
+            assert!(matches!(args.mode, Some(Mode::Uninstall)));
+        }
     }
 
     /// 未知参数应被忽略而不影响已知参数 —— 这是 ignore_errors 的本意。

@@ -95,12 +95,15 @@ pub fn perform_uninstall(options: &CleanupOptions) -> UninstallResult {
 /// - **`need_reboot` 的判断不能排在残留之后被挡掉**：3010 是对外承诺，必须可达。
 /// - 其余即 0。
 pub fn run_silent(keep_user_data: bool) -> i32 {
+    run_silent_with_data_policy(keep_user_data, false)
+}
+
+/// Default silent uninstall retains user data; deletion always needs an explicit flag.
+/// A conflicting keep request takes precedence over deletion.
+pub fn run_silent_with_data_policy(keep_user_data: bool, delete_user_data: bool) -> i32 {
     use crate::util::exitcode;
 
-    let options = CleanupOptions {
-        keep_user_data,
-        ..Default::default()
-    };
+    let options = silent_cleanup_options(keep_user_data, delete_user_data);
     let result = perform_uninstall(&options);
 
     if !result.success {
@@ -147,6 +150,15 @@ pub fn run_silent(keep_user_data: bool) -> i32 {
     }
 
     code
+}
+
+/// Resolve the same conservative data policy for both silent entry points.
+pub fn silent_cleanup_options(keep_user_data: bool, delete_user_data: bool) -> CleanupOptions {
+    CleanupOptions {
+        keep_user_data,
+        clean_roaming: delete_user_data && !keep_user_data,
+        ..Default::default()
+    }
 }
 
 /// 本进程是不是就躺在待删的那个目录里。
