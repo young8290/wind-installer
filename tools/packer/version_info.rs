@@ -14,13 +14,7 @@ pub struct ResolvedVersionInfo {
 
 /// 解析版本号字符串为 (major_u32, minor_u32)，分别存储 MS 和 LS 的打包值。
 pub fn parse_version_string(v: &str) -> (u32, u32) {
-    let mut parts = [0u16; 4];
-    for (i, p) in v.split('.').enumerate() {
-        if i >= 4 {
-            break;
-        }
-        parts[i] = p.trim().parse::<u16>().unwrap_or(0);
-    }
+    let parts = numeric_parts(v);
     let major = ((parts[0] as u32) << 16) | (parts[1] as u32);
     let minor = ((parts[2] as u32) << 16) | (parts[3] as u32);
     (major, minor)
@@ -28,14 +22,20 @@ pub fn parse_version_string(v: &str) -> (u32, u32) {
 
 /// 将版本字符串自动规范化为 A.B.C.D 格式。
 pub fn format_version_4_parts(v: &str) -> String {
+    let parts = numeric_parts(v);
+    format!("{}.{}.{}.{}", parts[0], parts[1], parts[2], parts[3])
+}
+
+fn numeric_parts(v: &str) -> [u16; 4] {
+    let v = v.trim();
+    let v = v.strip_prefix('v').unwrap_or(v);
+    // A prerelease/build suffix is not a numeric component; it must not erase the patch.
+    let release = v.split(['-', '+']).next().unwrap_or("");
     let mut parts = [0u16; 4];
-    for (i, p) in v.split('.').enumerate() {
-        if i >= 4 {
-            break;
-        }
+    for (i, p) in release.split('.').take(4).enumerate() {
         parts[i] = p.trim().parse::<u16>().unwrap_or(0);
     }
-    format!("{}.{}.{}.{}", parts[0], parts[1], parts[2], parts[3])
+    parts
 }
 
 /// 根据配置和推导规则解析版本信息属性
@@ -132,6 +132,22 @@ mod tests {
         assert_eq!(format_version_4_parts("1.2.3"), "1.2.3.0");
         assert_eq!(format_version_4_parts("2.5"), "2.5.0.0");
         assert_eq!(format_version_4_parts("1.2.3.4"), "1.2.3.4");
+    }
+
+    #[test]
+    fn prerelease_metadata_preserves_the_pe_patch_and_revision() {
+        for version in ["0.124.1-beta-dev.52bbfa71", "v0.124.1-beta+ci.52bbfa71"] {
+            assert_eq!(format_version_4_parts(version), "0.124.1.0");
+            assert_eq!(parse_version_string(version), (0x0000007c, 0x00010000));
+        }
+        assert_eq!(format_version_4_parts("1.2.3.4-dev.5"), "1.2.3.4");
+        let config = ProjectConfig::from_toml_str(
+            &MINIMAL_CONFIG.replace("1.2.3", "0.124.1-beta-dev.52bbfa71"),
+        )
+        .unwrap();
+        let metadata = derive_version_info(&config, false);
+        assert_eq!(metadata.product_version, "0.124.1.0");
+        assert_eq!(metadata.file_version, "0.124.1.0");
     }
 
     /// 从 TOML 解析而非手工构造结构体：版本推导只关心 app 的几个字段，
