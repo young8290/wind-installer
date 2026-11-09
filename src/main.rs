@@ -213,7 +213,9 @@ fn run_uninstall(args: Args) {
         // 那边才是 ARP `QuietUninstallString` 真正调起的二进制。
         let code = if args.delete_user_data {
             uninstaller::run_silent_with_data_policy(args.keep_user_data, true)
-        } else { uninstaller::run_silent(args.keep_user_data) };
+        } else {
+            uninstaller::run_silent(args.keep_user_data)
+        };
         util::single::release_lock();
         std::process::exit(code);
     }
@@ -254,7 +256,13 @@ mod arg_tests {
             ["--silent", "--delete-user-data", "--keep-user-data"],
             ["--silent", "--keep-user-data", "--delete-user-data"],
         ] {
-            let args = Args::parse_from(["moodflow-installer", flags[0], flags[1], flags[2], "uninstall"]);
+            let args = Args::parse_from([
+                "moodflow-installer",
+                flags[0],
+                flags[1],
+                flags[2],
+                "uninstall",
+            ]);
             assert!(args.silent && args.keep_user_data && args.delete_user_data);
             assert!(matches!(args.mode, Some(Mode::Uninstall)));
         }
