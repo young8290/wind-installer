@@ -15,8 +15,8 @@
 
 #![cfg(windows)]
 
-use wind_installer::manifest::AppManifest;
-use wind_installer::{meta, ui::install_wizard, uninstaller::cleanup};
+use moodflow_installer::manifest::AppManifest;
+use moodflow_installer::{meta, ui::install_wizard, uninstaller::cleanup};
 
 const MANIFEST: &str = r#"
 [app]
@@ -37,7 +37,8 @@ state_files = ["state.toml", "seen.marker"]
 fn data_dir_initial_value_follows_conf_file() {
     meta::init(AppManifest::from_toml_bytes(MANIFEST.as_bytes()).expect("解析清单失败"));
 
-    let root = std::env::temp_dir().join(format!("wind-installer-datadir-{}", std::process::id()));
+    let root =
+        std::env::temp_dir().join(format!("moodflow-installer-datadir-{}", std::process::id()));
     let conf_dir = root.join("Demo");
     std::fs::create_dir_all(&conf_dir).expect("建临时目录失败");
     std::env::set_var("LOCALAPPDATA", &root);
@@ -85,7 +86,7 @@ fn data_dir_initial_value_follows_conf_file() {
 /// 两处；分别断言两段拼好的文案反而会漏掉「其中一处忘了拼」的情形。
 #[test]
 fn delete_confirmation_text_covers_every_state_file() {
-    use wind_installer::ui::uninstall_wizard::state_files_clause;
+    use moodflow_installer::ui::uninstall_wizard::state_files_clause;
 
     meta::init(AppManifest::from_toml_bytes(MANIFEST.as_bytes()).expect("解析清单失败"));
 

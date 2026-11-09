@@ -1,9 +1,12 @@
 [package]
-name = "wind-installer"
+name = "moodflow-installer"
 version = "0.1.0"
 edition = "2021"
 description = "清单驱动的通用 Windows 安装器生成器"
 license = "MIT"
+
+# Keep the build independent when checked out inside a consuming workspace.
+[workspace]
 
 # 应用身份配置已迁移到 app.toml（运行期清单），不再使用 Cargo.toml 元数据。
 
@@ -11,10 +14,10 @@ license = "MIT"
 # TSF/字体注册已改为运行期清单驱动（见 app.toml 的 [ime]/[[font]] 段），不再是编译期开关。
 default = ["frameless"]
 frameless = []          # 无边框自定义标题栏（主题色标题栏代替系统标题栏）
-packer    = ["dep:editpe"]  # wind-packer 所需（写 EXE 图标）
+packer    = ["dep:editpe"]  # moodflow-packer 所需（写 EXE 图标）
 
 [lib]
-name = "wind_installer"
+name = "moodflow_installer"
 path = "src/lib.rs"
 
 [dependencies]
@@ -24,19 +27,21 @@ path = "src/lib.rs"
 zstd = { version = "0.13", features = ["zstdmt"] }
 xz2 = "0.1"
 
-# 工具（跨平台：archive/manifest 模块与 wind-packer 仅依赖这些，可在 Linux 原生构建）
+# 工具（跨平台：archive/manifest 模块与 moodflow-packer 仅依赖这些，可在 Linux 原生构建）
 crc32fast = "1.4"
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
 toml = "0.8"
 clap = { version = "4", features = ["derive"] }
 rand = "0.8"
 ctrlc = "3"
-# 仅 wind-packer 需要（写 EXE 图标，纯 Rust 跨平台，无外部依赖）；installer/uninstaller 不引入
+# 仅 moodflow-packer 需要（写 EXE 图标，纯 Rust 跨平台，无外部依赖）；installer/uninstaller 不引入
 editpe = { version = "0.2.3", features = ["images"], optional = true }
 indexmap = "2"
 
 # Windows-only 依赖（installer/uninstaller/ui/util 模块用）。隔离到 cfg(windows)
-# 后，wind-packer 可在 Linux 宿主原生构建（archive 纯 IO，无需 wine）。
+# 后，moodflow-packer 可在 Linux 宿主原生构建（archive 纯 IO，无需 wine）。
 [target.'cfg(windows)'.dependencies]
 # GUI 框架（ui 模块用；开源仓库：https://github.com/huanfeng/wind-ui-rust）
 windui = "0.20"
@@ -78,15 +83,15 @@ panic = "abort"
 strip = true
 
 [[bin]]
-name = "wind-installer"
+name = "moodflow-installer"
 path = "src/main.rs"
 
 [[bin]]
-name = "wind-uninstaller"
+name = "moodflow-uninstaller"
 path = "src/uninstaller_main.rs"
 
 [[bin]]
-name = "wind-packer"
+name = "moodflow-packer"
 path = "tools/packer/main.rs"
 required-features = ["packer"]
 

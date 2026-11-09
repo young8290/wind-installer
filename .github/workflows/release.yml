@@ -10,13 +10,13 @@ name: Release
 # 手动触发时可在 "Use workflow from" 选择目标 tag 作为 ref，若不方便选 ref，
 # 也可以直接填 tag 输入项显式指定要发布的 tag。
 #
-# 产出的二进制供 WindInput 仓的打包流水线消费:
+# 产出的二进制供 Moodflow 仓的打包流水线消费:
 #   dev.ps1（Windows 本机/CI）  需要 stub + uninstaller + packer(.exe)
 #   pack-installer.sh（Linux）  需要 stub + uninstaller + packer(Linux 原生)
 # 故 stub/uninstaller 只有 Windows 版，packer 两个平台都出。
 #
 # 资产命名不带版本号——版本由 Release tag 表达，下载方写死文件名即可:
-#   gh release download v0.1.0 -p 'wind-installer-windows-x64.exe'
+#   gh release download v0.1.0 -p 'moodflow-installer-windows-x64.exe'
 on:
   push:
     tags: ['v*']
@@ -46,8 +46,8 @@ jobs:
 
       - name: 构建 (release)
         run: |
-          cargo build --locked --release --bin wind-installer --bin wind-uninstaller
-          cargo build --locked --release --bin wind-packer --features packer
+          cargo build --locked --release --bin moodflow-installer --bin moodflow-uninstaller
+          cargo build --locked --release --bin moodflow-packer --features packer
 
       # ── 发布门禁:自包含校验 ──────────────────────────────────────────────
       # 逻辑在 scripts/verify-static-crt.ps1（含为何必须校验、为何不信构建配置的说明）。
@@ -55,15 +55,15 @@ jobs:
       # 会连 bug 一起抄走。packer 只跑在构建机上，不在校验之列。
       - name: 校验 Windows 产物静态链接 CRT
         shell: pwsh
-        run: ./scripts/verify-static-crt.ps1 -Path target/release/wind-installer.exe, target/release/wind-uninstaller.exe
+        run: ./scripts/verify-static-crt.ps1 -Path target/release/moodflow-installer.exe, target/release/moodflow-uninstaller.exe
 
       - name: 整理产物
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
-          Copy-Item target/release/wind-installer.exe   dist/wind-installer-windows-x64.exe
-          Copy-Item target/release/wind-uninstaller.exe dist/wind-uninstaller-windows-x64.exe
-          Copy-Item target/release/wind-packer.exe      dist/wind-packer-windows-x64.exe
+          Copy-Item target/release/moodflow-installer.exe   dist/moodflow-installer-windows-x64.exe
+          Copy-Item target/release/moodflow-uninstaller.exe dist/moodflow-uninstaller-windows-x64.exe
+          Copy-Item target/release/moodflow-packer.exe      dist/moodflow-packer-windows-x64.exe
           Get-ChildItem dist | Select-Object Name, Length
 
       - uses: actions/upload-artifact@v4
@@ -81,13 +81,13 @@ jobs:
 
       # 只出 packer:stub/uninstaller 是 cfg(windows) 代码，Linux 上不存在。
       # Linux 侧打包流水线用交叉编译的 stub，那是消费方的事，不由本仓发布。
-      - name: 构建 wind-packer (release)
-        run: cargo build --locked --release --bin wind-packer --features packer
+      - name: 构建 moodflow-packer (release)
+        run: cargo build --locked --release --bin moodflow-packer --features packer
 
       - name: 整理产物
         run: |
           mkdir -p dist
-          cp target/release/wind-packer dist/wind-packer-linux-x64
+          cp target/release/moodflow-packer dist/moodflow-packer-linux-x64
           ls -l dist
 
       - uses: actions/upload-artifact@v4
@@ -115,7 +115,7 @@ jobs:
           cd dist
           # 显式 glob 而非 `*`：后者是否把正在创建的 SHA256SUMS 算进自己，
           # 取决于 shell 展开与重定向的先后顺序——不值得依赖这种隐晦规则。
-          sha256sum wind-* > SHA256SUMS
+          sha256sum moodflow-* > SHA256SUMS
           cat SHA256SUMS
 
       - name: 创建 Release

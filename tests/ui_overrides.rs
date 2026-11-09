@@ -4,8 +4,8 @@
 
 #![cfg(windows)]
 
-use wind_installer::manifest::AppManifest;
-use wind_installer::{meta, ui::theme};
+use moodflow_installer::manifest::AppManifest;
+use moodflow_installer::{meta, ui::theme};
 
 /// 逐项覆盖，并混入一个非法颜色（accent_hover）验证静默回退。
 ///

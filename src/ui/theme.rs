@@ -60,5 +60,5 @@ theme_color!(divider, divider, DEF_DIVIDER);
 theme_color!(track, track, DEF_TRACK);
 
 // parse_color 的行为经 tests/ui_defaults.rs 与 tests/ui_overrides.rs 走公开 API 覆盖：
-// 本 crate 的 --lib 测试二进制名为 wind_installer-<hash>.exe，含 "install" 会命中
+// 本 crate 的 --lib 测试二进制名为 moodflow_installer-<hash>.exe，含 "install" 会命中
 // Windows UAC 安装器检测启发式而无法在普通权限下启动，故内联单测跑不起来。

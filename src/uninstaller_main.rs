@@ -46,7 +46,11 @@ fn main() {
     }
 
     if args.silent {
-        let code = uninstaller::run_silent(args.keep_user_data);
+        let code = if args.delete_user_data {
+            uninstaller::run_silent_with_data_policy(args.keep_user_data, true)
+        } else {
+            uninstaller::run_silent(args.keep_user_data)
+        };
         util::single::release_lock();
         std::process::exit(code);
     }
@@ -54,7 +58,7 @@ fn main() {
     ui::uninstall_wizard::run_uninstall_wizard();
     // ⚠️ **这一行在 GUI 路径上永远执行不到**，看着会执行而已：向导内部有三个
     // `process::exit`（完成页按钮、关窗，以及 `trigger_self_delete` 成功时那个），
-    // 没有一条会 return 回来。后果是 `%TEMP%\wind_installer.lock` 留在盘上。
+    // 没有一条会 return 回来。后果是 `%TEMP%\moodflow_installer.lock` 留在盘上。
     //
     // 不修是权衡后的决定：锁是新格式 `"<pid>|<创建时间>"`，下次读到时主人早已不在，
     // `lock_blocks` 判 `alive == false` 直接放行——它是**不再挡人的垃圾文件**，
@@ -63,7 +67,7 @@ fn main() {
     util::single::release_lock();
 }
 
-/// 启动决策日志，追加到 `%TEMP%\wind_installer_args.log`。
+/// 启动决策日志，追加到 `%TEMP%\moodflow_installer_args.log`。
 ///
 /// 与安装器 `main.rs` 的 `log_startup` 是同一件事、同一个文件。卸载器此前**一行都不写**：
 /// 它是 `windows_subsystem = "windows"` 的无控制台进程，`eprintln!` 等于丢弃；而
@@ -74,9 +78,10 @@ fn main() {
 /// 到底是调用方写错了参数，还是这边没认出来。
 fn log_startup(args: &uninstaller::args::UninstallArgs) {
     util::log::append_startup_line(&format!(
-        "uninstall-start: silent={} keep_user_data={} admin={} argv={:?}\n",
+        "uninstall-start: silent={} keep_user_data={} delete_user_data={} admin={} argv={:?}\n",
         args.silent,
         args.keep_user_data,
+        args.delete_user_data,
         util::admin::is_admin(),
         std::env::args_os().collect::<Vec<_>>(),
     ));

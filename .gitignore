@@ -33,3 +33,8 @@ docs/superpowers/
 
 # 构建输出 / 临时截图（不纳入版本控制）
 dist/
+
+# Local certificate configuration (no credentials in source control)
+scripts/sign.local.ps1
+*.pfx
+*.p12

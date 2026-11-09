@@ -6,7 +6,7 @@
 
 #![cfg(windows)]
 
-use wind_installer::installer::receipt::{Receipt, ReceiptEntry};
+use moodflow_installer::installer::receipt::{Receipt, ReceiptEntry};
 
 fn sample() -> Receipt {
     Receipt {

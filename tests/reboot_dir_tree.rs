@@ -13,7 +13,7 @@
 
 use std::path::{Path, PathBuf};
 
-use wind_installer::util::reboot;
+use moodflow_installer::util::reboot;
 
 /// 测试用临时目录：正常结束时清干净，**panic 时保留现场**。
 ///

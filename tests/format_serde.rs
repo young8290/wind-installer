@@ -1,9 +1,9 @@
 //! WINDPKG/WINDEND 格式序列化/反序列化测试
 //!
 //! 独立集成测试文件（编译为 format_serde-*.exe），
-//! 避免 wind_installer-*.exe 因含 "installer" 触发 Windows UAC 启发式检测。
+//! 避免 moodflow_installer-*.exe 因含 "installer" 触发 Windows UAC 启发式检测。
 
-use wind_installer::archive::{
+use moodflow_installer::archive::{
     ArchiveEntry, ArchiveFooter, ArchiveHeader, CompressionType, FORMAT_VERSION,
 };
 

@@ -1,6 +1,6 @@
-# Wind Installer
+# Moodflow Installer
 
-清单驱动的 Windows 安装器生成器。同一个预编译的 stub 二进制配上不同的 `app.toml`，即可为不同应用生成安装包，无需重新编译。
+Moodflow 的 Windows 安装器与打包工具，基于 MIT 许可的 wind-installer。保留清单驱动架构。同一个预编译的 stub 二进制配上不同的 `app.toml`，即可为不同应用生成安装包，无需重新编译。
 
 清单在打包时嵌入归档头部，安装器与卸载器在运行期读取它。应用名称、界面文案、主题色、要注册的组件、要安装的字体等均来自清单，代码中不含具体应用的信息。
 
@@ -12,15 +12,25 @@
 .\scripts\pack.ps1
 ```
 
-脚本会编译 stub、卸载器和打包工具，再调用 `wind-packer build` 生成安装程序，输出到 `[package] output_dir` 指定的目录。
+脚本会编译 stub、卸载器和打包工具，再调用 `moodflow-packer build` 生成安装程序，输出到 `[package] output_dir` 指定的目录。
 
 已有二进制时也可以直接调用打包工具：
 
 ```
-wind-packer build --config app.toml --stub wind-installer.exe
+moodflow-packer build --config app.toml --stub moodflow-installer.exe
 ```
 
-仓库自带的 `app.toml` 是一份演示用的虚构应用清单，列出了各字段的写法。
+仓库自带 `app.toml` 为 Moodflow 参考配置；正式产品配置以 [Moodflow/config/app.toml](https://github.com/young8290/Moodflow/blob/main/config/app.toml) 为准。通用示例保存在 `examples/generic-app.toml`。
+
+## 签名与安装前校验
+
+`scripts/pack.ps1 -Sign` 先加工卸载器，再签名包内程序，封装后签名 Setup，最后生成 SHA-256 sidecar。无证书或任何验签失败会中止。证书尚未购买时可用不带 `-Sign` 的开发构建，输出明确标注未签名。配置与验收见 [签名说明](docs/design/code-signing.md)。
+
+```powershell
+.\scripts\pack.ps1 -Config ..\Moodflow\config\app.toml -Sign
+```
+
+归档所有路径、长度和 CRC 在停止旧进程及写盘之前校验。Moodflow 通过 `[integrity] data_manifest = "data/manifest.json"` 额外要求逐文件 SHA-256 清单，拒收缺文件、多文件、同长度篡改和无效清单。CRC/SHA 检测损坏，发行身份仍依赖 Authenticode 签名。
 
 ## 清单配置
 
@@ -58,11 +68,12 @@ wind-packer build --config app.toml --stub wind-installer.exe
 | `--dir <DIR>` | 安装目录 |
 | `--datadir <DIR>` | 数据目录 |
 | `--keep-user-data` | 卸载时保留用户数据 |
+| `--delete-user-data` | 静默卸载时明确选择删除用户数据；与保留参数并用时保留优先 |
 | `--soft-render` | 强制软渲染，等效于设置 `WIND_SOFT_RENDER=1` |
 
 子命令 `install` / `uninstall` 分别对应安装与卸载模式。
 
-打包工具 `wind-packer` 提供 `pack`、`bundle`、`build`、`inspect` 四个子命令，其中 `build` 为 `pack` 加 `bundle` 的合并操作，`inspect` 用于读取已生成安装程序中嵌入的清单摘要。
+打包工具 `moodflow-packer` 提供 `pack`、`bundle`、`build`、`inspect` 四个子命令，其中 `build` 为 `pack` 加 `bundle` 的合并操作，`inspect` 用于读取已生成安装程序中嵌入的清单摘要。
 
 ## 卸载
 
@@ -75,7 +86,9 @@ wind-packer build --config app.toml --stub wind-installer.exe
 | `UninstallString` | `"<安装目录>\uninstall.exe"` | 交互式向导（控制面板 / 设置里点「卸载」走这条） |
 | `QuietUninstallString` | `"<安装目录>\uninstall.exe" --silent` | 无人值守，无任何界面（winget / SCCM 走这条） |
 
-`uninstall.exe` 认两个参数：`--silent`、`--keep-user-data`（静默时保留 `%APPDATA%\<app.id>`）。
+`uninstall.exe` 接受 `--silent`、`--keep-user-data`、`--delete-user-data`。
+默认静默卸载保留用户资料；只有显式传入 `--delete-user-data` 才清除清单声明的用户资料。
+同时传入保留与删除参数时，无论顺序如何均保留。交互式卸载仍以向导的勾选与确认弹窗为准。
 不认识的参数**只跳过它自己**，后面的照常解析 —— 存量机器的 ARP 条目是老版本安装器写的，
 里面有一个已经废弃的 `--uninstall`，新卸载器必须能被那些条目正常调起。
 
@@ -100,14 +113,14 @@ wind-packer build --config app.toml --stub wind-installer.exe
 5 同样表示**本次没有做任何改动**。`--silent` 的语义是「不产生任何 UI」，而 UAC 提示框
 就是 UI —— 静默调用未提权时弹它，等于把一个无人值守的部署任务挂在那里等人点。
 
-它的适用范围是**静默卸载**（`uninstall.exe --silent` 与 `wind-installer.exe uninstall --silent`），
-不含静默**安装**：`wind-installer.exe --silent` 未提权时照旧弹 UAC 并以 0 退出。那不是遗漏——
+它的适用范围是**静默卸载**（`uninstall.exe --silent` 与 `moodflow-installer.exe uninstall --silent`），
+不含静默**安装**：`moodflow-installer.exe --silent` 未提权时照旧弹 UAC 并以 0 退出。那不是遗漏——
 应用内自动升级依赖这个行为（`request_elevation` 会转发原始参数给提权后的新实例），
 改成 5 会当场打断升级。交互式路径全都照常弹 UAC。
 
 1618 表示**本次没有做任何改动**，重试即可。它取代了从前那个「被单实例锁挡住就以 0 退出」的行为
 ——那个行为会让批量部署脚本把「什么都没干」记成一次成功的安装。被挡时的详情
-（占着锁的进程号、锁文件路径）写在 `%TEMP%\wind_installer_args.log`。
+（占着锁的进程号、锁文件路径）写在 `%TEMP%\moodflow_installer_args.log`。
 
 ## 构建与测试
 
@@ -127,16 +140,16 @@ Windows 目标通过 `.cargo/config.toml` 静态链接 MSVC CRT，产物不依�
 
 | 资产 | 说明 |
 |---|---|
-| `wind-installer-windows-x64.exe` | stub，打包时由 packer 追加归档 |
-| `wind-uninstaller-windows-x64.exe` | 卸载器，打包前注入源目录，随安装包解压到安装目录 |
-| `wind-packer-windows-x64.exe` | 打包工具（Windows） |
-| `wind-packer-linux-x64` | 打包工具（Linux） |
+| `moodflow-installer-windows-x64.exe` | stub，打包时由 packer 追加归档 |
+| `moodflow-uninstaller-windows-x64.exe` | 卸载器，打包前注入源目录，随安装包解压到安装目录 |
+| `moodflow-packer-windows-x64.exe` | 打包工具（Windows） |
+| `moodflow-packer-linux-x64` | 打包工具（Linux） |
 | `SHA256SUMS` | 上述文件的校验和 |
 
 资产名不含版本号，版本由 tag 表达：
 
 ```
-gh release download v0.1.0 -p 'wind-installer-windows-x64.exe'
+gh release download v0.1.0 -p 'moodflow-installer-windows-x64.exe'
 ```
 
 stub 与卸载器运行在用户机器上，静态链接 MSVC CRT，CI 在发布前会检查产物确认这一点。打包工具只在构建机运行，不作此要求。
@@ -147,7 +160,7 @@ stub 与卸载器运行在用户机器上，静态链接 MSVC CRT，CI 在发布
 
 提功能建议前请留意本仓库的通用性定位：新能力应当表现为一个新的清单字段或段，且遵循「缺省即不执行」——不声明它的应用行为完全不受影响。只服务于单一应用的需求，通常更适合在调用方解决。
 
-使用清风输入法时遇到的问题（候选、编码、词库、界面）请到 [WindInput](https://github.com/huanfeng/WindInput/issues) 反馈，除非能确认问题出在安装或卸载过程本身。
+使用Moodflow 输入法时遇到的问题（候选、编码、词库、界面）请到 [Moodflow](https://github.com/young8290/Moodflow/issues) 反馈，除非能确认问题出在安装或卸载过程本身。
 
 ## 安全
 

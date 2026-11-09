@@ -1,4 +1,4 @@
-// archive/meta/manifest 跨平台：wind-packer 仅依赖这些，可在 Linux 原生构建。
+// archive/meta/manifest 跨平台：moodflow-packer 仅依赖这些，可在 Linux 原生构建。
 pub mod archive;
 pub mod manifest;
 pub mod meta;

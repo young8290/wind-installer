@@ -9,10 +9,10 @@
 
 #![cfg(windows)]
 
-use wind_installer::installer::plan::plan_install;
-use wind_installer::installer::InstallMode;
-use wind_installer::manifest::AppManifest;
-use wind_installer::uninstaller::plan::plan_uninstall;
+use moodflow_installer::installer::plan::plan_install;
+use moodflow_installer::installer::InstallMode;
+use moodflow_installer::manifest::AppManifest;
+use moodflow_installer::uninstaller::plan::plan_uninstall;
 
 /// 最小清单：只有应用身份，不声明任何能力。
 const MINIMAL: &str = r#"
@@ -73,7 +73,7 @@ fn portable_plan_only_extracts_and_marks() {
     assert_eq!(
         names,
         [
-            "正在解压数据...",
+            "正在校验安装文件...",
             "正在释放文件...",
             "正在写入便携模式标记..."
         ]
@@ -87,7 +87,7 @@ fn portable_plan_never_touches_system_even_with_all_capabilities() {
     assert_eq!(
         names,
         [
-            "正在解压数据...",
+            "正在校验安装文件...",
             "正在释放文件...",
             "正在写入便携模式标记..."
         ]
@@ -102,8 +102,8 @@ fn minimal_manifest_plans_no_capability_steps() {
     assert_eq!(
         names,
         [
+            "正在校验安装文件...",
             "正在准备安装环境...",
-            "正在解压数据...",
             "正在释放文件...",
             "正在写入卸载器清单...",
             "正在写入卸载信息...",
@@ -150,11 +150,11 @@ fn full_manifest_plans_every_capability_in_order() {
     assert_eq!(
         names,
         [
+            "正在校验安装文件...",
             "正在准备安装环境...",
             "正在停止旧进程...",
             "正在反注册旧 COM...",
             "正在清理旧版遗留文件...",
-            "正在解压数据...",
             "正在释放文件...",
             "正在写入卸载器清单...",
             "正在设置文件权限...",
@@ -265,7 +265,8 @@ fn uninstall_order_respects_hard_constraints() {
 fn install_and_clear_flags_bracket_the_standard_plan() {
     // InstallerRunning 标志必须首尾配对，否则宿主进程会永久停摆
     let names = plan_names(FULL, InstallMode::Standard);
-    assert_eq!(names.first().unwrap(), "正在准备安装环境...");
+    assert_eq!(names.first().unwrap(), "正在校验安装文件...");
+    assert_eq!(names[1], "正在准备安装环境...");
     assert_eq!(names.last().unwrap(), "正在完成安装...");
 }
 

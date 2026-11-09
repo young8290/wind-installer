@@ -20,7 +20,7 @@
     待校验的可执行文件，可多个。
 
 .EXAMPLE
-    .\scripts\verify-static-crt.ps1 -Path target\release\wind-installer.exe, target\release\wind-uninstaller.exe
+    .\scripts\verify-static-crt.ps1 -Path target\release\moodflow-installer.exe, target\release\moodflow-uninstaller.exe
 #>
 param(
     [Parameter(Mandatory = $true)]

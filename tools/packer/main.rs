@@ -1,7 +1,7 @@
-//! Wind Packer —— 通用安装器生成工具。
+//! Moodflow Packer —— 通用安装器生成工具。
 //!
 //! 由 `app.toml` 单一配置驱动：应用身份、打包文件、品牌（logo/icon）全部在其中描述。
-//! 同一个预编译 stub（wind-installer.exe）配不同 app.toml 即可生成不同应用的安装包，
+//! 同一个预编译 stub（moodflow-installer.exe）配不同 app.toml 即可生成不同应用的安装包，
 //! 无需重新编译。
 //!
 //! 子命令：
@@ -16,13 +16,13 @@ use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand};
 
-use wind_installer::archive::{self, ArchiveWriter, CompressionType};
-use wind_installer::manifest::ProjectConfig;
+use moodflow_installer::archive::{self, ArchiveWriter, CompressionType};
+use moodflow_installer::manifest::ProjectConfig;
 
 mod version_info;
 
 #[derive(Parser, Debug)]
-#[command(name = "wind-packer")]
+#[command(name = "moodflow-packer")]
 #[command(about = "Generic installer generator driven by app.toml")]
 struct Args {
     #[command(subcommand)]
@@ -31,6 +31,23 @@ struct Args {
 
 #[derive(Subcommand, Debug)]
 enum Command {
+    /// Verify every archive entry and the configured SHA-256 data inventory.
+    Verify {
+        #[arg(short, long)]
+        file: PathBuf,
+    },
+    /// Extract a verified package without installing or registering anything.
+    Extract {
+        #[arg(short, long)]
+        file: PathBuf,
+        #[arg(short, long)]
+        directory: PathBuf,
+    },
+    /// Print resolved build paths as JSON (for scripts, using the same TOML parser).
+    Paths {
+        #[arg(short, long, default_value = "app.toml")]
+        config: PathBuf,
+    },
     /// 压缩源目录为 .bin 归档（嵌入 manifest 与 logo）
     Pack {
         /// app.toml 配置文件
@@ -64,7 +81,7 @@ enum Command {
         /// 版本号（覆盖 app.toml 中的 app.version，影响默认 archive / output 文件名）
         #[arg(short = 'V', long)]
         version: Option<String>,
-        /// stub 文件（wind-installer.exe）
+        /// stub 文件（moodflow-installer.exe）
         #[arg(short, long)]
         stub: PathBuf,
         /// 输入 .bin（默认 <output_dir>/<output_name>-<version>.bin）
@@ -88,7 +105,7 @@ enum Command {
         /// 压缩算法（覆盖 app.toml 中的 package.compression：lzma | zstd）
         #[arg(short = 'z', long)]
         compression: Option<String>,
-        /// stub 文件（wind-installer.exe）
+        /// stub 文件（moodflow-installer.exe）
         #[arg(short, long)]
         stub: PathBuf,
         /// 输出安装程序（默认 <output_dir>/<output_name>-<version>.exe）
@@ -131,6 +148,11 @@ enum Command {
 fn main() {
     let args = Args::parse();
     let result = match args.command {
+        Command::Verify { file } => verify_package(&file).map(|_| ()),
+        Command::Extract { file, directory } => {
+            verify_package(&file).and_then(|mut reader| reader.extract_all(&directory))
+        }
+        Command::Paths { config } => cmd_paths(&config),
         Command::Pack {
             config,
             version,
@@ -227,9 +249,35 @@ fn load(config: &Path) -> Result<Loaded, String> {
     // 直接失败：声明了协议却打出一个点开是空白的包，比打包失败糟糕得多。
     if !cfg.package.agreement_file.trim().is_empty() {
         let path = resolve_against(&base, &cfg.package.agreement_file);
-        cfg.manifest.app.agreement_body = wind_installer::manifest::read_agreement_file(&path)?;
+        cfg.manifest.app.agreement_body = moodflow_installer::manifest::read_agreement_file(&path)?;
     }
     Ok(Loaded { cfg, base })
+}
+
+fn cmd_paths(config: &Path) -> Result<(), String> {
+    let absolute =
+        std::fs::canonicalize(config).map_err(|e| format!("Cannot resolve config: {e}"))?;
+    let loaded = load(&absolute)?;
+    println!(
+        "{}",
+        serde_json::json!({
+            "source_dir": loaded.resolve(&loaded.cfg.package.source_dir),
+            "output_exe": loaded.default_exe(),
+        })
+    );
+    Ok(())
+}
+
+fn verify_package(path: &Path) -> Result<archive::ArchiveReader, String> {
+    let mut reader = archive::ArchiveReader::open(path)?;
+    reader.prepare()?;
+    let manifest =
+        moodflow_installer::manifest::AppManifest::from_toml_bytes(reader.manifest_bytes())?;
+    if let Some(info) = manifest.integrity {
+        reader.verify_data_manifest(&info.data_manifest)?;
+    }
+    println!("Verified {} archive files", reader.entries().len());
+    Ok(reader)
 }
 
 fn resolve_against(base: &Path, p: &str) -> PathBuf {
@@ -340,7 +388,7 @@ impl Loaded {
 /// `prep-uninstaller` → 签名 → 进归档 → 装机端只解压，签名一路完好。
 ///
 /// **本函数幂等**，但判据问的不是「有没有 overlay」而是「overlay 是不是**本轮配置**产的」。
-/// 这两件事只在「一次干净构建」里等价：源目录留着上一轮的产物时（`wind-packer build`
+/// 这两件事只在「一次干净构建」里等价：源目录留着上一轮的产物时（`moodflow-packer build`
 /// 自己不删 `uninstall.exe`，只有 `pack.ps1` 的 `finally` 删），只问前者就会把**上一版**
 /// 的卸载器原样封进包 —— 包能装、验签也过，只有卸载器按旧清单走，是最难发现的那种坏包。
 /// 配置对不上时只能报错、不能覆盖：文件可能已经签名，重写 PE 就把签名毁了。
@@ -435,7 +483,7 @@ fn cmd_prep_uninstaller(config: &Path, ov: Overrides) -> Result<(), String> {
     if !source.exists() {
         return Err(format!("源目录不存在: {:?}", source));
     }
-    println!("Wind Packer · prep-uninstaller");
+    println!("Moodflow Packer · prep-uninstaller");
     println!("  源目录: {:?}", source);
     if prepare_uninstaller(&l, &source, false)? == PrepOutcome::NoUninstaller {
         // 退 0 会让「路径配错了」一路无人报警：调用方（pack.ps1 -PrepOnly）接着去签
@@ -483,7 +531,7 @@ fn cmd_pack_inner(
     let manifest_bytes = l.manifest_bytes()?;
     let logo_bytes = l.logo_bytes();
 
-    println!("Wind Packer · pack");
+    println!("Moodflow Packer · pack");
     println!(
         "  应用:   {} {}",
         l.cfg.manifest.app.display_name,
@@ -498,7 +546,7 @@ fn cmd_pack_inner(
     //
     // 想签卸载器就必须**先 `prep-uninstaller`、签完再 pack**——签名夹在这两步之间，
     // 而这里已经来不及了：pack 会把它封进压缩块，之后再签只能签到外壳。
-    // 这一句是给「不签名、直接 `wind-packer build`」那条路保底的：那时没人提前
+    // 这一句是给「不签名、直接 `moodflow-packer build`」那条路保底的：那时没人提前
     // prep 过，加工必须在这里发生，否则装出来的卸载器读不到清单、启动即失败。
     // 已按本轮配置 prep 过时函数自己跳过，不会碰已签名的文件；而 overlay 与本轮配置
     // **对不上**时（源目录留着上一轮的产物）它返回 `Err`，整次 build 就此失败 ——
@@ -510,6 +558,11 @@ fn cmd_pack_inner(
     writer.add_directory(&source, "")?;
     let entry_count = writer.entry_count();
     writer.finish()?;
+    let mut check = archive::ArchiveReader::open(&output)?;
+    check.prepare()?;
+    if let Some(info) = &l.cfg.manifest.integrity {
+        check.verify_data_manifest(&info.data_manifest)?;
+    }
 
     let size = std::fs::metadata(&output).map(|m| m.len()).unwrap_or(0);
     println!(
@@ -548,7 +601,7 @@ fn bundle_inner(l: &Loaded, stub: &Path, archive: &Path, output: &Path) -> Resul
         std::fs::create_dir_all(dir).ok();
     }
 
-    println!("Wind Packer · bundle");
+    println!("Moodflow Packer · bundle");
 
     // 推导安装器的版本详细信息
     let res_info = version_info::derive_version_info(&l.cfg, false);
@@ -615,8 +668,8 @@ fn cmd_build(
 // ── inspect ─────────────────────────────────────────────────────────────────
 
 fn cmd_inspect(file: &Path) -> Result<(), String> {
-    use wind_installer::archive::ArchiveReader;
-    use wind_installer::manifest::AppManifest;
+    use moodflow_installer::archive::ArchiveReader;
+    use moodflow_installer::manifest::AppManifest;
 
     let reader = ArchiveReader::open(file)?;
     println!("文件:     {:?}", file);
@@ -663,7 +716,7 @@ fn cmd_inspect(file: &Path) -> Result<(), String> {
         m.shortcut
             .iter()
             .map(|s| {
-                wind_installer::manifest::expand_placeholders(
+                moodflow_installer::manifest::expand_placeholders(
                     s.effective_name(),
                     &m.app.main_exe,
                     &m.app.setting_exe,

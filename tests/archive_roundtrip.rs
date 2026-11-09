@@ -4,8 +4,8 @@
 //! 复现修复前的 Bug：`Read::take(decoder, compressed_size)` 用压缩大小截断解压输出，
 //! 导致任何能被压缩的文件解压后都是残缺的，CRC 校验必然失败。
 
+use moodflow_installer::archive::{self, ArchiveReader, ArchiveWriter, CompressionType};
 use std::path::{Path, PathBuf};
-use wind_installer::archive::{self, ArchiveReader, ArchiveWriter, CompressionType};
 
 // ── 测试辅助 ─────────────────────────────────────────────────────────────────
 
@@ -278,7 +278,7 @@ fn bundle_exe_fixes_offsets_so_content_readable_after_prepending_stub() {
         CompressionType::Zstd,
     );
 
-    // 2. 创建一个假 stub（模拟 wind-installer.exe 的二进制头部）
+    // 2. 创建一个假 stub（模拟 moodflow-installer.exe 的二进制头部）
     //    使用随机字节确保偏移计算不依赖内容
     let stub_content: Vec<u8> = (0u8..=255).cycle().take(8192).collect();
     let stub_path = dir.write_file("stub.exe", &stub_content);
@@ -688,12 +688,12 @@ fn manifest_overlay_content_is_readable_for_drift_check() {
 /// 该加工的没加工 → 装机端读不到清单、启动即失败；该跳过的又加工了一遍 → 毁掉刚打上
 /// 的签名；该报错的当成一致 → 上一版卸载器原样封进包，而验签还照样通过。
 ///
-/// 判据住在 lib 而不是 `wind-packer` 里，是因为那个 bin 有 `required-features = ["packer"]`，
+/// 判据住在 lib 而不是 `moodflow-packer` 里，是因为那个 bin 有 `required-features = ["packer"]`，
 /// 而 CI 跑的是 `cargo test --locked --tests` —— 不带 feature 就不构建它，测试连同它要守的
 /// 判据一起静默失效。
 #[test]
 fn overlay_classification_covers_three_decisions() {
-    use wind_installer::archive::OverlayState;
+    use moodflow_installer::archive::OverlayState;
 
     let manifest = b"[app]\nversion = \"1.0.0\"\n".as_slice();
     let logo = b"PNG-A".as_slice();

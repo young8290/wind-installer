@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    编译 wind-installer 项目
+    编译 moodflow-installer 项目
 .PARAMETER Release
     Release 模式编译
 .PARAMETER Clean
@@ -18,12 +18,13 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $ProjectRoot = Split-Path -Parent $ScriptDir
 
 Write-Host "============================================" -ForegroundColor Cyan
-Write-Host "  Wind Installer 构建" -ForegroundColor Cyan
+Write-Host "  Moodflow Installer 构建" -ForegroundColor Cyan
 Write-Host "============================================" -ForegroundColor Cyan
 
 Push-Location $ProjectRoot
 try {
-    $profile = if ($Release) { "--release" } else { "" }
+    $buildArgs = @("build", "--locked", "--bins", "--features", "packer")
+    if ($Release) { $buildArgs += "--release" }
 
     if ($Clean) {
         Write-Host "`n>>> 清理构建目录..." -ForegroundColor Cyan
@@ -34,7 +35,7 @@ try {
     Write-Host "`n>>> 编译项目..." -ForegroundColor Cyan
     $env:CARGO_TERM_COLOR = "always"
 
-    cargo build $profile 2>&1 | ForEach-Object {
+    cargo @buildArgs 2>&1 | ForEach-Object {
         if ($_ -match "^error") {
             Write-Host $_ -ForegroundColor Red
         }
@@ -49,7 +50,7 @@ try {
 
     # 显示输出文件
     $targetDir = if ($Release) { "target\release" } else { "target\debug" }
-    $binaries = @("wind-installer.exe", "wind-packer.exe")
+    $binaries = @("moodflow-installer.exe", "moodflow-uninstaller.exe", "moodflow-packer.exe")
 
     Write-Host "`n输出文件:" -ForegroundColor Cyan
     foreach ($bin in $binaries) {

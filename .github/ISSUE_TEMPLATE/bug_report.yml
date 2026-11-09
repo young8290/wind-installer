@@ -7,19 +7,19 @@ body:
       value: |
         感谢你提交 Bug 反馈！
 
-        本仓库是**通用 Windows 安装器生成器**，负责安装器 stub、卸载器与打包工具 `wind-packer`。
+        本仓库是**通用 Windows 安装器生成器**，负责安装器 stub、卸载器与打包工具 `moodflow-packer`。
         如果你是在使用某个用它打包的应用时遇到问题，且问题**不在安装/卸载过程本身**，
-        请到该应用自己的仓库反馈（例如清风输入法请到
-        [WindInput](https://github.com/huanfeng/WindInput/issues)）。
+        请到该应用自己的仓库反馈（例如Moodflow 输入法请到
+        [Moodflow](https://github.com/young8290/Moodflow/issues)）。
 
   - type: dropdown
     id: component
     attributes:
       label: 出问题的组件
       options:
-        - 安装器 (wind-installer stub)
-        - 卸载器 (wind-uninstaller)
-        - 打包工具 (wind-packer)
+        - 安装器 (moodflow-installer stub)
+        - 卸载器 (moodflow-uninstaller)
+        - 打包工具 (moodflow-packer)
         - 不确定
     validations:
       required: true
@@ -69,7 +69,7 @@ body:
         `app.toml` 中与问题相关的段落（如 `[[shortcut]]`、`[ime]`、`[datadir]`）。
         安装器的行为完全由清单驱动，**缺了这段几乎无法定位问题**。敏感信息可脱敏。
 
-        已有安装包但手边没有源清单时，可用 `wind-packer inspect <安装包.exe>` 读出嵌入的清单摘要。
+        已有安装包但手边没有源清单时，可用 `moodflow-packer inspect <安装包.exe>` 读出嵌入的清单摘要。
       render: toml
     validations:
       required: true
@@ -117,7 +117,7 @@ body:
   - type: input
     id: version
     attributes:
-      label: wind-installer 版本
+      label: moodflow-installer 版本
       description: Release tag，或源码构建时的 commit
       placeholder: "v0.1.0"
     validations:
@@ -157,7 +157,7 @@ body:
     attributes:
       label: 日志
       description: |
-        `--silent` 模式会写入 `%TEMP%\wind_installer_args.log`，请粘贴其内容。
+        `--silent` 模式会写入 `%TEMP%\moodflow_installer_args.log`，请粘贴其内容。
         如有截图请一并附上。
       render: text
 

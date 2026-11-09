@@ -5,8 +5,8 @@ name: CI
 # 主校验必须在 Windows runner 上：installer/uninstaller/ui/util 全是 cfg(windows)，
 # 在 Linux 上根本不参与编译，ubuntu 跑绿了也证明不了什么。
 #
-# 另有一个 ubuntu job 专门守着「wind-packer 能在 Linux 原生构建」这条能力——
-# WindInput 仓的 pack-installer.sh 依赖它做全 Linux 打包流水线。谁往 archive /
+# 另有一个 ubuntu job 专门守着「moodflow-packer 能在 Linux 原生构建」这条能力——
+# Moodflow 仓的 pack-installer.sh 依赖它做全 Linux 打包流水线。谁往 archive /
 # manifest / meta 里引入 Windows-only 依赖，这个 job 会立刻红，而 Windows job 不会。
 on:
   push:
@@ -43,8 +43,8 @@ jobs:
       # 只编 stub 不会暴露 packer 侧的编译错误。
       - name: 构建三个二进制
         run: |
-          cargo build --locked --bin wind-installer --bin wind-uninstaller
-          cargo build --locked --bin wind-packer --features packer
+          cargo build --locked --bin moodflow-installer --bin moodflow-uninstaller
+          cargo build --locked --bin moodflow-packer --features packer
 
       # --tests 跳过 doctest：src/archive/format.rs 的文档注释里有一张 ASCII 结构图，
       # rustdoc 会把它当代码块编译并报错。既有问题，与业务逻辑无关（见 AGENTS.md）。
@@ -55,6 +55,10 @@ jobs:
       # --all-targets 下 bin 与 tests 尚有 4 处（`items after a test module` 等）未清，
       # 那需要挪动代码块，留待单独收拾。清完后把 --lib 换成
       # `--all-targets --features packer`，届时 packer 侧的警告也会一并纳入门禁。
+      - name: 签名策略（不访问真实证书）
+        shell: pwsh
+        run: ./scripts/moodflow/test-signing.ps1
+
       - name: Clippy
         run: cargo clippy --locked --lib -- -D warnings
 
@@ -66,5 +70,5 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       # 纯 IO，不碰 Windows API，故可原生构建、无需 wine 或交叉工具链。
-      - name: 构建 wind-packer (Linux 原生)
-        run: cargo build --locked --bin wind-packer --features packer
+      - name: 构建 moodflow-packer (Linux 原生)
+        run: cargo build --locked --bin moodflow-packer --features packer

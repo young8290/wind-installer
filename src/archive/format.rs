@@ -166,6 +166,11 @@ impl ArchiveHeader {
         let solid_compressed_size = u64::from_le_bytes(data[pos + 4..pos + 12].try_into().unwrap());
         pos += 12;
 
+        if entry_count as usize > super::integrity::MAX_ENTRIES
+            || entry_count as usize > (data.len() - pos) / 30
+        {
+            return Err("Invalid archive entry count".into());
+        }
         let mut entries = Vec::with_capacity(entry_count as usize);
 
         for _ in 0..entry_count {
